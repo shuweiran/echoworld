@@ -31,10 +31,15 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
-        <!-- Virtual Threads support (Spring Boot 3.4+) -->
+        <!-- Spring Boot Data JPA + H2 (Database) -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-webflux</artifactId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+            <scope>runtime</scope>
         </dependency>
 
         <!-- Jackson JSON (performance-critical) -->
@@ -45,12 +50,6 @@
         <dependency>
             <groupId>com.fasterxml.jackson.datatype</groupId>
             <artifactId>jackson-datatype-jsr310</artifactId>
-        </dependency>
-
-        <!-- HTTP Client for LLM calls -->
-        <dependency>
-            <groupId>io.projectreactor.netty</groupId>
-            <artifactId>reactor-netty</artifactId>
         </dependency>
 
         <!-- JWT for auth -->

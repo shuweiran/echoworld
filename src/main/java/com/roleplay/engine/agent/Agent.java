@@ -136,6 +136,17 @@ public class Agent {
         );
     }
 
+    /**
+     * Simplified generation for simulation module.
+     * Generates a response given just a context string.
+     */
+    public String generateWithContext(String context) {
+        return llmClient.callSync(List.of(
+            new Message(Message.Role.SYSTEM, "system", persona.buildSystemPrompt()),
+            new Message(Message.Role.USER, "user", context)
+        ));
+    }
+
     @Override
     public String toString() {
         return "Agent{" + getName() + "}";

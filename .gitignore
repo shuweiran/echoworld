@@ -45,6 +45,9 @@ log/
 *.pem
 *.key
 
+# Runtime data
+data/
+
 # temp maven
 maven/
 mvn/
