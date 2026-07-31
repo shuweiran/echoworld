@@ -2,6 +2,9 @@ server:
   port: 8000
 
 spring:
+  mvc:
+    async:
+      request-timeout: 300000  # SSE 长连接超时（与 SSEController SSE_TIMEOUT_MS 一致，覆盖 Tomcat 默认 30s）
   datasource:
     url: jdbc:h2:file:./data/roleplay;DB_CLOSE_DELAY=-1
     driver-class-name: org.h2.Driver

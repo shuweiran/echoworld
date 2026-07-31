@@ -76,7 +76,9 @@ public class SSEController {
         for (SseEmitter emitter : emitters) {
             try {
                 emitter.send(SseEmitter.event().comment("heartbeat"));
-            } catch (IOException e) {
+            } catch (Exception e) {
+                // 已超时/完成的 emitter send 抛 IllegalStateException（非 IOException），
+                // 宽捕获防止死连接阻塞整个心跳循环
                 emitters.remove(emitter);
             }
         }
@@ -99,7 +101,9 @@ public class SSEController {
                 emitter.send(SseEmitter.event()
                     .name(eventType)
                     .data(json, MediaType.APPLICATION_JSON));
-            } catch (IOException e) {
+            } catch (Exception e) {
+                // 已超时/完成的 emitter send 抛 IllegalStateException（ResponseBodyEmitter has already
+                // completed），宽捕获：移除死连接，避免中断整个广播循环（否则后续 emitter 收不到事件）
                 emitters.remove(emitter);
             }
         }
