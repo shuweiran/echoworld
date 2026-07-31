@@ -1,0 +1,42 @@
+# .aiignore — AI 不要读取的内容（类似 .gitignore，但给 AI 助手看）
+# 规则：AI 助手（Claude Code / Codex / Cursor / ChatGPT 等）读项目时跳过以下内容，
+# 避免浪费上下文。此文件本身是给 AI 的提示，不是工具强制执行。
+
+# 构建产物（AI 不需要）
+target/
+build/
+dist/
+node_modules/
+roleplay-v4/frontend/node_modules/
+
+# 运行时日志（噪音，且可能含过期信息）
+*.log
+boot-out.log
+boot2-out.log
+boot-err.log
+boot2-err.log
+
+# 数据库文件（生产数据，AI 只读代码不读数据）
+data/
+*.db
+*.mv.db
+*.trace.db
+
+# 缓存与 IDE
+.idea/
+.vscode/
+__pycache__/
+*.class
+*.jar
+*.tmp
+
+# 回收站/备份（勿读勿改）
+*.bak
+*~$*
+Thumbs.db
+.DS_Store
+
+# 旧文档（已废弃，见 docs/ 内 ⚠️ 标记；除非任务明确要求考古历史版本）
+# 例：测试方案-全功能覆盖.md（v1）已被 -v2.md 替代
+
+# 注意：不要删除上述文件！只是 AI 默认不读取。删除文件需主人确认。
