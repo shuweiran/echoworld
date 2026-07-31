@@ -7,7 +7,8 @@
 
 ## 当前阶段
 - ✅ Phase 1-4 完成（Track 融合全链路：SpatialTrackResolver → TrackStrategy → 双导演 → MovementConstraint）
-- 🔄 **剧本杀 P0 开发中**（蓝图 `docs/剧本杀差距分析-待办.md` v2.1，Step 1-5，3-6 天）
+- ✅ **剧本杀 4/5 Step 完成**（秘密机制/前端主链路/判定加固/审批门已落地并提交；蓝图 `docs/剧本杀差距分析-待办.md` v3）
+- 🔄 **剧本杀剩余**：Step 3v 讨论接对话引擎（P0，1-2 天）+ ENDED/落库收尾（P1）
 - 🟠 问题清单 P0 缺陷并行修复中（另一个主会话「全功能覆盖测试方案」在改，**派单前确认不撞车**）
 
 ## 技术栈
@@ -46,10 +47,11 @@
 - [x] 93 tests 全绿（含 LONG-01 超长文本 10 万字，需求硬性要求）
 
 ## 未完成（按优先级）
-- [ ] 剧本杀 P0 蓝图 Step 1-5（`docs/剧本杀差距分析-待办.md`）——Step 1 Part A 已就位（secrets 存储），仅剩 Part B（Track 隔离）
-- [ ] 问题清单 P0：D1 中断系统包 / D4 剧本杀前端 / D9 Whisper 端点 / D12 历史加载 / D19 admin 鉴权（部分可能已被并行会话修复，派单前 git diff）
-- [ ] G1：LLM 401（application.yml 缺 api-key，重启后运行时注入丢失）
-- [ ] 前端 2D 页接 `/track/state`（轨道可视化）
+- [ ] **剧本杀 Step 3v**：讨论接对话引擎（ConversationManager + TrackStrategy，WEAK 藏秘密；spike 或降级轮次发言）——蓝图 v3
+- [ ] **剧本杀 Step 4v**：ENDED 终态触达 + saveScript 落库（当前 0 调用）
+- [ ] script SSE 推送 + App.tsx script_* 分支（当前前端轮询 scriptStatus 顶住）
+- [ ] D1 中断系统包（InterruptManager/AgentTaskManager 缺失）
+- [ ] G1 根治：AppConfig 不读 yml（api-key 死配置），key 走环境变量+运行时注入（重启需重注入）
 
 ## 当前最大问题
 1. **G1 LLM 401**：现网后端 `configured: False`，真实 LLM 用例不可跑 → 修复：api-key 写死 application.yml
