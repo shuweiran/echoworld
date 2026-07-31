@@ -33,6 +33,9 @@ roleplay:
     model: "deepseek-v4-flash"
     max-tokens: 4096
     temperature: 0.9
+  monitor:
+    # D26: fallback-model/timeout-seconds 由 LLMClient 从 roleplay.monitor.* 读取（AppConfig.MonitorConfig）——
+    #      fallback-model=主模型失败后的兜底模型，timeout-seconds=单次 LLM HTTP 调用超时
     fallback-model: "deepseek-v4-flash"
     timeout-seconds: 60
   memory:

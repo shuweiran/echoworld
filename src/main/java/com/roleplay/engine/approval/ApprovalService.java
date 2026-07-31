@@ -1,8 +1,10 @@
 package com.roleplay.engine.approval;
 
+import com.roleplay.engine.config.AppConfig;
 import com.roleplay.engine.service.RouterService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
@@ -31,15 +33,33 @@ public class ApprovalService {
 
     private static final Logger log = LoggerFactory.getLogger(ApprovalService.class);
 
-    /** Default timeout before auto-rejection (seconds). */
-    private static final long DEFAULT_TIMEOUT_SECONDS = 60;
+    /** 审批门开关（D27）：false=自动通过——submitForApproval 直接返回 result，不入队不阻塞。 */
+    private final boolean approvalEnabled;
+
+    /** 默认审批超时（秒），超时自动驳回（D27：原硬编码 60 改为 roleplay.game.approval.timeout-seconds）。 */
+    private final long approvalTimeoutSeconds;
 
     /** Map of session ID → pending approval state. */
     private final ConcurrentHashMap<String, ApprovalState> pendingApprovals = new ConcurrentHashMap<>();
 
+    /** 直构造路径（测试等）：默认值，与 yml 默认一致（enabled=true / timeout=60s）。 */
+    public ApprovalService() {
+        this.approvalEnabled = true;
+        this.approvalTimeoutSeconds = 60;
+    }
+
+    /** Spring 注入路径（D27）：读取 roleplay.game.approval.*（AppConfig.GameConfig）。 */
+    @Autowired
+    public ApprovalService(AppConfig appConfig) {
+        AppConfig.GameConfig.ApprovalConfig cfg = appConfig.getGame().getApproval();
+        this.approvalEnabled = cfg.isEnabled();
+        this.approvalTimeoutSeconds = cfg.getTimeoutSeconds();
+    }
+
     /**
      * Submit a round result for DM approval.
      * Blocks the calling thread until approved, rejected, or timed out.
+     * 审批门关闭（roleplay.game.approval.enabled=false）时直接返回 result（自动通过），不阻塞、不入队。
      *
      * @param result    the RoundResult to submit
      * @param sessionId the session identifier
@@ -48,7 +68,11 @@ public class ApprovalService {
      */
     public RouterService.RoundResult submitForApproval(
             RouterService.RoundResult result, String sessionId) throws InterruptedException {
-        return submitForApproval(result, sessionId, DEFAULT_TIMEOUT_SECONDS);
+        if (!approvalEnabled) {
+            log.info("Approval disabled for session {} — auto-approving round", sessionId);
+            return result;
+        }
+        return submitForApproval(result, sessionId, approvalTimeoutSeconds);
     }
 
     /**

@@ -30,6 +30,8 @@ public class AppConfig {
     private MonitorConfig monitor = new MonitorConfig();
     private RoundConfig round = new RoundConfig();
     private ModeConfig mode = new ModeConfig();
+    /** 游戏相关配置（D27：roleplay.game.*，审批门接线）。 */
+    private GameConfig game = new GameConfig();
     private FrontendConfig frontend = new FrontendConfig();
     /** 语音配置（D20：/api/config/voice 运行时落地，TtsService 读取）。 */
     private VoiceConfig voice = new VoiceConfig();
@@ -57,6 +59,9 @@ public class AppConfig {
 
     public ModeConfig getMode() { return mode; }
     public void setMode(ModeConfig mode) { this.mode = mode; }
+
+    public GameConfig getGame() { return game; }
+    public void setGame(GameConfig game) { this.game = game; }
 
     public FrontendConfig getFrontend() { return frontend; }
     public void setFrontend(FrontendConfig frontend) { this.frontend = frontend; }
@@ -177,6 +182,26 @@ public class AppConfig {
         public void setTrackActivity(String trackActivity) { this.trackActivity = trackActivity; }
         /** 兼容 yml 的 {@code roleplay.mode.default}（default 是 Java 关键字，不能作字段名，故映射到 mode）。 */
         public void setDefault(String mode) { this.mode = mode; }
+    }
+
+    /** 游戏相关配置（D27）：映射 yml {@code roleplay.game.*}。 */
+    public static class GameConfig {
+        /** 审批门配置（D6D7/D27）：{@code roleplay.game.approval.*}。 */
+        private ApprovalConfig approval = new ApprovalConfig();
+
+        public ApprovalConfig getApproval() { return approval; }
+        public void setApproval(ApprovalConfig approval) { this.approval = approval; }
+
+        /** 审批门：true=手动审批（挂起等待 DM 审批，超时自动驳回回滚），false=自动通过。 */
+        public static class ApprovalConfig {
+            private boolean enabled = true;
+            private long timeoutSeconds = 60;
+
+            public boolean isEnabled() { return enabled; }
+            public void setEnabled(boolean enabled) { this.enabled = enabled; }
+            public long getTimeoutSeconds() { return timeoutSeconds; }
+            public void setTimeoutSeconds(long timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
+        }
     }
 
     public static class FrontendConfig {

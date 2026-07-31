@@ -23,6 +23,8 @@ roleplay:
     model: "test-mock"
     max-tokens: 256
     temperature: 0.0
+  monitor:
+    # D26: 与主 yml 同步——fallback-model/timeout-seconds 属 roleplay.monitor.*（LLMClient 读取处）
     fallback-model: "test-mock"
     timeout-seconds: 5
   memory:
