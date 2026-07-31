@@ -46,6 +46,8 @@ public class Session {
         roundLog.add(logEntry);
     }
 
+    public List<Map<String, Object>> getRoundLog() { return roundLog; }
+
     /** Return messages visible to a specific agent (empty visibleTo = visible to all). */
     public List<Message> getMessagesVisibleTo(String agentName) {
         if (agentName == null || agentName.isEmpty()) return messages;

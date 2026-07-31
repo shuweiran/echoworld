@@ -1,7 +1,9 @@
 package com.roleplay.engine.service;
 
+import com.roleplay.engine.approval.ApprovalService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -71,6 +73,19 @@ public class WerewolfService {
     }
 
     private final Map<String, GameState> games = new ConcurrentHashMap<>();
+    private final ApprovalService approvalService;
+
+    /** D7: 狼人杀审批门总开关 —— true=投票结算挂起等待 DM 审批（超时自动驳回回滚），false=自动通过。 */
+    @Value("${roleplay.game.approval.enabled:true}")
+    private boolean approvalEnabled = true;
+
+    /** D7: 审批等待超时（秒），超时视为驳回。 */
+    @Value("${roleplay.game.approval.timeout-seconds:60}")
+    private long approvalTimeoutSeconds = 60;
+
+    public WerewolfService(ApprovalService approvalService) {
+        this.approvalService = approvalService;
+    }
 
     public GameState getGame(String sessionId) {
         return games.computeIfAbsent(sessionId, k -> new GameState());
@@ -246,7 +261,7 @@ public class WerewolfService {
         return voter + " 投票给了 " + target;
     }
 
-    /** Resolve votes, eliminate the most-voted player. */
+    /** Resolve votes, eliminate the most-voted player.（D7：投票结算接入审批门） */
     public Map<String, Object> resolveVote(String sessionId) {
         GameState g = games.get(sessionId);
         if (g == null) return Map.of("error", "游戏不存在");
@@ -254,28 +269,38 @@ public class WerewolfService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("votes", new LinkedHashMap<>(g.votes));
 
+        // 先统计得票（先计算、后应用，便于审批回滚）
+        String topTarget = "";
+        int topCount = 0;
+        boolean tie = false;
+        if (!g.votes.isEmpty()) {
+            Map<String, Integer> count = new LinkedHashMap<>();
+            g.votes.values().forEach(t -> count.merge(t, 1, Integer::sum));
+            topTarget = Collections.max(count.entrySet(), Map.Entry.comparingByValue()).getKey();
+            topCount = count.get(topTarget);
+            final int topCountFinal = topCount; // effectively-final 副本（lambda 引用要求）
+            tie = count.values().stream().filter(c -> c == topCountFinal).count() > 1;
+        }
+
+        // D7: 投票结算为关键决策点 —— 挂起等待 DM 审批，批准后才应用放逐；驳回/超时回滚且保留票数
+        if (approvalEnabled && g.phase == Phase.DAY_VOTE && !g.isGameOver() && !g.votes.isEmpty()) {
+            Map<String, Object> decision = awaitVoteSettlementApproval(sessionId, g, topTarget, topCount, tie);
+            if (decision != null) return decision;
+            result.put("approval", "approved");
+        }
+
+        // 应用结算（原逻辑）
         if (g.votes.isEmpty()) {
             result.put("exiled", "");
             result.put("reason", "无人投票，无人被放逐");
+        } else if (tie) {
+            result.put("exiled", "");
+            result.put("reason", "平票，无人被放逐");
         } else {
-            // Count votes
-            Map<String, Integer> count = new LinkedHashMap<>();
-            g.votes.values().forEach(t -> count.merge(t, 1, Integer::sum));
-
-            String topTarget = Collections.max(count.entrySet(), Map.Entry.comparingByValue()).getKey();
-            int topCount = count.get(topTarget);
-
-            // Check for tie
-            long ties = count.values().stream().filter(c -> c == topCount).count();
-            if (ties > 1) {
-                result.put("exiled", "");
-                result.put("reason", "平票，无人被放逐");
-            } else {
-                g.alive.remove(topTarget);
-                g.eliminated.add(Map.of("name", topTarget, "reason", "被投票放逐", "round", g.round));
-                result.put("exiled", topTarget);
-                result.put("reason", topTarget + " 被放逐");
-            }
+            g.alive.remove(topTarget);
+            g.eliminated.add(Map.of("name", topTarget, "reason", "被投票放逐", "round", g.round));
+            result.put("exiled", topTarget);
+            result.put("reason", topTarget + " 被放逐");
         }
 
         // Clear votes for next round
@@ -296,6 +321,66 @@ public class WerewolfService {
         result.put("game_over", g.isGameOver());
         result.put("winner", g.winner);
         return result;
+    }
+
+    /**
+     * D7: 投票结算审批门 —— 拟放逐结果提交 ApprovalService 挂起等待 DM 审批。
+     * 返回 null 表示批准（调用方继续结算）；返回 Map 表示已回滚（驳回/超时/中断，票数保留）。
+     */
+    private Map<String, Object> awaitVoteSettlementApproval(String sessionId, GameState g,
+                                                            String topTarget, int topCount, boolean tie) {
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("gate", "werewolf_vote_settlement");
+        payload.put("session_id", sessionId);
+        payload.put("round", g.round);
+        payload.put("votes", new LinkedHashMap<>(g.votes));
+        payload.put("proposed_exile", tie ? "" : topTarget);
+        payload.put("vote_count", topCount);
+        payload.put("tie", tie);
+        payload.put("phase", "day_vote_settlement");
+
+        List<Map<String, Object>> outputs = new ArrayList<>();
+        for (Map.Entry<String, String> v : g.votes.entrySet()) {
+            outputs.add(Map.of("voter", v.getKey(), "target", v.getValue()));
+        }
+
+        RouterService.RoundResult round = new RouterService.RoundResult(
+            "werewolf_vote_settlement",
+            outputs,
+            payload,
+            "狼人杀投票结算：拟放逐=" + (tie ? "平票" : topTarget) + "，得票=" + topCount,
+            Map.of("gate", "werewolf_vote_settlement"));
+
+        try {
+            RouterService.RoundResult approved = approvalService.submitForApproval(round, sessionId, approvalTimeoutSeconds);
+            if (approved == null) {
+                log.warn("Werewolf game {} vote settlement rejected/timeout, rollback (votes kept)", sessionId);
+                Map<String, Object> rollback = new LinkedHashMap<>();
+                rollback.put("votes", new LinkedHashMap<>(g.votes));
+                rollback.put("exiled", "");
+                rollback.put("reason", "投票结算被驳回或超时，已回滚，可重新投票");
+                rollback.put("phase", g.phase.name().toLowerCase());
+                rollback.put("round", g.round);
+                rollback.put("game_over", g.isGameOver());
+                rollback.put("winner", g.winner);
+                rollback.put("approval", "rejected");
+                rollback.put("rollback", true);
+                return rollback;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.warn("Werewolf game {} vote settlement approval interrupted", sessionId);
+            Map<String, Object> rollback = new LinkedHashMap<>();
+            rollback.put("votes", new LinkedHashMap<>(g.votes));
+            rollback.put("exiled", "");
+            rollback.put("reason", "审批流程被中断，已回滚");
+            rollback.put("phase", g.phase.name().toLowerCase());
+            rollback.put("round", g.round);
+            rollback.put("game_over", g.isGameOver());
+            rollback.put("winner", g.winner);
+            return rollback;
+        }
+        return null;
     }
 
     /** Start voting phase (transition from discussion). */

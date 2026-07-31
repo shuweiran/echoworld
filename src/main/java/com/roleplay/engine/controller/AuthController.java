@@ -41,14 +41,21 @@ public class AuthController {
     }
 
     @GetMapping("/me")
-    public ResponseEntity<Map<String, Object>> me(@RequestHeader("Authorization") String auth) {
-        String token = auth.replace("Bearer ", "");
-        if (activeTokens.contains(token)) {
+    public ResponseEntity<Map<String, Object>> me(
+            @RequestHeader(value = "Authorization", required = false) String auth) {
+        // D23: 缺失 Authorization 头 → 401 而非 400（Spring 必填参数缺失会抛
+        // MissingRequestHeaderException → 400；契约要求未认证一律 401 且带错误 JSON）
+        if (auth == null || auth.isBlank()) {
+            return ResponseEntity.status(401).body(Map.of("error", "缺少 Authorization 头"));
+        }
+        String token = auth.startsWith("Bearer ") ? auth.substring(7) : auth;
+        if (!token.isBlank() && activeTokens.contains(token)) {
             return ResponseEntity.ok(Map.of(
                 "user", "player", "authenticated", true
             ));
         }
-        return ResponseEntity.status(401).body(Map.of("error", "未认证"));
+        // 无效/空 token → 401，与缺失头区分（错误信息不同）
+        return ResponseEntity.status(401).body(Map.of("error", "无效的 token"));
     }
 
     /**

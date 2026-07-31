@@ -281,8 +281,11 @@ public class AgentExecutor {
         ExecutorMetrics metrics = new ExecutorMetrics(
                 totalTasks, maxConcurrentRef[0], avgLatency, maxLatency, totalTimeMs);
 
-        log.info("Agent round complete: {} agents in {:.0f}ms (avg {:.0f}ms/agent){}",
-                completedCount, totalTimeMs, avgLatency, cancelled ? " [CANCELLED]" : "");
+        // D24: {:.0f} 是 Python 风格占位符，SLF4J 不支持（会原样输出字面量并丢失后续参数）；
+        // 改用 {} + Math.round（等价于 {:.0f} 的 0 位小数取整），保留原日志意图
+        log.info("Agent round complete: {} agents in {}ms (avg {}ms/agent){}",
+                completedCount, Math.round(totalTimeMs), Math.round(avgLatency),
+                cancelled ? " [CANCELLED]" : "");
 
         return new ExecutionResult(outputs, metrics, cancelled);
     }

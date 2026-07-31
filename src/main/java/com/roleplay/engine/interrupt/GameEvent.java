@@ -14,6 +14,7 @@ import java.util.UUID;
  * <ul>
  *   <li>{@link #TYPE_TRACK_CHANGED} 轨道变化（TrackDirector 发布）</li>
  *   <li>{@link #TYPE_TASK_CANCELLED} 任务已取消（InterruptManager 发布）</li>
+ *   <li>{@link #TYPE_TASK_FAILED} 任务执行失败（InterruptManager 发布，D22）</li>
  *   <li>{@link #TYPE_TASK_STARTED} / {@link #TYPE_TASK_DONE} 任务生命周期</li>
  *   <li>{@link #TYPE_COMBAT_START} 战斗开始（§六 示例事件）</li>
  * </ul>
@@ -22,6 +23,7 @@ public class GameEvent {
 
     public static final String TYPE_TRACK_CHANGED = "TRACK_CHANGED";
     public static final String TYPE_TASK_CANCELLED = "TASK_CANCELLED";
+    public static final String TYPE_TASK_FAILED = "TASK_FAILED";
     public static final String TYPE_TASK_STARTED = "TASK_STARTED";
     public static final String TYPE_TASK_DONE = "TASK_DONE";
     public static final String TYPE_COMBAT_START = "COMBAT_START";

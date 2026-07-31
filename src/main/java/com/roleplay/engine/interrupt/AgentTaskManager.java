@@ -72,14 +72,15 @@ public class AgentTaskManager {
         return task;
     }
 
-    /** 执行失败 → CANCELLED（需求文档状态机无 FAILED 态，失败映射为 CANCELLED）。 */
+    /**
+     * 执行失败 → {@link AgentTaskStatus#FAILED}（D22）。
+     *
+     * <p>区别于主动中断（CANCELLED/INTERRUPTED）：失败不是停止动作，不占用取消语义；
+     * 根因（如 LLM 401）写入任务 reason，供 {@code /api/interrupt/tasks} 调用方识别。
+     */
     public AgentTask failTask(AgentTask task, String reason) {
         if (task == null) return null;
-        if (interruptManager.cancel(task.getId(), StopType.SOFT,
-                "任务执行失败: " + reason) != null) {
-            return task;
-        }
-        return task;
+        return interruptManager.markFailed(task.getId(), reason);
     }
 
     // ── 取消委托（三种停止类型见 StopType） ────────────────────

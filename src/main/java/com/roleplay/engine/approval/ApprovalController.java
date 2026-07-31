@@ -4,6 +4,7 @@ import com.roleplay.engine.service.RouterService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -141,5 +142,42 @@ public class ApprovalController {
             sessionId = (String) routerService.getState().getOrDefault("session_id", "");
         }
         return ResponseEntity.ok(approvalService.getDetailedStatus(sessionId));
+    }
+
+    /**
+     * Get the pending round result for a session（DM 审批前查看待审内容）。
+     *
+     * <p>Query parameters:
+     * <pre>{@code
+     * ?session_id=abc123
+     * }</pre>
+     *
+     * <p>Response:
+     * <pre>{@code
+     * {"session_id": "abc123", "status": "pending|none", "round_result": {...}}
+     * }</pre>
+     *
+     * <p>剧本杀揭晓 / 狼人杀投票结算的审批载荷位于 round_result.integration。
+     */
+    @GetMapping("/pending")
+    public ResponseEntity<Map<String, Object>> getPending(@RequestParam(required = false) String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            sessionId = (String) routerService.getState().getOrDefault("session_id", "");
+        }
+        RouterService.RoundResult pending = approvalService.getPendingResult(sessionId);
+        if (pending == null) {
+            return ResponseEntity.ok(Map.of("session_id", sessionId, "status", "none"));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("session_id", sessionId);
+        body.put("status", approvalService.getStatus(sessionId));
+        body.put("round_result", Map.of(
+            "status", pending.status,
+            "agent_outputs", pending.agentOutputs,
+            "integration", pending.integration,
+            "reasoning", pending.reasoning,
+            "metrics", pending.metrics
+        ));
+        return ResponseEntity.ok(body);
     }
 }

@@ -85,6 +85,11 @@ public class AgentTask {
         return terminate(AgentTaskStatus.INTERRUPTED, StopType.STATE_INVALID, reason);
     }
 
+    /** 任意活跃态 → FAILED（执行失败，如 LLM 401/超时；非停止动作，无 stopType，D22）。 */
+    public boolean toFailed(String reason) {
+        return terminate(AgentTaskStatus.FAILED, null, reason);
+    }
+
     private synchronized boolean transition(AgentTaskStatus target) {
         if (!canTransitionTo(target)) return false;
         this.status = target;
@@ -97,6 +102,9 @@ public class AgentTask {
         if (target == AgentTaskStatus.CANCELLED) {
             // HARD/SOFT 统一落到 CANCELLED；STATE_INVALID 由 toInterrupted 处理
             this.stopType = stopType != null ? stopType : StopType.HARD;
+        } else if (target == AgentTaskStatus.FAILED) {
+            // 失败非停止动作 → 无停止类型（toMap 输出 stop_type=""，调用方可依 status=FAILED 区分）
+            this.stopType = null;
         } else {
             this.stopType = StopType.STATE_INVALID;
         }

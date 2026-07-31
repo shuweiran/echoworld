@@ -1,6 +1,8 @@
 package com.roleplay.engine.service;
 
 import com.roleplay.engine.core.Message;
+import com.roleplay.engine.memory.MemoryRetrieval;
+import com.roleplay.engine.memory.ScoredMemory;
 import com.roleplay.engine.model.CompressedChunk;
 import com.roleplay.engine.model.Session;
 import org.slf4j.Logger;
@@ -164,6 +166,68 @@ public class MemoryStore {
 
     public void setCurrentTracks(List<Map<String, Object>> tracks) {
         if (session != null) session.setCurrentTracks(tracks);
+    }
+
+    // ── Retrieval (scored search, complements compression chain) ──
+
+    private MemoryRetrieval retrieval = new MemoryRetrieval();
+
+    /** Override the default retrieval engine (e.g. for custom weights). */
+    public void setRetrieval(MemoryRetrieval retrieval) { this.retrieval = retrieval; }
+    public MemoryRetrieval getRetrieval() { return retrieval; }
+
+    /**
+     * Retrieve top-K messages matching a query by recency/relevance/importance.
+     * Complements the compression chain; does not modify it.
+     */
+    public List<ScoredMemory> retrieveMessages(String query, int topK) {
+        if (session == null) return List.of();
+        return retrieval.retrieveMessages(
+            session.getMessages(), query, topK, session.getRoundCount());
+    }
+
+    /**
+     * Retrieve top-K compressed chunks matching a query.
+     * Complements the compression chain; does not modify it.
+     */
+    public List<ScoredMemory> retrieveChunks(String query, int topK) {
+        if (session == null) return List.of();
+        return retrieval.retrieveChunks(
+            session.getCompressedChunks(), query, topK, session.getRoundCount());
+    }
+
+    /**
+     * Build a combined retrieval context string — top-K messages + top-K chunks
+     * for the given query. Returns empty string if nothing matches.
+     * Use as an optional add-on to {@link #getSummaryContext()} or
+     * {@link #getCompressedContext(int, int)}.
+     */
+    public String getRetrievalContext(String query, int topMessages, int topChunks) {
+        if (session == null || query == null || query.isBlank()) return "";
+
+        List<ScoredMemory> msgResults = retrieveMessages(query, topMessages);
+        List<ScoredMemory> chunkResults = retrieveChunks(query, topChunks);
+
+        StringBuilder sb = new StringBuilder();
+        if (!chunkResults.isEmpty()) {
+            sb.append("【相关记忆摘要】\n");
+            for (ScoredMemory sm : chunkResults) {
+                CompressedChunk ck = sm.getChunk();
+                sb.append("- ").append(ck.getContextString()).append("\n");
+            }
+        }
+        if (!msgResults.isEmpty()) {
+            if (!sb.isEmpty()) sb.append("\n");
+            sb.append("【相关历史消息】\n");
+            for (ScoredMemory sm : msgResults) {
+                Message m = sm.getMessage();
+                String snippet = m.getContent() != null
+                    ? m.getContent().substring(0, Math.min(150, m.getContent().length()))
+                    : "";
+                sb.append("[").append(m.getName()).append("]: ").append(snippet).append("\n");
+            }
+        }
+        return sb.toString();
     }
 
     // ── Low information detection ─────────────────────────────

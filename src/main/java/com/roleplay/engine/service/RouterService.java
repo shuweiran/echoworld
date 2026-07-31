@@ -16,6 +16,7 @@ import com.roleplay.engine.model.Session;
 import com.roleplay.engine.service.ArbiterService.TrackConfigResult;
 import com.roleplay.engine.service.ArbiterService.UserInputCategory;
 import com.roleplay.engine.service.TrackRequestService.TrackChangeRequest;
+import com.roleplay.engine.controller.SSEController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -48,6 +49,8 @@ public class RouterService {
     private final LLMClient llmClient;
     private final com.roleplay.engine.controller.HistoryController historyController;
     private final LorebookService lorebookService;
+    /** D8: SSE 广播器 —— 回合管线关键节点推送事件（agent_output / round_complete 等），前端实时回显。 */
+    private final SSEController sse;
     /** D1: 中断管理器 —— stop() 时取消进行中的生成任务（需求文档第八条）。 */
     private final InterruptManager interruptManager;
     /** D1: 世界事件总线 —— 轨道变化时发布 TrackChangeEvent（§七）。 */
@@ -77,7 +80,8 @@ public class RouterService {
                          com.roleplay.engine.controller.HistoryController historyController,
                          LorebookService lorebookService,
                          InterruptManager interruptManager,
-                         WorldEventBus eventBus) {
+                         WorldEventBus eventBus,
+                         SSEController sse) {
         this.arbiter = arbiter;
         this.executor = executor;
         this.memory = memory;
@@ -90,6 +94,7 @@ public class RouterService {
         this.lorebookService = lorebookService;
         this.interruptManager = interruptManager;
         this.eventBus = eventBus;
+        this.sse = sse;
         memory.setCompressor(compressor);
     }
 
@@ -174,6 +179,8 @@ public class RouterService {
         if (interruptManager != null) {
             interruptManager.cancelAll(StopType.HARD, "用户停止 /api/stop");
         }
+        // D8: 停止推送（前端 "已停止" + 解除运行锁）
+        if (sse != null) sse.broadcastStopped();
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -189,6 +196,7 @@ public class RouterService {
      */
     public RoundResult runRound(String userInput, String userInterjection) {
         if (!running || agents.isEmpty()) {
+            if (sse != null) sse.broadcastError("No active session");
             return RoundResult.error("No active session");
         }
 
@@ -238,12 +246,28 @@ public class RouterService {
         if (layoutChanged && eventBus != null) {
             publishTrackChange(trackResult.tracks);
         }
+        // D8: 轨道增删 → 推送 track_created / track_closed（前端轨道提示）
+        if (layoutChanged) {
+            publishTrackLifecycle(prevTrackLayout, trackResult.tracks);
+        }
 
         // Build TrackConfig for executor
         TrackConfig config = buildTrackConfig(trackResult.tracks, roundCount);
 
+        // D8: SSE 广播 —— 回合开始 + 轨道任务分配 + 旁听角色
+        if (sse != null) {
+            sse.broadcastRoundStart(roundCount);
+            sse.broadcastArbiterTask(roundCount, buildTaskList(config));
+            for (Track track : config.getTracks()) {
+                for (String silentAgent : track.getSilentAgents()) {
+                    sse.broadcastAgentSilent(silentAgent);
+                }
+            }
+        }
+
         // Step 2: Handle user input (convert to narration)
         String narration = null;
+        String userCategory = "";
         if (userInput != null && !userInput.isBlank()) {
             if (userInput.startsWith("/")) {
                 // Handle commands
@@ -251,6 +275,7 @@ public class RouterService {
             } else {
                 UserInputCategory cat = arbiter.classifyUserInput(
                     userInput, "always", memory.getShortTermContextRaw(2));
+                userCategory = cat.name().toLowerCase();
                 narration = arbiter.processUserInput(
                     userInput, cat, sceneDescription, agentNames, goals);
             }
@@ -258,6 +283,10 @@ public class RouterService {
                 Message userMsg = new Message(Message.Role.USER, "me", narration);
                 userMsg.setRoundNumber(roundCount);
                 memory.addMessage(userMsg);
+                // D8: 非命令输入 → 推送 user_input 事件（前端回显主控输入）
+                if (sse != null && !userInput.startsWith("/")) {
+                    sse.broadcastUserInput(narration, userCategory, "", roundCount);
+                }
             }
         }
 
@@ -271,11 +300,17 @@ public class RouterService {
         // D1: 回合被取消（如 /api/stop）→ 立即返回，不再做 Arbiter 整合 / 落库
         if (execResult.cancelled()) {
             log.info("Round {} aborted by interrupt request", roundCount);
+            if (sse != null) sse.broadcastStopped();
             return RoundResult.error("生成已中断");
         }
 
         // Step 4: Collect agent outputs
         List<Map<String, Object>> agentOutputs = new ArrayList<>();
+        // D8: trackId → 轨道信息映射（agent_output 事件的 track_label / track_mode）
+        Map<String, Map<String, Object>> trackById = new HashMap<>();
+        for (Map<String, Object> t : trackResult.tracks) {
+            trackById.put(String.valueOf(t.getOrDefault("id", "main")), t);
+        }
         for (AgentExecutor.AgentOutput output : execResult.outputs()) {
             if (output.isSuccess() && output.content() != null && !output.content().isBlank()) {
                 Message agentMsg = new Message(Message.Role.AGENT, output.agentName(), output.content());
@@ -288,6 +323,16 @@ public class RouterService {
                 outMap.put("content", output.content());
                 outMap.put("track_id", output.trackId());
                 agentOutputs.add(outMap);
+
+                // D8: 每个 Agent 输出即时推送（前端 addAgentMsg 实时上屏）
+                if (sse != null) {
+                    Map<String, Object> trackMap = trackById.getOrDefault(output.trackId(), Map.of());
+                    sse.broadcastAgentOutput(
+                        output.agentName(), output.content(), output.trackId(),
+                        String.valueOf(trackMap.getOrDefault("label", "")),
+                        String.valueOf(trackMap.getOrDefault("mode", "merged")),
+                        output.visibleTo());
+                }
             }
         }
 
@@ -300,6 +345,8 @@ public class RouterService {
             Message arbiterMsg = new Message(Message.Role.ARBITER, "主控", narrationText);
             arbiterMsg.setRoundNumber(roundCount);
             memory.addMessage(arbiterMsg);
+            // D8: 主控整合旁白推送（前端 addIntegration 上屏）
+            if (sse != null) sse.broadcastArbiterIntegrate(roundCount, narrationText);
         }
 
         // Step 6: Check compression
@@ -310,6 +357,8 @@ public class RouterService {
             if (memory.hasSession()) {
                 memory.getSession().getCompressedChunks().add(chunk);
             }
+            // D8: 记忆压缩完成推送（前端系统提示）
+            if (sse != null) sse.broadcastCompression(chunk.getSummary());
         }
 
         memory.incrementRound();
@@ -320,7 +369,12 @@ public class RouterService {
         // Auto-save to history
         if (historyController != null && memory.hasSession()) {
             historyController.saveSession(sessionId, memory.getSession());
+            // D8: 自动保存完成推送
+            if (sse != null) sse.broadcastSaved();
         }
+
+        // D8: 回合完成推送（前端 setRunning(false) + "第N轮完成"）
+        if (sse != null) sse.broadcastRoundComplete(roundCount);
 
         return new RoundResult(status, agentOutputs, integration, trackResult.reasoning,
             execResult.metrics() != null ? execResult.metrics().toMap() : Map.of());
@@ -332,6 +386,8 @@ public class RouterService {
         for (int i = 0; i < count && running; i++) {
             results.add(runRound(null, null));
         }
+        // D8: 自动对话结束推送（前端 "自动对话结束，共 N 轮"）
+        if (sse != null) sse.broadcastAutoComplete(results.size());
         return results;
     }
 
@@ -492,6 +548,8 @@ public class RouterService {
         List<String> agentNames = new ArrayList<>(agents.keySet());
         state.put("agents", agentNames);
         state.put("agent_count", agentNames.size());
+        // D8: 角色加入推送
+        if (sse != null) sse.broadcastAgentAdded(name, "active");
     }
 
     public void removeAgent(String name) {
@@ -500,6 +558,8 @@ public class RouterService {
         List<String> agentNames = new ArrayList<>(agents.keySet());
         state.put("agents", agentNames);
         state.put("agent_count", agentNames.size());
+        // D8: 角色离开推送
+        if (sse != null) sse.broadcastAgentRemoved(name);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -589,6 +649,67 @@ public class RouterService {
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  D8: SSE 辅助（回合广播）
+    // ═══════════════════════════════════════════════════════════
+
+    /** 由本轮轨道配置构造任务列表（arbiter_task 事件，前端「本轮任务分配」面板）。 */
+    private List<Map<String, Object>> buildTaskList(TrackConfig config) {
+        List<Map<String, Object>> tasks = new ArrayList<>();
+        for (Track track : config.getTracks()) {
+            String taskDesc = "参与轨道「" + track.getLabel() + "」("
+                + track.getMode().name().toLowerCase() + "模式)";
+            for (String agentName : track.getActiveAgents()) {
+                tasks.add(Map.of("agent_name", agentName, "task", taskDesc));
+            }
+        }
+        return tasks;
+    }
+
+    /** 轨道增删广播（track_created / track_closed），基于新旧轨道 id 差集。 */
+    private void publishTrackLifecycle(List<Map<String, Object>> oldTracks,
+                                       List<Map<String, Object>> newTracks) {
+        if (sse == null) return;
+        Set<String> oldIds = trackIds(oldTracks);
+        Set<String> newIds = trackIds(newTracks);
+        for (Map<String, Object> t : newTracks) {
+            String id = String.valueOf(t.getOrDefault("id", "track"));
+            if (!oldIds.contains(id)) {
+                sse.broadcastTrackCreated(id, String.valueOf(t.getOrDefault("label", id)));
+            }
+        }
+        for (Map<String, Object> t : oldTracks) {
+            String id = String.valueOf(t.getOrDefault("id", "track"));
+            if (!newIds.contains(id)) {
+                sse.broadcastTrackClosed(id, String.valueOf(t.getOrDefault("label", id)));
+            }
+        }
+    }
+
+    private Set<String> trackIds(List<Map<String, Object>> tracks) {
+        Set<String> ids = new HashSet<>();
+        if (tracks != null) {
+            for (Map<String, Object> t : tracks) {
+                ids.add(String.valueOf(t.getOrDefault("id", "track")));
+            }
+        }
+        return ids;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  N1: 历史契约数据源（供 HistoryController /api/history）
+    // ═══════════════════════════════════════════════════════════
+
+    /** 当前会话全部消息（/api/history 的 messages 数据源）。 */
+    public List<Message> getConversationMessages() {
+        return memory.hasSession() ? memory.getSession().getMessages() : List.of();
+    }
+
+    /** 当前会话 round_log（/api/history 的 round_logs 数据源）。 */
+    public List<Map<String, Object>> getConversationRoundLogs() {
+        return memory.hasSession() ? memory.getSession().getRoundLog() : List.of();
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  Character Relations
     // ═══════════════════════════════════════════════════════════
 
@@ -675,11 +796,73 @@ public class RouterService {
             if (result.status.contains("error")) break;
         }
         autoRunning = false;
+        // D8: 自动对话结束推送
+        if (sse != null) sse.broadcastAutoComplete(results.size());
         return results;
     }
 
     public void stopAutoRounds() { autoRunning = false; }
     public boolean isAutoRunning() { return autoRunning; }
+
+    // ═══════════════════════════════════════════════════════════
+    //  D13: turns 多轮执行（/api/round/start）
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * D13: 明确收束信号 —— 主控旁白 / 角色台词出现这些标记时判定剧情目标达成。
+     */
+    private static final List<String> CLOSURE_MARKERS = List.of(
+        "（完）", "（全文完）", "全剧终", "剧终", "故事结束", "本剧终",
+        "完结", "(完)", "END", "The End");
+
+    /**
+     * 按 turns 执行 N 轮对话（前端"三轮"按钮等）。每轮走 {@link #runRound}。
+     *
+     * <p>停止条件（任一满足即提前结束，实际轮数 &lt; turns）：
+     * <ol>
+     *   <li>中途 stop —— running 被置 false（/api/stop、/stop 命令）；</li>
+     *   <li>目标达成 —— 保守启发式 {@link #goalsAchieved()}（仅当设置过剧情目标且
+     *       最近对话出现明确收束信号）；</li>
+     *   <li>单轮错误 —— 无活动会话 / 生成被中断。</li>
+     * </ol>
+     *
+     * @param userInput 仅第一轮携带的用户输入，后续轮次自动推进（null）
+     * @param turns     目标轮数（&lt;=0 视为 1）
+     * @return 实际执行的轮次结果列表（可能少于 turns）
+     */
+    public List<RoundResult> runTurns(String userInput, int turns) {
+        List<RoundResult> results = new ArrayList<>();
+        int target = Math.max(1, turns);
+        for (int i = 0; i < target && running; i++) {
+            RoundResult result = runRound(i == 0 ? userInput : null, null);
+            results.add(result);
+            if (result.status != null && result.status.startsWith("error")) break;
+            if (goalsAchieved()) break;
+        }
+        // D8: 多轮自动对话结束推送（前端 "自动对话结束，共 N 轮"；单轮走 round_complete 不重复广播）
+        if (sse != null && target > 1) sse.broadcastAutoComplete(results.size());
+        return results;
+    }
+
+    /**
+     * D13: 目标达成检测（保守启发式，避免误提前终止）。
+     *
+     * <p>仅当：剧情目标非空 且 最近 30 条消息中出现明确收束信号时返回 true；
+     * 未设置目标时恒为 false（跑满 turns）。
+     */
+    private boolean goalsAchieved() {
+        if (goals == null || goals.isEmpty() || !memory.hasSession()) return false;
+        List<Message> msgs = memory.getSession().getMessages();
+        int from = Math.max(0, msgs.size() - 30);
+        for (int i = msgs.size() - 1; i >= from; i--) {
+            Message m = msgs.get(i);
+            if (m.getContent() == null) continue;
+            for (String marker : CLOSURE_MARKERS) {
+                if (m.getContent().contains(marker)) return true;
+            }
+        }
+        return false;
+    }
 
     // ═══════════════════════════════════════════════════════════
     //  Message snapshot in runRound

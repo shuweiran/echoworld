@@ -20,6 +20,8 @@ public class AppConfig {
     private RoundConfig round = new RoundConfig();
     private ModeConfig mode = new ModeConfig();
     private FrontendConfig frontend = new FrontendConfig();
+    /** 语音配置（D20：/api/config/voice 运行时落地，TtsService 读取）。 */
+    private VoiceConfig voice = new VoiceConfig();
 
     private String host = "0.0.0.0";
     private int port = 8000;
@@ -46,6 +48,9 @@ public class AppConfig {
     public void setMode(ModeConfig mode) { this.mode = mode; }
 
     public FrontendConfig getFrontend() { return frontend; }
+
+    public VoiceConfig getVoice() { return voice; }
+    public void setVoice(VoiceConfig voice) { this.voice = voice; }
 
     public String getHost() { return host; }
     public void setHost(String host) { this.host = host; }
@@ -147,5 +152,22 @@ public class AppConfig {
         public boolean isDevMode() { return devMode; }
         public int getDevPort() { return devPort; }
         public String getDistDir() { return distDir; }
+    }
+
+    /** 语音配置（D20）：engine=edge|cosyvoice，voice 为默认音色，autoSelect 自动选引擎。 */
+    public static class VoiceConfig {
+        private boolean enabled = true;
+        private String engine = "edge";
+        private boolean autoSelect = true;
+        private String voice = "";
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getEngine() { return engine; }
+        public void setEngine(String engine) { this.engine = engine; }
+        public boolean isAutoSelect() { return autoSelect; }
+        public void setAutoSelect(boolean autoSelect) { this.autoSelect = autoSelect; }
+        public String getVoice() { return voice; }
+        public void setVoice(String voice) { this.voice = voice; }
     }
 }

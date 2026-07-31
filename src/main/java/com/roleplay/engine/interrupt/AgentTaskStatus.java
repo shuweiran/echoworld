@@ -11,8 +11,8 @@ package com.roleplay.engine.interrupt;
  *            |
  *            v
  *         RUNNING
- *        /       \
- *  CANCELLED    DONE
+ *        /    |    \
+ *  CANCELLED  FAILED  DONE
  *        |
  *        v
  *   (CANCELLED / INTERRUPTED)
@@ -22,6 +22,8 @@ package com.roleplay.engine.interrupt;
  * <ul>
  *   <li>{@link #CANCELLED} —— 被主动取消（硬停止 HARD / 软停止 SOFT），如死亡、玩家打断、退出</li>
  *   <li>{@link #INTERRUPTED} —— 意图/状态失效被终止（状态停止 STATE_INVALID），如轨道变化、目标取消</li>
+ *   <li>{@link #FAILED} —— 执行失败（LLM 调用 401/超时/网络错误等，D22）；区别于主动中断，
+ *       根因写入 {@code reason}，供调用方与 CANCELLED 区分</li>
  *   <li>{@link #DONE} —— 正常完成</li>
  * </ul>
  */
@@ -36,6 +38,8 @@ public enum AgentTaskStatus {
     INTERRUPTED,
     /** 被主动取消（HARD / SOFT 停止类型）。 */
     CANCELLED,
+    /** 执行失败（LLM 调用错误/401/超时等，非主动停止动作，D22）。 */
+    FAILED,
     /** 正常完成。 */
     DONE;
 
@@ -46,6 +50,6 @@ public enum AgentTaskStatus {
 
     /** 是否为终态。 */
     public boolean isTerminal() {
-        return this == INTERRUPTED || this == CANCELLED || this == DONE;
+        return this == INTERRUPTED || this == CANCELLED || this == FAILED || this == DONE;
     }
 }

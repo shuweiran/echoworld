@@ -35,8 +35,6 @@ public class LLMClient {
     private static final Logger log = LoggerFactory.getLogger(LLMClient.class);
 
     private final AppConfig appConfig;
-    private final String apiBase;
-    private final String model;
     private final int timeoutSeconds;
     private final String fallbackModel;
 
@@ -45,14 +43,34 @@ public class LLMClient {
 
     public LLMClient(AppConfig appConfig) {
         this.appConfig = appConfig;
-        this.apiBase = appConfig.getLlm().getApiBase();
-        this.model = appConfig.getLlm().getModel();
+        // D20: api_base / model 不再构造期固定 —— 每次请求时读取 AppConfig（
+        // 运行时 POST /api/config/apikey 设置的 api_base/model 立即生效，重启丢失）
         this.timeoutSeconds = appConfig.getMonitor().getTimeoutSeconds();
         this.fallbackModel = appConfig.getMonitor().getFallbackModel();
 
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
+    }
+
+    /** 运行时 api_base（D20：支持运行时配置热更新，见 ConfigController）。 */
+    private String apiBase() { return appConfig.getLlm().getApiBase(); }
+
+    /** 运行时默认模型（D20）。 */
+    private String defaultModel() { return appConfig.getLlm().getModel(); }
+
+    /**
+     * 归一化 chat/completions 端点（D20）：容忍 api_base 传全路径
+     * （…/chat/completions）、带 /v1（…/v1）或不带 /v1 三种写法。
+     */
+    private String chatEndpoint() {
+        String base = apiBase();
+        if (base == null || base.isBlank()) base = "https://api.deepseek.com";
+        String b = base.trim();
+        while (b.endsWith("/")) b = b.substring(0, b.length() - 1);
+        if (b.endsWith("/chat/completions")) return b;
+        if (b.endsWith("/v1")) return b + "/chat/completions";
+        return b + "/v1/chat/completions";
     }
 
     // ── Sync call （for Virtual Threads） ────────────────────────
@@ -62,7 +80,7 @@ public class LLMClient {
      * This is a BLOCKING call — designed to run in a Virtual Thread.
      */
     public String callSync(List<Message> messages) {
-        return callSyncInternal(messages, model, 300, 0.7, null);
+        return callSyncInternal(messages, defaultModel(), 300, 0.7, null);
     }
 
     /**
@@ -73,7 +91,7 @@ public class LLMClient {
      * future.cancel(true)）也会立即 abort 进行中的 HTTP 调用并上抛取消信号。
      */
     public String callSync(List<Message> messages, CancellationToken token) {
-        return callSyncInternal(messages, model, 300, 0.7, token);
+        return callSyncInternal(messages, defaultModel(), 300, 0.7, token);
     }
 
     public String callSync(List<Message> messages, String modelOverride,
@@ -97,7 +115,7 @@ public class LLMClient {
                 try {
                     String requestBody = buildChatRequest(messages, currentModel, maxTokens, temperature);
                     HttpRequest request = HttpRequest.newBuilder()
-                            .uri(URI.create(apiBase + "/v1/chat/completions"))
+                            .uri(URI.create(chatEndpoint()))
                             .header("Content-Type", "application/json")
                             .header("Authorization", "Bearer " + appConfig.getLlm().getApiKey())
                             .timeout(Duration.ofSeconds(timeoutSeconds))
@@ -170,7 +188,7 @@ public class LLMClient {
                 "你是一个角色扮演主控，回复简洁的叙事旁白。");
         Message userMsg = new Message(Message.Role.USER, "user", prompt);
         try {
-            return callSync(List.of(sysMsg, userMsg), model, maxTokens, 0.1);
+            return callSync(List.of(sysMsg, userMsg), defaultModel(), maxTokens, 0.1);
         } catch (Exception e) {
             log.warn("callSimple failed: {}", e.getMessage());
             return null;
@@ -190,7 +208,7 @@ public class LLMClient {
 
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
-                String content = callSync(List.of(sysMsg, userMsg), model, maxTokens, 0.1);
+                String content = callSync(List.of(sysMsg, userMsg), defaultModel(), maxTokens, 0.1);
                 String json = extractJson(content);
                 if (json != null) {
                     @SuppressWarnings("unchecked")

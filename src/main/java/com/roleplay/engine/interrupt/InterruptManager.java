@@ -217,6 +217,32 @@ public class InterruptManager {
     }
 
     /**
+     * 标记任务执行失败（LLM 调用 401/超时/网络错误等，D22）。
+     *
+     * <p>与主动取消 {@link #cancel} 严格区分：失败不是用户/系统的停止动作——
+     * 不置位取消令牌、不中断关联线程、状态落到 {@link AgentTaskStatus#FAILED}
+     * 而非 CANCELLED，并发布 {@link GameEvent#TYPE_TASK_FAILED} 事件。
+     *
+     * @return 被标记的任务；任务不存在或已终态返回 null
+     */
+    public AgentTask markFailed(String taskId, String reason) {
+        AgentTask task = tasks.get(taskId);
+        if (task == null || !task.getStatus().isActive()) return null;
+        task.toFailed(reason);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("task_id", task.getId());
+        payload.put("agent", task.getAgentName());
+        payload.put("type", task.getType().name());
+        payload.put("status", AgentTaskStatus.FAILED.name());
+        payload.put("stop_type", "");
+        payload.put("reason", reason);
+        eventBus.publish(new GameEvent(GameEvent.TYPE_TASK_FAILED, "interrupt", payload));
+        log.warn("Task {} ({}/{}) FAILED — {}", task.getId(), task.getAgentName(),
+                task.getType(), reason);
+        return task;
+    }
+
+    /**
      * 取消执行核心：
      * <ol>
      *   <li>协作式令牌置位（所有检查点生效）</li>

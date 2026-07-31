@@ -10,12 +10,12 @@ import com.roleplay.engine.interrupt.TaskType;
 import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.ScriptService;
 import com.roleplay.engine.service.PrivateChatService;
+import com.roleplay.engine.service.SessionRegistry;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Main session endpoints — the primary conversational interface.
@@ -32,24 +32,28 @@ public class SessionController {
     private final SceneController sceneController;
     /** D1: 中断管理器 —— /api/interrupt 按 Task ID 取消 + 状态查询。 */
     private final InterruptManager interruptManager;
-    private final Map<String, RouterService> sessions = new ConcurrentHashMap<>();
+    /** D11: 按 session_id 的 router 实例管理 —— 多会话隔离（替代原只写不读的 sessions map）。 */
+    private final SessionRegistry sessions;
 
     public SessionController(RouterService router, ScriptService scriptService,
                              PrivateChatService privateChatService,
                              CharacterController characterController,
                              SceneController sceneController,
-                             InterruptManager interruptManager) {
+                             InterruptManager interruptManager,
+                             SessionRegistry sessions) {
         this.router = router;
         this.scriptService = scriptService;
         this.privateChatService = privateChatService;
         this.characterController = characterController;
         this.sceneController = sceneController;
         this.interruptManager = interruptManager;
+        this.sessions = sessions;
     }
 
     @GetMapping("/state")
-    public ResponseEntity<Map<String, Object>> getState() {
-        Map<String, Object> state = new LinkedHashMap<>(router.getState());
+    public ResponseEntity<Map<String, Object>> getState(@RequestParam(required = false) String session_id) {
+        RouterService r = sessions.get(session_id);
+        Map<String, Object> state = new LinkedHashMap<>(r.getState());
         state.put("characters", characterController.getAll());
         state.put("scenes", sceneController.getAll());
         return ResponseEntity.ok(state);
@@ -72,12 +76,19 @@ public class SessionController {
         }
 
         String sessionId = UUID.randomUUID().toString().substring(0, 12);
+        // D11: 按 session_id 创建/获取独立 router 实例（多会话隔离）
+        RouterService sessionRouter = sessions.getOrCreate(sessionId);
+        sessionRouter.initSession(sessionId, personas,
+            (String) body.getOrDefault("scene", "默认场景"),
+            (String) body.getOrDefault("mode", "free"),
+            (String) body.getOrDefault("protagonist", ""),
+            (String) body.getOrDefault("director_character", ""));
+        // 向后兼容：默认单例 router 同步初始化（未传 session_id 的旧客户端仍走默认会话）
         router.initSession(sessionId, personas,
             (String) body.getOrDefault("scene", "默认场景"),
             (String) body.getOrDefault("mode", "free"),
             (String) body.getOrDefault("protagonist", ""),
             (String) body.getOrDefault("director_character", ""));
-        sessions.put(sessionId, router);
 
         return ResponseEntity.ok(Map.of(
             "session_id", sessionId,
@@ -89,7 +100,10 @@ public class SessionController {
     @PostMapping("/send")
     public ResponseEntity<Map<String, Object>> sendMessage(@RequestBody Map<String, String> body) {
         String message = body.getOrDefault("message", body.getOrDefault("text", ""));
-        RouterService.RoundResult result = router.runRound(message, null);
+        // D11: 按 session_id 路由到对应会话实例；未传 → 默认单例（向后兼容）
+        String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
+        RouterService r = sessions.get(sessionId);
+        RouterService.RoundResult result = r.runRound(message, null);
         return ResponseEntity.ok(Map.of(
             "status", result.status,
             "agent_outputs", result.agentOutputs,
@@ -99,9 +113,12 @@ public class SessionController {
     }
 
     @PostMapping("/stop")
-    public ResponseEntity<Map<String, Object>> stop() {
+    public ResponseEntity<Map<String, Object>> stop(@RequestBody(required = false) Map<String, String> body) {
+        // D11: 支持按 session_id 停止指定会话；未传 → 默认单例
+        String sessionId = body != null ? String.valueOf(body.getOrDefault("session_id", "")).trim() : "";
+        RouterService r = sessions.get(sessionId);
         // D1: router.stop() 除置位停止标志外，还会硬停止所有进行中的生成任务
-        router.stop();
+        r.stop();
         return ResponseEntity.ok(Map.of("status", "stopped"));
     }
 
@@ -124,9 +141,10 @@ public class SessionController {
         if (body == null) body = Map.of();
         StopType stopType = StopType.fromString((String) body.getOrDefault("stop_type", "hard"));
         String reason = String.valueOf(body.getOrDefault("reason", "API 中断请求"));
-        String taskId = String.valueOf(body.getOrDefault("task_id", ""));
-        String agent = String.valueOf(body.getOrDefault("agent", ""));
-        String typeStr = String.valueOf(body.getOrDefault("type", ""));
+        // D21: null 值（JSON 显式传 null）按缺省处理，避免 String.valueOf(null)="null" 误匹配
+        String taskId = body.get("task_id") != null ? String.valueOf(body.get("task_id")) : "";
+        String agent = body.get("agent") != null ? String.valueOf(body.get("agent")) : "";
+        String typeStr = body.get("type") != null ? String.valueOf(body.get("type")) : "";
 
         List<AgentTask> cancelled = new ArrayList<>();
         if (!taskId.isBlank()) {
@@ -148,7 +166,7 @@ public class SessionController {
         ));
     }
 
-    /** 任务状态列表（可按 agent / type / status 过滤）。 */
+    /** 任务状态列表（可按 agent / type / status 过滤；type 缺省不过滤，D21）。 */
     @GetMapping("/interrupt/tasks")
     public ResponseEntity<Map<String, Object>> listInterruptTasks(
             @RequestParam(required = false) String agent,
@@ -162,7 +180,17 @@ public class SessionController {
                 // 非法 status 过滤参数 → 不过滤
             }
         }
-        List<AgentTask> tasks = interruptManager.listTasks(agent, TaskType.fromString(type), statusFilter);
+        // D21: 无 type 参数 → 不过滤（返回全部类型）；非法 type 同样视为不过滤，
+        // 避免 TaskType.fromString 的 GENERATION 兜底导致 DIALOGUE 等任务不可见
+        TaskType typeFilter = null;
+        if (type != null && !type.isBlank()) {
+            try {
+                typeFilter = TaskType.valueOf(type.trim().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                // 非法 type 过滤参数 → 不过滤
+            }
+        }
+        List<AgentTask> tasks = interruptManager.listTasks(agent, typeFilter, statusFilter);
         return ResponseEntity.ok(Map.of(
             "active", interruptManager.activeTaskCount(),
             "count", tasks.size(),
@@ -183,7 +211,9 @@ public class SessionController {
     @PostMapping("/auto")
     public ResponseEntity<Map<String, Object>> startAuto(@RequestBody Map<String, Object> body) {
         int rounds = ((Number) body.getOrDefault("rounds", 3)).intValue();
-        List<RouterService.RoundResult> results = router.runAutoRounds(rounds);
+        String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
+        RouterService r = sessions.get(sessionId);
+        List<RouterService.RoundResult> results = r.runAutoRounds(rounds);
         return ResponseEntity.ok(Map.of(
             "rounds", results.size(),
             "last_status", results.isEmpty() ? "" : results.get(results.size() - 1).status
@@ -192,45 +222,51 @@ public class SessionController {
 
     @PostMapping("/mode")
     public ResponseEntity<Map<String, Object>> setMode(@RequestBody Map<String, String> body) {
-        router.setMode(body.getOrDefault("mode", "free"));
+        String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
+        RouterService r = sessions.get(sessionId);
+        r.setMode(body.getOrDefault("mode", "free"));
         String protagonist = body.getOrDefault("protagonist",
             body.getOrDefault("protagonist", ""));
-        if (!protagonist.isEmpty()) router.setProtagonist(protagonist);
+        if (!protagonist.isEmpty()) r.setProtagonist(protagonist);
         String director = body.getOrDefault("director_character",
             body.getOrDefault("director", ""));
-        if (!director.isEmpty()) router.setDirectorCharacter(director);
-        return ResponseEntity.ok(Map.of("mode", router.getMode()));
+        if (!director.isEmpty()) r.setDirectorCharacter(director);
+        return ResponseEntity.ok(Map.of("mode", r.getMode()));
     }
 
     @GetMapping("/mode")
-    public ResponseEntity<Map<String, String>> getMode() {
-        return ResponseEntity.ok(Map.of("mode", router.getMode()));
+    public ResponseEntity<Map<String, String>> getMode(@RequestParam(required = false) String session_id) {
+        return ResponseEntity.ok(Map.of("mode", sessions.get(session_id).getMode()));
     }
 
     @PostMapping("/goals")
     public ResponseEntity<Map<String, Object>> setGoals(@RequestBody Map<String, Object> body) {
         @SuppressWarnings("unchecked")
         List<String> goals = (List<String>) body.getOrDefault("goals", List.of());
-        router.setGoals(goals);
+        String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
+        sessions.get(sessionId).setGoals(goals);
         return ResponseEntity.ok(Map.of("goals", goals));
     }
 
     @GetMapping("/goals")
-    public ResponseEntity<Map<String, Object>> getGoals() {
-        return ResponseEntity.ok(Map.of("goals", router.getGoals()));
+    public ResponseEntity<Map<String, Object>> getGoals(@RequestParam(required = false) String session_id) {
+        return ResponseEntity.ok(Map.of("goals", sessions.get(session_id).getGoals()));
     }
 
     @PostMapping("/agents")
     public ResponseEntity<Map<String, Object>> addAgent(@RequestBody Map<String, String> body) {
         String name = body.getOrDefault("name", "新角色");
         String persona = body.getOrDefault("persona", "");
-        router.addAgent(name, new Persona(name, persona));
+        String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
+        RouterService r = sessions.get(sessionId);
+        r.addAgent(name, new Persona(name, persona));
         return ResponseEntity.ok(Map.of("status", "added", "name", name));
     }
 
     @DeleteMapping("/agents/{name}")
-    public ResponseEntity<Map<String, Object>> removeAgent(@PathVariable String name) {
-        router.removeAgent(name);
+    public ResponseEntity<Map<String, Object>> removeAgent(@PathVariable String name,
+                                                           @RequestParam(required = false) String session_id) {
+        sessions.get(session_id).removeAgent(name);
         return ResponseEntity.ok(Map.of("status", "removed", "name", name));
     }
 

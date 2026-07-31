@@ -2,6 +2,7 @@ package com.roleplay.engine.controller;
 
 import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.ScriptGameService;
+import com.roleplay.engine.simulation.SimulationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.ResponseEntity;
@@ -21,12 +22,15 @@ public class ScriptController {
 
     private final ScriptGameService scriptGameService;
     private final RouterService router;
+    private final SimulationService simulationService;
     private final Map<String, String> playerSessions = new ConcurrentHashMap<>();
     private String currentSessionId = "";
 
-    public ScriptController(ScriptGameService scriptGameService, RouterService router) {
+    public ScriptController(ScriptGameService scriptGameService, RouterService router,
+                            SimulationService simulationService) {
         this.scriptGameService = scriptGameService;
         this.router = router;
+        this.simulationService = simulationService;
     }
 
     @PostMapping("/init")
@@ -58,8 +62,32 @@ public class ScriptController {
     @PostMapping("/start_discussion")
     public ResponseEntity<Map<String, Object>> startDiscussion(@RequestBody Map<String, String> body) {
         String sessionId = body.getOrDefault("session_id", currentSessionId);
-        scriptGameService.startDiscussion(sessionId);
-        return ResponseEntity.ok(Map.of("phase", "discussion"));
+        boolean transitioned = scriptGameService.startDiscussion(sessionId);
+        ScriptGameService.ScriptGame game = scriptGameService.getGame(sessionId);
+        if (game == null) {
+            return ResponseEntity.ok(Map.of("phase", "not_found", "simulation_started", false));
+        }
+
+        boolean simulationStarted = game.isSimulationStarted();
+        if (transitioned && !simulationStarted) {
+            simulationService.initWithPersonas(scriptGameService.buildSimulationPersonas(sessionId), "cafe");
+            simulationService.setSecretAgents(scriptGameService.getSecretPlayers(sessionId));
+            scriptGameService.buildDiscussionGoals(sessionId)
+                .forEach(simulationService::setTrackGoal);
+            simulationService.start();
+            scriptGameService.markSimulationStarted(sessionId);
+            simulationStarted = true;
+            log.info("Script game {} bridged into 2D simulation: {} players, secretAgents={}",
+                sessionId, game.getPlayers().size(), scriptGameService.getSecretPlayers(sessionId));
+        }
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("phase", "discussion");
+        result.put("simulation_started", simulationStarted);
+        result.put("simulation_url", "/simulation.html");
+        result.put("simulation_state_url", "/api/simulation/state");
+        result.put("track_state_url", "/api/simulation/track/state");
+        return ResponseEntity.ok(result);
     }
 
     @PostMapping("/start_voting")

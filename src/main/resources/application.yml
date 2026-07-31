@@ -26,6 +26,7 @@ spring:
 roleplay:
   llm:
     api-base: "https://api.deepseek.com"
+    api-key: "${ROLEPLAY_LLM_API_KEY:}"
     model: "deepseek-v4-flash"
     max-tokens: 4096
     temperature: 0.9
@@ -41,6 +42,11 @@ roleplay:
   mode:
     default: "free"
     language: "zh"
+  game:
+    approval:
+      # 审批门（D7）：剧本杀揭晓 / 狼人杀投票结算挂起等待 DM 审批；true=手动审批（超时自动驳回回滚），false=自动通过
+      enabled: true
+      timeout-seconds: 60
   frontend:
     dev-mode: false
     dev-port: 5173
