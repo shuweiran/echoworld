@@ -1,0 +1,39 @@
+# Test profile: 独立 H2 内存库，与现网数据目录隔离（方案 4.2 硬性约束 #3）
+server:
+  port: 0
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    show-sql: false
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+roleplay:
+  llm:
+    api-base: "http://localhost:9999/mock-llm"
+    model: "test-mock"
+    max-tokens: 256
+    temperature: 0.0
+    fallback-model: "test-mock"
+    timeout-seconds: 5
+  memory:
+    short-term-rounds: 20
+    summary-interval: 10
+  round:
+    parallel-agents: false
+    agent-max-tokens: 300
+    arbiter-max-tokens: 150
+  mode:
+    default: "free"
+    language: "zh"
+  frontend:
+    dev-mode: false
