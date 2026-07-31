@@ -3,6 +3,13 @@ package com.roleplay.engine.agent;
 import com.roleplay.engine.core.Message;
 import com.roleplay.engine.core.Track;
 import com.roleplay.engine.core.TrackConfig;
+import com.roleplay.engine.interrupt.AgentTaskManager;
+import com.roleplay.engine.interrupt.AgentTaskStatus;
+import com.roleplay.engine.interrupt.CancellationToken;
+import com.roleplay.engine.interrupt.InterruptManager;
+import com.roleplay.engine.interrupt.StopType;
+import com.roleplay.engine.interrupt.TaskCancelledException;
+import com.roleplay.engine.interrupt.TaskType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -43,6 +50,16 @@ public class AgentExecutor {
 
     /** Virtual thread executor — each agent gets its own thread. */
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
+
+    /** D1: 中断管理器（取消时中断关联线程 + 状态机）。 */
+    private final InterruptManager interruptManager;
+    /** D1: Agent 任务生命周期管理（Task ID + CancellationToken）。 */
+    private final AgentTaskManager agentTaskManager;
+
+    public AgentExecutor(InterruptManager interruptManager, AgentTaskManager agentTaskManager) {
+        this.interruptManager = interruptManager;
+        this.agentTaskManager = agentTaskManager;
+    }
 
     // ── Priority enum ──────────────────────────────────────────
 
@@ -130,18 +147,44 @@ public class AgentExecutor {
             ContextBuilder contextBuilder) {
 
         Instant roundStart = Instant.now();
-        List<AgentTask> tasks = buildTasks(config, agents, contextBuilder);
+
+        // D1: 先为本轮每个参与 Agent 注册中断任务（Task ID + CancellationToken）。
+        // 轨道信息来自 config（每个 agent 归属其所在的第一条轨道）。
+        Map<String, String> trackIdOfAgent = new LinkedHashMap<>();
+        Map<String, String> trackModeOfAgent = new LinkedHashMap<>();
+        Set<String> activeNames = new LinkedHashSet<>();
+        for (Track track : config.getTracks()) {
+            for (String an : track.getActiveAgents()) {
+                if (!agents.containsKey(an)) continue;
+                trackIdOfAgent.putIfAbsent(an, track.getId());
+                trackModeOfAgent.putIfAbsent(an, track.getMode().name().toLowerCase());
+                activeNames.add(an);
+            }
+        }
+        Map<String, com.roleplay.engine.interrupt.AgentTask> interruptTasks = new HashMap<>();
+        Map<String, CancellationToken> tokens = new HashMap<>();
+        for (String an : activeNames) {
+            com.roleplay.engine.interrupt.AgentTask it = agentTaskManager.createTask(
+                    an, TaskType.DIALOGUE,
+                    Map.of("trackId", trackIdOfAgent.getOrDefault(an, ""),
+                           "trackMode", trackModeOfAgent.getOrDefault(an, "")));
+            interruptTasks.put(an, it);
+            tokens.put(an, it.getCancelToken());
+        }
+
+        List<AgentTask> tasks = buildTasks(config, agents, contextBuilder, tokens);
 
         if (tasks.isEmpty()) {
+            for (com.roleplay.engine.interrupt.AgentTask it : interruptTasks.values()) {
+                interruptManager.unregister(it.getId());
+            }
             return new ExecutionResult(List.of(), new ExecutorMetrics(0, 0, 0, 0, 0));
         }
 
         // Submit all tasks to virtual threads in parallel
         int totalTasks = tasks.size();
-        int maxConcurrent = 0;
         double maxLatency = 0;
         double totalLatency = 0;
-        int completed = 0;
 
         List<AgentOutput> outputs = new ArrayList<>();
         CountDownLatch latch = new CountDownLatch(totalTasks);
@@ -150,7 +193,9 @@ public class AgentExecutor {
         final int[] maxConcurrentRef = {0};
 
         for (AgentTask task : tasks) {
-            executor.submit(() -> {
+            com.roleplay.engine.interrupt.AgentTask it = interruptTasks.get(task.agentName());
+            agentTaskManager.startTask(it);
+            Future<?> f = executor.submit(() -> {
                 Instant taskStart = Instant.now();
                 try {
                     String content = task.task().call();
@@ -165,6 +210,18 @@ public class AgentExecutor {
                     resultQueue.add(new AgentOutput(
                             task.agentName(), content, task.trackId(),
                             List.of(), elapsed, null));
+                    agentTaskManager.completeTask(it);
+                } catch (TaskCancelledException e) {
+                    // D1: 任务被取消 —— 结果不入成功输出（RouterService 会跳过），
+                    // 软停止的未完成内容保存到任务上（需求文档 §四 软停止）。
+                    long elapsed = Duration.between(taskStart, Instant.now()).toMillis();
+                    it.saveUnfinished(e.getPartial());
+                    resultQueue.add(new AgentOutput(
+                            task.agentName(), null, task.trackId(),
+                            List.of(), elapsed,
+                            "cancelled" + (e.getReason() != null && !e.getReason().isBlank()
+                                    ? ": " + e.getReason() : "")));
+                    log.info("Agent {} task {} cancelled: {}", task.agentName(), it.getId(), e.getReason());
                 } catch (Exception e) {
                     long elapsed = Duration.between(taskStart, Instant.now()).toMillis();
                     resultQueue.add(new AgentOutput(
@@ -172,11 +229,14 @@ public class AgentExecutor {
                             "[" + task.agentName() + " 走神了: " + e.getMessage() + "]",
                             task.trackId(),
                             List.of(), elapsed, e.getMessage()));
+                    agentTaskManager.failTask(it, e.getMessage());
                     log.warn("Agent {} failed: {}", task.agentName(), e.getMessage());
                 } finally {
                     latch.countDown();
                 }
             });
+            // D1: 挂接 Future —— 取消时立即中断该虚拟线程（abort 进行中的 LLM HTTP 调用）
+            interruptManager.attachFuture(it.getId(), f);
         }
 
         // Wait for ALL agents to complete
@@ -188,7 +248,11 @@ public class AgentExecutor {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            log.error("Agent round interrupted");
+            // D1: 请求线程被中断（取消信号）→ 取消本回合全部剩余任务
+            for (com.roleplay.engine.interrupt.AgentTask it : interruptTasks.values()) {
+                interruptManager.cancel(it.getId(), StopType.HARD, "回合执行线程被中断");
+            }
+            log.info("Agent round interrupted by cancel request");
         }
 
         // Collect results
@@ -197,18 +261,30 @@ public class AgentExecutor {
             totalLatency += lat;
             if (lat > maxLatency) maxLatency = lat;
         }
-        completed = outputs.size();
+        int completedCount = outputs.size();
 
-        double avgLatency = completed > 0 ? totalLatency / completed : 0;
+        // D1: 判定本回合是否被取消（任一任务 CANCELLED/INTERRUPTED）→ 收尾终态任务
+        boolean cancelled = false;
+        for (com.roleplay.engine.interrupt.AgentTask it : interruptTasks.values()) {
+            AgentTaskStatus st = it.getStatus();
+            if (st == AgentTaskStatus.CANCELLED || st == AgentTaskStatus.INTERRUPTED) {
+                cancelled = true;
+            }
+            if (st.isTerminal()) {
+                interruptManager.unregister(it.getId());
+            }
+        }
+
+        double avgLatency = completedCount > 0 ? totalLatency / completedCount : 0;
         double totalTimeMs = Duration.between(roundStart, Instant.now()).toMillis();
 
         ExecutorMetrics metrics = new ExecutorMetrics(
                 totalTasks, maxConcurrentRef[0], avgLatency, maxLatency, totalTimeMs);
 
-        log.info("Agent round complete: {} agents in {:.0f}ms (avg {:.0f}ms/agent)",
-                completed, totalTimeMs, avgLatency);
+        log.info("Agent round complete: {} agents in {:.0f}ms (avg {:.0f}ms/agent){}",
+                completedCount, totalTimeMs, avgLatency, cancelled ? " [CANCELLED]" : "");
 
-        return new ExecutionResult(outputs, metrics);
+        return new ExecutionResult(outputs, metrics, cancelled);
     }
 
     // ── Task building ──────────────────────────────────────────
@@ -216,7 +292,8 @@ public class AgentExecutor {
     private List<AgentTask> buildTasks(
             TrackConfig config,
             Map<String, Agent> agents,
-            ContextBuilder contextBuilder) {
+            ContextBuilder contextBuilder,
+            Map<String, CancellationToken> tokens) {
 
         List<AgentTask> tasks = new ArrayList<>();
 
@@ -233,11 +310,15 @@ public class AgentExecutor {
                 String trackId = track.getId();
 
                 Callable<String> callable = () -> {
+                    CancellationToken token = tokens.get(agentName);
+                    // D1: 检查点 —— 上下文构建前 / LLM 调用前，取消则立即中断
+                    if (token != null) token.checkpoint();
                     String context = contextBuilder.buildContext(
                             agentName, trackMode, trackId, config);
+                    if (token != null) token.checkpoint();
                     return agent.generateSync(
                             agent.getPersona().buildLightweightPrompt(),
-                            List.of(), trackMode, List.of(), "", null, "");
+                            List.of(), trackMode, List.of(), "", null, "", token);
                 };
 
                 tasks.add(new AgentTask(agentName, trackId, trackMode, priority, callable));
@@ -268,8 +349,14 @@ public class AgentExecutor {
 
     public record ExecutionResult(
             List<AgentOutput> outputs,
-            ExecutorMetrics metrics
-    ) {}
+            ExecutorMetrics metrics,
+            boolean cancelled
+    ) {
+        /** 兼容旧调用方（未触发取消）。 */
+        public ExecutionResult(List<AgentOutput> outputs, ExecutorMetrics metrics) {
+            this(outputs, metrics, false);
+        }
+    }
 
     // ── Context builder interface ──────────────────────────────
 

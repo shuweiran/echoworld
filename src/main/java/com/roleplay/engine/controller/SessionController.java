@@ -2,6 +2,11 @@ package com.roleplay.engine.controller;
 
 import com.roleplay.engine.core.Message;
 import com.roleplay.engine.core.Persona;
+import com.roleplay.engine.interrupt.AgentTask;
+import com.roleplay.engine.interrupt.AgentTaskStatus;
+import com.roleplay.engine.interrupt.InterruptManager;
+import com.roleplay.engine.interrupt.StopType;
+import com.roleplay.engine.interrupt.TaskType;
 import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.ScriptService;
 import com.roleplay.engine.service.PrivateChatService;
@@ -25,17 +30,21 @@ public class SessionController {
     private final PrivateChatService privateChatService;
     private final CharacterController characterController;
     private final SceneController sceneController;
+    /** D1: 中断管理器 —— /api/interrupt 按 Task ID 取消 + 状态查询。 */
+    private final InterruptManager interruptManager;
     private final Map<String, RouterService> sessions = new ConcurrentHashMap<>();
 
     public SessionController(RouterService router, ScriptService scriptService,
                              PrivateChatService privateChatService,
                              CharacterController characterController,
-                             SceneController sceneController) {
+                             SceneController sceneController,
+                             InterruptManager interruptManager) {
         this.router = router;
         this.scriptService = scriptService;
         this.privateChatService = privateChatService;
         this.characterController = characterController;
         this.sceneController = sceneController;
+        this.interruptManager = interruptManager;
     }
 
     @GetMapping("/state")
@@ -91,8 +100,84 @@ public class SessionController {
 
     @PostMapping("/stop")
     public ResponseEntity<Map<String, Object>> stop() {
+        // D1: router.stop() 除置位停止标志外，还会硬停止所有进行中的生成任务
         router.stop();
         return ResponseEntity.ok(Map.of("status", "stopped"));
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  D1: 中断系统 API（需求文档第八条：按 Task ID 取消 / 查询任务状态）
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * 中断请求。取消优先级：task_id &gt; agent &gt; type &gt; 全部。
+     * <pre>{@code
+     * POST /api/interrupt
+     * {"task_id":"小明_dialogue_3", "stop_type":"hard"|"soft"|"state", "reason":"玩家打断"}
+     * {"agent":"小明", "stop_type":"soft"}
+     * {"type":"dialogue", "stop_type":"state"}
+     * {} → 取消全部
+     * }</pre>
+     */
+    @PostMapping("/interrupt")
+    public ResponseEntity<Map<String, Object>> interrupt(@RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) body = Map.of();
+        StopType stopType = StopType.fromString((String) body.getOrDefault("stop_type", "hard"));
+        String reason = String.valueOf(body.getOrDefault("reason", "API 中断请求"));
+        String taskId = String.valueOf(body.getOrDefault("task_id", ""));
+        String agent = String.valueOf(body.getOrDefault("agent", ""));
+        String typeStr = String.valueOf(body.getOrDefault("type", ""));
+
+        List<AgentTask> cancelled = new ArrayList<>();
+        if (!taskId.isBlank()) {
+            AgentTask t = interruptManager.cancel(taskId, stopType, reason);
+            if (t != null) cancelled.add(t);
+        } else if (!agent.isBlank()) {
+            cancelled.addAll(interruptManager.cancelAgent(agent, stopType, reason));
+        } else if (!typeStr.isBlank()) {
+            cancelled.addAll(interruptManager.cancelByType(TaskType.fromString(typeStr), stopType, reason));
+        } else {
+            cancelled.addAll(interruptManager.cancelAll(stopType, reason));
+        }
+
+        return ResponseEntity.ok(Map.of(
+            "status", "ok",
+            "stop_type", stopType.name(),
+            "cancelled_count", cancelled.size(),
+            "cancelled", cancelled.stream().map(AgentTask::toMap).toList()
+        ));
+    }
+
+    /** 任务状态列表（可按 agent / type / status 过滤）。 */
+    @GetMapping("/interrupt/tasks")
+    public ResponseEntity<Map<String, Object>> listInterruptTasks(
+            @RequestParam(required = false) String agent,
+            @RequestParam(required = false) String type,
+            @RequestParam(required = false) String status) {
+        AgentTaskStatus statusFilter = null;
+        if (status != null && !status.isBlank()) {
+            try {
+                statusFilter = AgentTaskStatus.valueOf(status.trim().toUpperCase());
+            } catch (IllegalArgumentException e) {
+                // 非法 status 过滤参数 → 不过滤
+            }
+        }
+        List<AgentTask> tasks = interruptManager.listTasks(agent, TaskType.fromString(type), statusFilter);
+        return ResponseEntity.ok(Map.of(
+            "active", interruptManager.activeTaskCount(),
+            "count", tasks.size(),
+            "tasks", tasks.stream().map(AgentTask::toMap).toList()
+        ));
+    }
+
+    /** 单个任务状态（含历史归档任务）。 */
+    @GetMapping("/interrupt/tasks/{taskId}")
+    public ResponseEntity<Map<String, Object>> getInterruptTask(@PathVariable String taskId) {
+        AgentTask t = interruptManager.getTask(taskId);
+        if (t == null) {
+            return ResponseEntity.status(404).body(Map.of("status", "not_found", "task_id", taskId));
+        }
+        return ResponseEntity.ok(t.toMap());
     }
 
     @PostMapping("/auto")

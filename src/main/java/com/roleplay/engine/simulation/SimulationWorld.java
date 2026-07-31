@@ -29,6 +29,8 @@ public class SimulationWorld {
     private final ConcurrentHashMap<String, AgentState> states = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, Agent> agents = new ConcurrentHashMap<>();
     private final List<Consumer<WorldSnapshot>> tickListeners = new CopyOnWriteArrayList<>();
+    /** Phase 4: 移动 tick 之前运行的钩子（MovementConstraint 等，先于 MovementSystem.update）。 */
+    private final List<Runnable> preTickHooks = new CopyOnWriteArrayList<>();
     private final ScheduledExecutorService tickExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "sim-world-tick");
         t.setDaemon(true);
@@ -98,6 +100,11 @@ public class SimulationWorld {
     public void addTickListener(Consumer<WorldSnapshot> listener) { tickListeners.add(listener); }
     public void removeTickListener(Consumer<WorldSnapshot> listener) { tickListeners.remove(listener); }
 
+    /** Phase 4: 注册移动 tick 前的钩子（在 MovementSystem.update 之前执行）。 */
+    public void addPreTickHook(Runnable hook) {
+        if (hook != null) preTickHooks.add(hook);
+    }
+
     public void addConversationEntry(Map<String, Object> entry) {
         recentConversations.add(entry);
         if (recentConversations.size() > MAX_RECENT_CONVERSATIONS) recentConversations.remove(0);
@@ -140,6 +147,13 @@ public class SimulationWorld {
     private void tick() {
         if (!running) return;
         tickCount++;
+
+        // Phase 4: 移动前先应用轨道运动约束（MovementConstraint 产物），再寻路。
+        for (Runnable hook : preTickHooks) {
+            try { hook.run(); } catch (Exception e) {
+                log.warn("Pre-tick hook error: {}", e.getMessage());
+            }
+        }
 
         Collection<AgentState> allStates = states.values();
         movementSystem.update(allStates, TICK_INTERVAL_MS / 1000.0);

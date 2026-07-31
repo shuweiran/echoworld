@@ -21,6 +21,8 @@ public class AgentState {
     private volatile double targetX = -1;
     private volatile double targetY = -1;
     private volatile boolean hasTarget = false;
+    /** Phase 4: 手动指定的目标（/target 端点）——MovementConstraint 不得覆盖。 */
+    private volatile boolean manualTarget = false;
     private volatile Stance stance = Stance.NEUTRAL;
     private volatile double attention = 1.0;
     private volatile boolean playerControlled = false;
@@ -79,6 +81,16 @@ public class AgentState {
     public boolean isHasTarget() { return hasTarget; }
     public void setHasTarget(boolean hasTarget) { this.hasTarget = hasTarget; }
 
+    public boolean isManualTarget() { return manualTarget; }
+    public void setManualTarget(boolean manualTarget) { this.manualTarget = manualTarget; }
+
+    /** Phase 4 便捷方法：设置目标点并标记已有目标。 */
+    public void setTarget(double x, double y) {
+        this.targetX = x;
+        this.targetY = y;
+        this.hasTarget = true;
+    }
+
     public Stance getStance() { return stance; }
     public void setStance(Stance stance) { this.stance = stance; }
 
@@ -92,6 +104,7 @@ public class AgentState {
         this.hasTarget = false;
         this.targetX = -1;
         this.targetY = -1;
+        this.manualTarget = false;
     }
 
     public double distanceTo(AgentState other) {
@@ -115,6 +128,7 @@ public class AgentState {
         map.put("stance", stance.name().toLowerCase());
         map.put("attention", Math.round(attention * 100.0) / 100.0);
         map.put("playerControlled", playerControlled);
+        map.put("manualTarget", manualTarget);
         if (hasTarget) {
             map.put("targetX", Math.round(targetX * 100.0) / 100.0);
             map.put("targetY", Math.round(targetY * 100.0) / 100.0);

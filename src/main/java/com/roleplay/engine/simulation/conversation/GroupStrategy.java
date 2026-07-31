@@ -4,6 +4,7 @@ import com.roleplay.engine.agent.Agent;
 import com.roleplay.engine.llm.LLMClient;
 import com.roleplay.engine.simulation.AgentState;
 import com.roleplay.engine.simulation.Emotion;
+import com.roleplay.engine.simulation.track.EavesdropSummarizer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -15,11 +16,24 @@ public class GroupStrategy implements ConversationStrategy {
     private static final Logger log = LoggerFactory.getLogger(GroupStrategy.class);
     private final java.util.function.Function<String, Agent> agentLookup;
     private final java.util.function.Function<String, String> worldNarrationSupplier;
+    private final EavesdropSummarizer eavesdropSummarizer;
 
     public GroupStrategy(java.util.function.Function<String, Agent> agentLookup,
                          java.util.function.Function<String, String> worldNarrationSupplier) {
+        this(agentLookup, worldNarrationSupplier, null);
+    }
+
+    /**
+     * @param eavesdropSummarizer optional WEAK-track observer summarizer;
+     *                            null → rule-based fallback only (phase-1 isolation:
+     *                            listeners never receive full chat history)
+     */
+    public GroupStrategy(java.util.function.Function<String, Agent> agentLookup,
+                         java.util.function.Function<String, String> worldNarrationSupplier,
+                         EavesdropSummarizer eavesdropSummarizer) {
         this.agentLookup = agentLookup;
         this.worldNarrationSupplier = worldNarrationSupplier;
+        this.eavesdropSummarizer = eavesdropSummarizer;
     }
 
     @Override
@@ -150,16 +164,23 @@ public class GroupStrategy implements ConversationStrategy {
         sb.append("\n\n");
 
         List<Map<String, String>> history = group.getMessageHistory();
-        if (!history.isEmpty()) {
-            sb.append("【聊天记录】\n");
-            int start = Math.max(0, history.size() - 8);
-            for (int i = start; i < history.size(); i++) {
-                Map<String, String> h = history.get(i);
-                String msg = h.get("message");
-                if (msg.length() > 50) msg = msg.substring(0, 50);
-                sb.append(h.get("speaker")).append(": ").append(msg).append("\n");
+        if (isActive) {
+            if (!history.isEmpty()) {
+                sb.append("【聊天记录】\n");
+                int start = Math.max(0, history.size() - 8);
+                for (int i = start; i < history.size(); i++) {
+                    Map<String, String> h = history.get(i);
+                    String msg = h.get("message");
+                    if (msg.length() > 50) msg = msg.substring(0, 50);
+                    sb.append(h.get("speaker")).append(": ").append(msg).append("\n");
+                }
+                sb.append("\n");
             }
-            sb.append("\n");
+        } else {
+            // Phase 1 Track isolation: listeners never get the full chat history.
+            // They only receive a summarized observation (LLM path) or a rule-based
+            // "who is talking + one-line topic" fallback.
+            sb.append("【旁观信息】\n").append(buildListenerObservation(group, others, history)).append("\n\n");
         }
 
         if (isActive) {
@@ -169,5 +190,28 @@ public class GroupStrategy implements ConversationStrategy {
         }
 
         return sb.toString();
+    }
+
+    /**
+     * Build a WEAK-track observation for a listener: summarized when possible,
+     * otherwise just who is talking + one-line topic (no conversation content).
+     */
+    private String buildListenerObservation(ConversationGroup group, List<AgentState> others,
+                                            List<Map<String, String>> history) {
+        if (!history.isEmpty() && eavesdropSummarizer != null) {
+            try {
+                String summary = eavesdropSummarizer.summarize(history);
+                if (summary != null && !summary.isBlank()) return summary;
+            } catch (Exception e) {
+                log.warn("Eavesdrop summary failed, falling back to rule-based: {}", e.getMessage());
+            }
+        }
+        List<String> names = others.stream().map(AgentState::getAgentName).toList();
+        String topic = group.getTopic() == null || group.getTopic().isBlank() ? "闲聊" : group.getTopic();
+        if (names.isEmpty()) {
+            return "你听到附近有人在交谈，但听不清具体内容。";
+        }
+        return "你听到附近有人在交谈：" + String.join("、", names)
+                + "，话题围绕「" + topic + "」展开。你离得较远，听不清具体内容。";
     }
 }

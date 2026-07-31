@@ -109,13 +109,15 @@ public class DatabaseService {
 
     @Transactional
     public Map<String, Object> saveScene(String sceneId, String name,
-                                          String description, List<String> agents) {
+                                          String description, List<String> agents,
+                                          String keywords) {
         String agentStr = agents != null ? String.join(",", agents) : "";
         SceneEntity entity = sceneRepo.findById(sceneId)
                 .orElse(new SceneEntity(sceneId, name, description, agentStr));
         entity.setName(name != null ? name : "未命名场景");
         entity.setDescription(description != null ? description : "");
         entity.setInitialAgentNames(agentStr);
+        entity.setKeywords(keywords != null ? keywords : "");
         if (entity.getCreatedAt() == null) {
             entity.setCreatedAt(LocalDateTime.now());
         }
@@ -135,7 +137,7 @@ public class DatabaseService {
 
     @Transactional
     public void deleteScene(String id) {
-        sceneRepo.deleteById(id);
+        sceneRepo.findById(id).ifPresent(sceneRepo::delete);
     }
 
     // ── Conversation Logs ──────────────────────────────────────
@@ -288,6 +290,7 @@ public class DatabaseService {
         map.put("scene_id", e.getId());
         map.put("name", e.getName());
         map.put("description", e.getDescription());
+        map.put("keywords", e.getKeywords() != null ? e.getKeywords() : "");
         String agents = e.getInitialAgentNames();
         if (agents != null && !agents.isEmpty()) {
             map.put("initial_agent_names", List.of(agents.split(",")));

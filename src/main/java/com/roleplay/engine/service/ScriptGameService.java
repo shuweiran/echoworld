@@ -42,6 +42,7 @@ public class ScriptGameService {
         final List<String> roles = new ArrayList<>();
         final List<String> players = new ArrayList<>();
         final Map<String, String> assignments = new LinkedHashMap<>(); // player → role
+        final Map<String, String> secrets = new LinkedHashMap<>();     // role → secret（D5：每个角色只看到自己的）
 
         // Game state
         int round = 1;
@@ -54,10 +55,15 @@ public class ScriptGameService {
         public Map<String, Object> toMap(String playerName) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("phase", phase.name().toLowerCase());
+            m.put("session_id", sessionId);
             m.put("name", name);
             m.put("background", background);
             m.put("roles", new ArrayList<>(roles));
-            m.put("your_role", assignments.getOrDefault(playerName, ""));
+            m.put("players", new ArrayList<>(players));
+            String role = assignments.getOrDefault(playerName, "");
+            m.put("your_role", role);
+            // D5: secrets 发放 —— 每个玩家只能看到自己扮演角色的秘密
+            m.put("your_secret", role.isEmpty() ? "" : secrets.getOrDefault(role, ""));
             m.put("round", round);
             m.put("game_over", !winner.isEmpty());
             m.put("winner", winner);
@@ -68,6 +74,23 @@ public class ScriptGameService {
                 .collect(Collectors.toList()));
             m.put("locations", new ArrayList<>(locations));
             return m;
+        }
+
+        /** D5: 该玩家分配到的角色名（未分配返回空串）。 */
+        public String getRoleOf(String playerName) {
+            if (playerName == null) return "";
+            return assignments.getOrDefault(playerName, "");
+        }
+
+        /** D5: 发放给对应角色的秘密 —— 每个角色只能看到自己的 secret。 */
+        public String getSecretFor(String playerName) {
+            if (playerName == null) return "";
+            String role = assignments.getOrDefault(playerName, "");
+            return role.isEmpty() ? "" : secrets.getOrDefault(role, "");
+        }
+
+        public Map<String, String> getSecrets() {
+            return secrets;
         }
     }
 
@@ -135,6 +158,20 @@ public class ScriptGameService {
         }
         game.clues.addAll(clues);
 
+        // D5: secrets 发放 —— 解析 LLM 生成的角色秘密（role → secret），按角色存储
+        @SuppressWarnings("unchecked")
+        Map<String, Object> secretsMap = (Map<String, Object>) script.getOrDefault("secrets", Map.of());
+        for (Map.Entry<String, Object> e : secretsMap.entrySet()) {
+            if (e.getKey() == null || e.getValue() == null) continue;
+            game.secrets.put(String.valueOf(e.getKey()).trim(), String.valueOf(e.getValue()));
+        }
+        if (game.secrets.isEmpty()) {
+            // 兜底：为每个角色生成通用秘密，保证每位玩家都能收到自己的 secret
+            for (String roleName : game.roles) {
+                game.secrets.put(roleName, "你有一段不愿为人所知的往事，它与这起案件有着隐秘的联系。");
+            }
+        }
+
         // Assign roles to players (shuffle)
         List<String> shuffledRoles = new ArrayList<>(roles);
         Collections.shuffle(shuffledRoles);
@@ -150,8 +187,8 @@ public class ScriptGameService {
         game.round = 1;
         games.put(sessionId, game);
 
-        log.info("Script game {}: {} players, {} locations, {} clues",
-            sessionId, playerNames.size(), game.locations.size(), game.clues.size());
+        log.info("Script game {}: {} players, {} locations, {} clues, {} secrets",
+            sessionId, playerNames.size(), game.locations.size(), game.clues.size(), game.secrets.size());
 
         return game.toMap(playerNames.isEmpty() ? "" : playerNames.get(0));
     }
@@ -279,6 +316,8 @@ public class ScriptGameService {
         script.put("roles", players.stream().map(p -> "嫌疑人_" + p).collect(Collectors.toList()));
         script.put("locations", List.of("客厅", "书房", "花园", "厨房", "地下室"));
         script.put("truth", "凶手是" + (players.size() > 0 ? players.get(0) : "未知"));
+        script.put("secrets", players.stream().collect(Collectors.toMap(
+            p -> "嫌疑人_" + p, p -> p + " 有一个隐藏的秘密，与这起案件有关。")));
         script.put("clues", List.of(
             Map.of("id", "clue_1", "location", "客厅", "content", "地上有碎玻璃和血迹", "public", false, "related_role", players.size() > 0 ? players.get(0) : ""),
             Map.of("id", "clue_2", "location", "书房", "content", "桌上有一封威胁信", "public", false, "related_role", players.size() > 1 ? players.get(1) : ""),

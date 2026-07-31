@@ -2,6 +2,8 @@ package com.roleplay.engine.agent;
 
 import com.roleplay.engine.core.Message;
 import com.roleplay.engine.core.Persona;
+import com.roleplay.engine.interrupt.CancellationToken;
+import com.roleplay.engine.interrupt.TaskCancelledException;
 import com.roleplay.engine.llm.LLMClient;
 
 import java.util.ArrayList;
@@ -103,14 +105,44 @@ public class Agent {
             String summaryContext,
             Message sameRoundPeerOutput,
             String userInterjection) {
+        return generateSync(systemPrompt, history, trackMode, allAgentNames,
+                summaryContext, sameRoundPeerOutput, userInterjection, null);
+    }
+
+    /**
+     * D1: 可中断生成 —— 携带 {@link CancellationToken}（需求文档第八条 §五）。
+     *
+     * <p>检查点：LLM 调用前 / 调用返回后。软停止（SOFT）时在第二个检查点抛出，
+     * 已完整生成但未提交的内容随异常上抛（{@link TaskCancelledException#getPartial()}），
+     * 由上层保存为任务未完成状态（§四 软停止：保存未完成状态 → 切换任务）。
+     */
+    public String generateSync(
+            String systemPrompt,
+            List<Message> history,
+            String trackMode,
+            List<String> allAgentNames,
+            String summaryContext,
+            Message sameRoundPeerOutput,
+            String userInterjection,
+            CancellationToken token) {
 
         isGenerating = true;
+        String completed = null;
         try {
+            if (token != null) token.checkpoint();
             List<Message> messages = buildContext(
                     systemPrompt, history, trackMode, allAgentNames,
                     summaryContext, sameRoundPeerOutput, userInterjection);
 
-            return llmClient.callSync(messages);
+            completed = token != null
+                    ? llmClient.callSync(messages, token)
+                    : llmClient.callSync(messages);
+            if (token != null) token.checkpoint();
+            return completed;
+        } catch (TaskCancelledException e) {
+            // 软停止：回复已生成但未提交 → 附到异常上，由 AgentTask 保存未完成状态
+            if (e.getPartial() == null && completed != null) e.setPartial(completed);
+            throw e;
         } finally {
             isGenerating = false;
         }
@@ -141,10 +173,30 @@ public class Agent {
      * Generates a response given just a context string.
      */
     public String generateWithContext(String context) {
-        return llmClient.callSync(List.of(
-            new Message(Message.Role.SYSTEM, "system", persona.buildSystemPrompt()),
-            new Message(Message.Role.USER, "user", context)
-        ));
+        return generateWithContext(context, null);
+    }
+
+    /**
+     * D1: 可中断的简化生成（2D 模拟对话路径）。检查点与软停止语义同
+     * {@link #generateSync(String, List, String, List, String, Message, String, CancellationToken)}。
+     */
+    public String generateWithContext(String context, CancellationToken token) {
+        String completed = null;
+        try {
+            if (token != null) token.checkpoint();
+            List<Message> messages = List.of(
+                new Message(Message.Role.SYSTEM, "system", persona.buildSystemPrompt()),
+                new Message(Message.Role.USER, "user", context)
+            );
+            completed = token != null
+                    ? llmClient.callSync(messages, token)
+                    : llmClient.callSync(messages);
+            if (token != null) token.checkpoint();
+            return completed;
+        } catch (TaskCancelledException e) {
+            if (e.getPartial() == null && completed != null) e.setPartial(completed);
+            throw e;
+        }
     }
 
     @Override

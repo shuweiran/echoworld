@@ -734,6 +734,58 @@ async function confirmCharModal() {
 
 fetchState();
   fetchState();
+
+// ── Auto-load characters passed from the main app (ScenePage 2D entry) ──
+// Reads from URL query (?characters=<json>&scene=<name>) or localStorage
+// keys written by the frontend (roleplay_2d_characters / roleplay_2d_scene).
+async function autoLoadFromApp() {
+  let characters = null;
+  let scene = 'park';
+  try {
+    const params = new URLSearchParams(location.search);
+    const charsParam = params.get('characters');
+    if (charsParam) {
+      const parsed = JSON.parse(charsParam);
+      if (Array.isArray(parsed) && parsed.length > 0) characters = parsed;
+    }
+    if (!characters) {
+      const saved = localStorage.getItem('roleplay_2d_characters');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) characters = parsed;
+      }
+      const savedScene = localStorage.getItem('roleplay_2d_scene');
+      if (savedScene) scene = savedScene;
+    }
+    const sceneParam = params.get('scene');
+    if (sceneParam) scene = sceneParam;
+  } catch (e) {
+    characters = null;
+  }
+  if (!characters) return;
+  const clean = characters.filter(c => c && c.name && String(c.name).trim());
+  if (clean.length < 2) return;
+  const KNOWN_SCENES = ['park', 'city', 'cafe', 'forest', 'classroom', 'beach'];
+  if (!KNOWN_SCENES.includes(scene)) scene = 'park';
+  try {
+    await api('POST', '/load-characters', {
+      characters: clean.map(c => ({
+        name: String(c.name).trim(),
+        persona: (c.persona || c.name + '，一个角色').trim(),
+        voice: c.voice || '',
+        background: c.background || ''
+      })),
+      scene: scene
+    });
+    await fetchState();
+    if (es) { es.close(); es = null; }
+    startSSE();
+    document.getElementById('status').textContent = 'Loaded ' + clean.length + ' characters from app';
+  } catch (e) {
+    console.error('Auto-load characters failed:', e);
+  }
+}
+autoLoadFromApp();
 </script>
 </body>
 </html>

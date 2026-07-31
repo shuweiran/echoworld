@@ -3,8 +3,18 @@ package com.roleplay.engine.simulation;
 import com.roleplay.engine.agent.Agent;
 import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.db.service.DatabaseService;
+import com.roleplay.engine.interrupt.AgentTaskManager;
+import com.roleplay.engine.interrupt.InterruptManager;
+import com.roleplay.engine.interrupt.StopType;
+import com.roleplay.engine.interrupt.WorldEventBus;
 import com.roleplay.engine.llm.LLMClient;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
+import com.roleplay.engine.simulation.director.TrackDirectorService;
+import com.roleplay.engine.simulation.director.WorldDirectorService;
+import com.roleplay.engine.simulation.movement.MovementConstraint;
+import com.roleplay.engine.simulation.movement.MovementTarget;
+import com.roleplay.engine.simulation.track.InteractionDetector;
+import com.roleplay.engine.simulation.track.TrackAssignment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -23,21 +33,62 @@ public class SimulationService {
     private final SimulationWorld world;
     private final LLMClient llmClient;
     private final DatabaseService databaseService;
+    /** D1: 中断管理器 —— 模拟停止时硬停止进行中的生成任务。 */
+    private final InterruptManager interruptManager;
+    /** D1: 任务生命周期管理器 —— 注入 ConversationManager。 */
+    private final AgentTaskManager agentTaskManager;
+    /** D1: 世界事件总线 —— 轨道变化事件（TrackDirector → 取消旧轨道生成）。 */
+    private final WorldEventBus eventBus;
     private final ConversationManager conversationManager = new ConversationManager();
+    /** Phase 3 dual-director architecture: World Director (角色想做什么). */
+    private final WorldDirectorService worldDirector;
+    /** Phase 3 dual-director architecture: Track Director (谁知道什么). */
+    private final TrackDirectorService trackDirector = new TrackDirectorService();
+    /** Phase 3 outer orchestrator (需求文档第十四条: Router → Orchestrator → Track/World). */
+    private SimulationOrchestrator orchestrator;
+    /** Phase 4: 轨道 → 运动约束（纯规则，零 LLM）。 */
+    private final MovementConstraint movementConstraint = new MovementConstraint();
+    /** Phase 4: 最近一次 orchestrator.tick 的轨道分配，供移动 tick 前的约束层使用。 */
+    private volatile Map<String, TrackAssignment> lastTrackAssignments = Map.of();
     private final ExecutorService taskExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private volatile long lastDirectorTime = 0;
     private final Set<String> pendingUserMessages = ConcurrentHashMap.newKeySet();
     private volatile int lastSaveTick = 0;
     private static final int SNAPSHOT_INTERVAL = 50; // save snapshot every 50 ticks
 
-    public SimulationService(SimulationWorld world, LLMClient llmClient, DatabaseService databaseService) {
+    public SimulationService(SimulationWorld world, LLMClient llmClient, DatabaseService databaseService,
+                             InterruptManager interruptManager, AgentTaskManager agentTaskManager,
+                             WorldEventBus eventBus) {
         this.world = world;
         this.llmClient = llmClient;
         this.databaseService = databaseService;
+        this.interruptManager = interruptManager;
+        this.agentTaskManager = agentTaskManager;
+        this.eventBus = eventBus;
+        this.worldDirector = new WorldDirectorService(llmClient);
         conversationManager.init(world, llmClient,
                 name -> world.getAgent(name),
                 () -> world.getWorldNarration());
+        // D1: 注入中断系统（2D 对话生成可被模拟停止 / 事件驱动取消）
+        conversationManager.setInterruptManager(interruptManager);
+        conversationManager.setAgentTaskManager(agentTaskManager);
+        // Phase 3 wiring: Track Director decides group track assignments (with World
+        // Director goals for conflict detection); legacy spatial-only path stays as
+        // fallback inside ConversationManager when trackDirector is null.
+        conversationManager.setTrackDirector(trackDirector);
+        conversationManager.setGoalSupplier(worldDirector::getAllGoals);
+        this.orchestrator = new SimulationOrchestrator(world, worldDirector, trackDirector, conversationManager, eventBus);
+        // Phase 4: 移动 tick 前应用轨道运动约束（使用上一 tick 的轨道分配，延迟一拍）。
+        world.addPreTickHook(this::applyMovementConstraints);
         world.addTickListener(snapshot -> {
+            try {
+                // Phase 3: dual-director pipeline (World Director → InteractionDetector →
+                // Track Director → ConversationGroup). Runs before conversation tick so
+                // freshly created groups pick up the latest goals/track decisions.
+                lastTrackAssignments = orchestrator.tick(System.currentTimeMillis());
+            } catch (Exception e) {
+                log.warn("Orchestrator tick failed: {}", e.getMessage());
+            }
             conversationManager.tick(System.currentTimeMillis());
             checkDirectorCycle();
             // Periodic snapshot every SNAPSHOT_INTERVAL ticks
@@ -131,16 +182,24 @@ public class SimulationService {
     }
 
     public void clearAll() {
+        // D1: 清场时同时停止所有群组生成任务
+        conversationManager.stopAll();
         world.clearAgents();
     }
 
     public void start() {
+        conversationManager.resetStopped();
         lastDirectorTime = System.currentTimeMillis();
         world.start();
     }
 
     public void stop() {
         world.stop();
+        // D1: 中断系统 —— 停止世界 tick 之外，硬停止所有进行中的 LLM 生成任务
+        conversationManager.stopAll();
+        if (interruptManager != null) {
+            interruptManager.cancelAll(StopType.HARD, "模拟停止 /api/simulation/stop");
+        }
         // Save final snapshot on stop
         try {
             saveSnapshot();
@@ -180,6 +239,55 @@ public class SimulationService {
         if (state == null) return;
         state.setCurrentMessage(message);
         pendingUserMessages.add(agentName);
+    }
+
+    // ── Phase 4: Track REST 支撑 ───────────────────────────────
+
+    /** 轨道运动约束：每 tick 移动前，用最近一次轨道分配生成约束目标并写回。 */
+    private void applyMovementConstraints() {
+        Map<String, TrackAssignment> assignments = lastTrackAssignments;
+        if (assignments == null || assignments.isEmpty()) return;
+        try {
+            Map<String, MovementTarget> targets = movementConstraint.compute(
+                    world, assignments, trackDirector.getSecretAgents());
+            movementConstraint.apply(world, targets);
+        } catch (Exception e) {
+            log.warn("MovementConstraint failed: {}", e.getMessage());
+        }
+    }
+
+    /** Track REST: World Director 手动目标（POST /track/goal）。 */
+    public void setTrackGoal(String agent, String goal) {
+        orchestrator.setGoal(agent, goal);
+        log.info("Track goal set: {} → {}", agent, goal);
+    }
+
+    /** Track REST: 清除手动目标，恢复规则驱动。 */
+    public void clearTrackGoal(String agent) {
+        orchestrator.clearGoal(agent);
+        log.info("Track goal cleared: {}", agent);
+    }
+
+    /** Track REST: 秘密任务注入（POST /track/secret，强制 ISOLATED）。 */
+    public void setSecretAgents(java.util.Set<String> names) {
+        orchestrator.setSecretAgents(names);
+        log.info("Secret agents set: {}", names);
+    }
+
+    /** Track REST: 汇总轨道状态（GET /track/state）。 */
+    public Map<String, Object> getTrackState() {
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("goals", worldDirector.getAllGoals());
+        result.put("secret_agents", new ArrayList<>(orchestrator.getSecretAgents()));
+        InteractionDetector.TrackScore score = orchestrator.getLastTrackScore();
+        result.put("last_score", score == null ? Map.of() : score.toMap());
+        // 附加：当前轨道分配摘要（agent → MERGED/WEAK/ISOLATED），供前端 2D 页展示。
+        Map<String, String> modeSummary = new LinkedHashMap<>();
+        for (Map.Entry<String, TrackAssignment> e : lastTrackAssignments.entrySet()) {
+            modeSummary.put(e.getKey(), e.getValue().type().name());
+        }
+        result.put("assignments", modeSummary);
+        return result;
     }
 
     // ── Director LLM (主控) ─────────────────────────────────────

@@ -1,14 +1,24 @@
 package com.roleplay.engine.simulation.conversation;
 
 import com.roleplay.engine.agent.Agent;
+import com.roleplay.engine.interrupt.AgentTaskManager;
+import com.roleplay.engine.interrupt.CancellationToken;
+import com.roleplay.engine.interrupt.InterruptManager;
+import com.roleplay.engine.interrupt.TaskCancelledException;
+import com.roleplay.engine.interrupt.TaskType;
 import com.roleplay.engine.llm.LLMClient;
 import com.roleplay.engine.simulation.*;
+import com.roleplay.engine.simulation.director.TrackDirectorService;
+import com.roleplay.engine.simulation.track.EavesdropSummarizer;
+import com.roleplay.engine.simulation.track.SpatialTrackResolver;
+import com.roleplay.engine.simulation.track.TrackAssignment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Component
 public class ConversationManager {
@@ -17,6 +27,8 @@ public class ConversationManager {
 
     private static final long GROUP_IDLE_TIMEOUT_MS = 30_000;
     private static final long CONVERSATION_COOLDOWN_MS = 5_000;
+    /** Phase 1 Track fusion: 两两距离 < 5 格 → 可对话 (requirement doc). */
+    private static final double CONVERSATION_DISTANCE_THRESHOLD = 5.0;
 
     private final Map<ConversationMode, ConversationStrategy> strategies = new EnumMap<>(ConversationMode.class);
     private final Map<String, ConversationGroup> activeGroups = new ConcurrentHashMap<>();
@@ -26,8 +38,56 @@ public class ConversationManager {
 
     private SimulationWorld world;
     private LLMClient llmClient;
+    /** Phase 3: optional Track Director (轨道决策). Null → legacy spatial-only path. */
+    private TrackDirectorService trackDirector;
+    /** Phase 3: optional supplier of World Director goals for track conflict detection. */
+    private java.util.function.Supplier<Map<String, String>> goalSupplier;
+    /** D1: 中断管理器（模拟停止 / 事件驱动取消）。可空（测试直构场景）。 */
+    private InterruptManager interruptManager;
+    /** D1: Agent 任务生命周期管理（Task ID + CancellationToken）。可空。 */
+    private AgentTaskManager agentTaskManager;
+    /** D1: 停止标志 —— 模拟停止后群组循环不再开始新一轮生成。 */
+    private volatile boolean stopped = false;
 
     public ConversationManager() {}
+
+    /**
+     * Phase 3 wiring: inject the Track Director. When set, group track assignments
+     * are decided by TrackDirectorService (InteractionDetector score + secret-task
+     * override + goal conflicts); when null, the legacy Phase 1/2 spatial-only
+     * resolution is used. TrackStrategy consumes the result either way.
+     */
+    public void setTrackDirector(TrackDirectorService trackDirector) {
+        this.trackDirector = trackDirector;
+    }
+
+    /** Phase 3 wiring: supplier for current World Director goals (agent → goal). */
+    public void setGoalSupplier(java.util.function.Supplier<Map<String, String>> goalSupplier) {
+        this.goalSupplier = goalSupplier;
+    }
+
+    /** D1: 注入中断管理器（由 SimulationService 组装）。 */
+    public void setInterruptManager(InterruptManager interruptManager) {
+        this.interruptManager = interruptManager;
+    }
+
+    /** D1: 注入任务生命周期管理器。 */
+    public void setAgentTaskManager(AgentTaskManager agentTaskManager) {
+        this.agentTaskManager = agentTaskManager;
+    }
+
+    /** D1: 停止全部群组生成（模拟停止时调用，配合 InterruptManager.cancelAll）。 */
+    public void stopAll() {
+        stopped = true;
+        log.info("ConversationManager stopped ({} active groups)", activeGroups.size());
+    }
+
+    /** D1: 恢复生成（模拟重新 start 时调用）。 */
+    public void resetStopped() {
+        stopped = false;
+    }
+
+    public boolean isStopped() { return stopped; }
 
     public void init(SimulationWorld world, LLMClient llmClient,
                      java.util.function.Function<String, Agent> agentLookup,
@@ -36,18 +96,20 @@ public class ConversationManager {
         this.llmClient = llmClient;
 
         java.util.function.Function<String, String> narFn = s -> narrationSupplier.get();
-        java.util.function.BiConsumer<String, String> arbCb = (groupId, report) -> {
-            world.setUserDirective("[仲裁] " + report);
-        };
 
         strategies.put(ConversationMode.DYAD,
                 new DyadStrategy(agentLookup, narFn));
-        strategies.put(ConversationMode.GROUP_DISCUSSION,
-                new GroupStrategy(agentLookup, narFn));
+        // Phase 2 Track fusion: TrackStrategy unifies GROUP_DISCUSSION and DEBATE.
+        // GroupStrategy/DebateStrategy are retained (requirement doc §13) —
+        // GroupStrategy is TrackStrategy's no-track-info fallback, DebateStrategy
+        // remains for reference only.
+        TrackStrategy trackStrategy = new TrackStrategy(
+                agentLookup, narFn, new EavesdropSummarizer(llmClient),
+                this::getOrCreateTopicManager);
+        strategies.put(ConversationMode.GROUP_DISCUSSION, trackStrategy);
+        strategies.put(ConversationMode.DEBATE, trackStrategy);
         strategies.put(ConversationMode.PUBLIC_SPEAKING,
                 new SpeechStrategy(agentLookup, narFn, getOrCreateTopicManager("speech")));
-        strategies.put(ConversationMode.DEBATE,
-                new DebateStrategy(agentLookup, narFn, arbCb));
     }
 
     public TopicManager getOrCreateTopicManager(String groupId) {
@@ -134,6 +196,28 @@ public class ConversationManager {
 
         ConversationGroup group = new ConversationGroup(groupId, mode, members);
 
+        // Phase 1 Track fusion: compute spatial track assignments (MERGED/WEAK/ISOLATED)
+        // at group creation and store them on the group. Phase 1 only stores —
+        // Phase 2 (TrackStrategy) will read these to drive context visibility.
+        try {
+            Map<String, TrackAssignment> assignments;
+            if (trackDirector != null) {
+                // Phase 3: Track Director decides who-knows-what (score + secrets + goals).
+                Map<String, String> goals = goalSupplier != null ? goalSupplier.get() : Map.of();
+                assignments = trackDirector.assign(members, goals);
+            } else {
+                // Legacy Phase 1/2 path: pure spatial resolution (unchanged behavior).
+                SpatialTrackResolver trackResolver = new SpatialTrackResolver(CONVERSATION_DISTANCE_THRESHOLD);
+                assignments = trackResolver.resolve(members);
+            }
+            group.setTrackAssignments(assignments);
+            log.info("Group {} track assignments: {}", groupId,
+                    assignments.values().stream()
+                            .map(a -> a.agentId() + "=" + a.type()).toList());
+        } catch (Exception e) {
+            log.warn("Track assignment failed for group {}, continuing without: {}", groupId, e.getMessage());
+        }
+
         for (AgentState s : members) {
             s.setInConversation(true);
             s.setVx(0);
@@ -157,7 +241,7 @@ public class ConversationManager {
                 members.stream().map(AgentState::getAgentName).toList());
 
         CompletableFuture.runAsync(() -> {
-            while (group.isActive() && strategy.shouldContinue(group)) {
+            while (group.isActive() && strategy.shouldContinue(group) && !stopped) {
                 try {
                     executeRound(group, strategy);
                     long cooldown = finalMode == ConversationMode.GROUP_DISCUSSION ? 3000 : 2000;
@@ -175,11 +259,17 @@ public class ConversationManager {
     }
 
     private void executeRound(ConversationGroup group, ConversationStrategy strategy) {
+        // D1: 已停止 → 不再启动新一轮生成，直接解散
+        if (stopped) {
+            group.setActive(false);
+            return;
+        }
         Map<String, Map<String, String>> agentContexts = new ConcurrentHashMap<>();
         strategy.prepareContext(group, agentContexts);
 
         Map<String, String> responses = new ConcurrentHashMap<>();
         CountDownLatch latch = new CountDownLatch(agentContexts.size());
+        AtomicBoolean cancelled = new AtomicBoolean(false);
 
         for (var entry : agentContexts.entrySet()) {
             String name = entry.getKey();
@@ -198,25 +288,59 @@ public class ConversationManager {
                 continue;
             }
 
-            executor.submit(() -> {
+            // D1: 注册中断任务（Task ID + CancellationToken），轨道上下文用命名空间隔离
+            // 前缀 sim:{groupId}:{mode}，避免与 RouterService 的轨道 id 互相误伤
+            com.roleplay.engine.interrupt.AgentTask interruptTask = null;
+            if (agentTaskManager != null && !stopped) {
+                String simTrackId = "sim:" + group.getGroupId() + ":"
+                        + simTrackModeOf(group, name);
+                interruptTask = agentTaskManager.createTask(name, TaskType.DIALOGUE,
+                        Map.of("groupId", group.getGroupId(), "trackId", simTrackId));
+                agentTaskManager.startTask(interruptTask);
+            }
+            final com.roleplay.engine.interrupt.AgentTask taskRef = interruptTask;
+            final CancellationToken token = interruptTask != null
+                    ? interruptTask.getCancelToken() : null;
+
+            Future<?> f = executor.submit(() -> {
                 try {
+                    if (token != null) token.checkpoint();
                     Agent agent = world.getAgent(name);
-                    if (agent != null) {
-                        String resp = agent.generateWithContext(context);
-                        responses.put(name, resp);
-                    }
+                    String resp = agent != null
+                            ? (token != null ? agent.generateWithContext(context, token)
+                                             : agent.generateWithContext(context))
+                            : null;
+                    if (resp != null) responses.put(name, resp);
+                    if (taskRef != null) agentTaskManager.completeTask(taskRef);
+                } catch (TaskCancelledException e) {
+                    // D1: 取消 → 本回合该成员发言作废（不入 responses），软停止保存未完成内容；
+                    // 不解散群组：下轮按新轨道/新状态继续（硬停止场景由 stopped 标志接管）
+                    cancelled.set(true);
+                    if (taskRef != null) taskRef.saveUnfinished(e.getPartial());
+                    log.info("Group {} agent {} cancelled: {}", group.getGroupId(), name, e.getReason());
                 } catch (Exception e) {
                     log.warn("Agent {} generation failed: {}", name, e.getMessage());
+                    if (taskRef != null) agentTaskManager.failTask(taskRef, e.getMessage());
                 } finally {
                     latch.countDown();
                 }
             });
+            if (interruptTask != null && interruptManager != null) {
+                interruptManager.attachFuture(interruptTask.getId(), f);
+            }
         }
 
         try {
             latch.await(120, TimeUnit.SECONDS);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            cancelled.set(true);
+            log.info("Group {} interrupted", group.getGroupId());
+        }
+
+        // D1: 发生取消 → 跳过 processResults（省一次摘要 LLM 调用），已取消成员的发言不提交
+        if (cancelled.get()) {
+            return;
         }
 
         strategy.processResults(group, responses, llmClient);
@@ -270,6 +394,12 @@ public class ConversationManager {
     private String makePairKey(List<AgentState> members) {
         List<String> sorted = members.stream().map(AgentState::getAgentName).sorted().toList();
         return String.join("_", sorted);
+    }
+
+    /** D1: 群组任务轨道上下文（sim:{groupId}:{mode}，与 RouterService 轨道 id 命名空间隔离）。 */
+    private String simTrackModeOf(ConversationGroup group, String name) {
+        TrackAssignment ta = group.getTrackAssignment(name);
+        return ta != null ? ta.type().name() : group.getMode().name();
     }
 
     public Map<String, Object> getStatus() {

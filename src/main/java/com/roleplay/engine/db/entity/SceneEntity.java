@@ -19,6 +19,10 @@ public class SceneEntity {
     /** Comma-separated agent names */
     private String initialAgentNames;
 
+    /** Free-form keywords carried by the client (persisted for restart fidelity) */
+    @Column(length = 2000)
+    private String keywords;
+
     private LocalDateTime createdAt;
 
     public SceneEntity() {}
@@ -44,6 +48,9 @@ public class SceneEntity {
 
     public String getInitialAgentNames() { return initialAgentNames; }
     public void setInitialAgentNames(String initialAgentNames) { this.initialAgentNames = initialAgentNames; }
+
+    public String getKeywords() { return keywords; }
+    public void setKeywords(String keywords) { this.keywords = keywords; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

@@ -6,6 +6,10 @@ import com.roleplay.engine.core.Message;
 import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.core.Track;
 import com.roleplay.engine.core.TrackConfig;
+import com.roleplay.engine.interrupt.InterruptManager;
+import com.roleplay.engine.interrupt.StopType;
+import com.roleplay.engine.interrupt.TrackChangeEvent;
+import com.roleplay.engine.interrupt.WorldEventBus;
 import com.roleplay.engine.llm.LLMClient;
 import com.roleplay.engine.model.CompressedChunk;
 import com.roleplay.engine.model.Session;
@@ -44,12 +48,16 @@ public class RouterService {
     private final LLMClient llmClient;
     private final com.roleplay.engine.controller.HistoryController historyController;
     private final LorebookService lorebookService;
+    /** D1: 中断管理器 —— stop() 时取消进行中的生成任务（需求文档第八条）。 */
+    private final InterruptManager interruptManager;
+    /** D1: 世界事件总线 —— 轨道变化时发布 TrackChangeEvent（§七）。 */
+    private final WorldEventBus eventBus;
 
     private final Map<String, Agent> agents = new ConcurrentHashMap<>();
     private final Map<String, Object> state = new ConcurrentHashMap<>();
 
     private volatile boolean running = false;
-    private String mode = "free";        // free | protagonist | multi_track | director | werewolf
+    private String mode = "free";        // free | protagonist | multi_track | director | werewolf | script
     private String protagonist = "";
     private String directorCharacter = "";
     private List<String> goals = new ArrayList<>();
@@ -58,6 +66,8 @@ public class RouterService {
     private int roundCount = 0;
     private List<Map<String, Object>> previousTracks = new ArrayList<>();
     private String sessionId = "";
+    // D5: 剧本杀当前对局 —— 用于把 secrets 发放到对应角色上下文（仅 script 模式生效）
+    private ScriptGameService.ScriptGame scriptGame = null;
 
     public RouterService(ArbiterService arbiter, AgentExecutor executor,
                          MemoryStore memory, Compressor compressor,
@@ -65,7 +75,9 @@ public class RouterService {
                          TrackRequestService trackRequestService,
                          LLMClient llmClient,
                          com.roleplay.engine.controller.HistoryController historyController,
-                         LorebookService lorebookService) {
+                         LorebookService lorebookService,
+                         InterruptManager interruptManager,
+                         WorldEventBus eventBus) {
         this.arbiter = arbiter;
         this.executor = executor;
         this.memory = memory;
@@ -76,6 +88,8 @@ public class RouterService {
         this.llmClient = llmClient;
         this.historyController = historyController;
         this.lorebookService = lorebookService;
+        this.interruptManager = interruptManager;
+        this.eventBus = eventBus;
         memory.setCompressor(compressor);
     }
 
@@ -116,6 +130,12 @@ public class RouterService {
         this.sessionId = session.getSessionId();
         this.sceneDescription = session.getCurrentScene();
         this.roundCount = session.getRoundCount();
+        // D12: restore the routing mode saved at init time (config = {mode, scene}),
+        // so a loaded werewolf/protagonist session keeps its original behavior.
+        if (session.getConfig() != null && session.getConfig().get("mode") != null
+                && !String.valueOf(session.getConfig().get("mode")).isBlank()) {
+            this.mode = String.valueOf(session.getConfig().get("mode"));
+        }
         memory.setSession(session);
         agents.clear();
         for (Agent a : agentList) {
@@ -144,7 +164,17 @@ public class RouterService {
     }
 
     public boolean isRunning() { return running; }
-    public void stop() { running = false; }
+
+    /**
+     * 停止会话。D1 增强：除置位停止标志外，立即硬停止所有进行中的生成任务
+     * （取消令牌 + 中断 LLM 调用线程），使 /api/stop 真正能中断进行中的生成。
+     */
+    public void stop() {
+        running = false;
+        if (interruptManager != null) {
+            interruptManager.cancelAll(StopType.HARD, "用户停止 /api/stop");
+        }
+    }
 
     // ═══════════════════════════════════════════════════════════
     //  Core round execution
@@ -169,6 +199,11 @@ public class RouterService {
         }
         List<String> agentNames = new ArrayList<>(agents.keySet());
         String historySummary = memory.getSummaryContext();
+        // Phase 1 Track isolation (leak bypass fix): if the previous round ran
+        // multiple tracks and any of them was non-public (WEAK/ISOLATED), the raw
+        // history summary would leak isolated-track conversation content to the
+        // Arbiter. Replace it with one-line per-track descriptors only.
+        historySummary = sanitizeSummaryForArbiter(historySummary, previousTracks);
 
         // Step 1b: Lorebook injection
         String loreContext = "";
@@ -192,10 +227,17 @@ public class RouterService {
         // Step 2: Configure tracks via Arbiter
         String enrichedScene = loreContext.isEmpty() ? sceneDescription
             : sceneDescription + loreContext;
+        List<Map<String, Object>> prevTrackLayout = previousTracks;
         TrackConfigResult trackResult = arbiter.configureTracks(
             enrichedScene, agentNames, historySummary,
             mode, protagonist, previousTracks, goals, restrictedAgents);
+        // D1: 轨道变化 → 发布 TrackChangeEvent（事件驱动中断：取消不属于新轨道的生成任务）
+        boolean layoutChanged = prevTrackLayout != null
+                && tracksLayoutChanged(prevTrackLayout, trackResult.tracks);
         previousTracks = trackResult.tracks;
+        if (layoutChanged && eventBus != null) {
+            publishTrackChange(trackResult.tracks);
+        }
 
         // Build TrackConfig for executor
         TrackConfig config = buildTrackConfig(trackResult.tracks, roundCount);
@@ -225,6 +267,12 @@ public class RouterService {
             buildAgentContext(agentName, trackMode, trackId);
 
         AgentExecutor.ExecutionResult execResult = executor.executeRound(config, agentMap, ctxBuilder);
+
+        // D1: 回合被取消（如 /api/stop）→ 立即返回，不再做 Arbiter 整合 / 落库
+        if (execResult.cancelled()) {
+            log.info("Round {} aborted by interrupt request", roundCount);
+            return RoundResult.error("生成已中断");
+        }
 
         // Step 4: Collect agent outputs
         List<Map<String, Object>> agentOutputs = new ArrayList<>();
@@ -297,9 +345,37 @@ public class RouterService {
 
         List<String> contextParts = new ArrayList<>();
 
+        // Identity lock — keep the agent strictly in character
+        Persona persona = agent.getPersona();
+        String personaDesc = persona != null ? persona.getPersonaDesc() : "";
+        StringBuilder identity = new StringBuilder("【你的身份】\n你是 ").append(agentName).append("。");
+        if (personaDesc != null && !personaDesc.isEmpty()) {
+            identity.append("\n").append(personaDesc).append("。");
+        }
+        identity.append("\n你只能以该角色的身份、语气、性格说话，不得跳出角色。");
+        contextParts.add(identity.toString());
+
         // Scene context
         if (sceneDescription != null && !sceneDescription.isEmpty()) {
             contextParts.add("【当前场景】\n" + sceneDescription);
+        }
+
+        // D5: 剧本杀角色卡 —— 每个角色只看到自己的 secret（仿狼人杀"身份只在自家 prompt"）
+        if ("script".equals(mode) && scriptGame != null) {
+            StringBuilder scriptCard = new StringBuilder("【剧本杀·角色卡】\n");
+            String role = scriptGame.getRoleOf(agentName);
+            if (role != null && !role.isEmpty()) {
+                scriptCard.append("你扮演的角色：").append(role).append("\n");
+            }
+            String secret = scriptGame.getSecretFor(agentName);
+            if (secret != null && !secret.isEmpty()) {
+                scriptCard.append("【你的秘密】只有你自己知道：").append(secret)
+                          .append("。严守秘密——除非剧情需要，绝不向任何人透露，也不要主动提及这是剧本设定。");
+            }
+            if (scriptGame.phase != null) {
+                scriptCard.append("\n当前阶段：").append(scriptPhaseLabel(scriptGame.phase));
+            }
+            contextParts.add(scriptCard.toString());
         }
 
         // Track info
@@ -387,6 +463,29 @@ public class RouterService {
     public int getRoundCount() { return roundCount; }
     public void setSceneDescription(String desc) { this.sceneDescription = desc; }
 
+    /** D5: 剧本杀模式 —— 绑定当前剧本局，使 secrets 能在 buildAgentContext 注入对应角色。 */
+    public void setScriptGame(ScriptGameService.ScriptGame game) {
+        this.scriptGame = game;
+        log.info("Script game registered to router ({} secrets)", game != null ? game.getSecrets().size() : 0);
+    }
+
+    /** D5: 解绑剧本局（新剧本 init 时会自动覆盖，通常无需手动调用）。 */
+    public void clearScriptGame() {
+        this.scriptGame = null;
+    }
+
+    /** 剧本杀阶段中文标签（供角色卡上下文注入）。 */
+    private String scriptPhaseLabel(ScriptGameService.Phase phase) {
+        return switch (phase) {
+            case SETUP -> "准备阶段";
+            case INVESTIGATION -> "搜证阶段（可搜索地点收集线索）";
+            case DISCUSSION -> "讨论阶段（交流线索、指认嫌疑人）";
+            case VOTE -> "投票阶段（选出你怀疑的真凶）";
+            case REVEAL -> "揭晓阶段（真相即将公布）";
+            case ENDED -> "游戏已结束";
+        };
+    }
+
     public void addAgent(String name, Persona persona) {
         agents.put(name, new Agent(persona, "agent", llmClient));
         // Update state with current agent list
@@ -407,6 +506,42 @@ public class RouterService {
     //  Helpers
     // ═══════════════════════════════════════════════════════════
 
+    // ═══════════════════════════════════════════════════════════
+    //  Arbiter input sanitization (Phase 1 Track isolation)
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * If the previous round's track layout contains a non-public track (WEAK/ISOLATED)
+     * alongside others, strip ALL conversation content from the Arbiter's history input
+     * and keep only per-track structural one-liners (track id + mode + participants).
+     * This prevents the Arbiter — and anything downstream — from reading isolated
+     * tracks' full conversation. Single-track / all-public layouts pass through unchanged.
+     */
+    private String sanitizeSummaryForArbiter(String historySummary, List<Map<String, Object>> trackMaps) {
+        if (historySummary == null || historySummary.isBlank()) return historySummary;
+        if (trackMaps == null || trackMaps.size() < 2) return historySummary;
+
+        boolean hasNonPublicTrack = false;
+        for (Map<String, Object> t : trackMaps) {
+            String mode = String.valueOf(t.getOrDefault("mode", "merged")).toLowerCase();
+            if (!"merged".equals(mode)) { hasNonPublicTrack = true; break; }
+        }
+        if (!hasNonPublicTrack) return historySummary;
+
+        StringBuilder sb = new StringBuilder("【轨道概况（多轨道隔离，仅保留结构摘要）】\n");
+        for (int i = 0; i < trackMaps.size(); i++) {
+            Map<String, Object> t = trackMaps.get(i);
+            sb.append(i + 1).append(". 轨道「")
+              .append(t.getOrDefault("label", "轨道" + (i + 1)))
+              .append("」(模式=")
+              .append(t.getOrDefault("mode", "merged"))
+              .append("): 参与者=")
+              .append(t.getOrDefault("agents", List.of()))
+              .append("\n");
+        }
+        return sb.toString();
+    }
+
     private TrackConfig buildTrackConfig(List<Map<String, Object>> trackMaps, int round) {
         TrackConfig config = new TrackConfig(round);
         for (Map<String, Object> m : trackMaps) {
@@ -414,6 +549,43 @@ public class RouterService {
             config.addTrack(track);
         }
         return config;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  D1: TrackChangeEvent（需求文档第八条 §七：轨道变化 → 取消失效任务）
+    // ═══════════════════════════════════════════════════════════
+
+    /** 相邻两轮的轨道布局是否不同（轨道 id / 参与者集合任一变化）。 */
+    private boolean tracksLayoutChanged(List<Map<String, Object>> oldTracks,
+                                        List<Map<String, Object>> newTracks) {
+        if (oldTracks.size() != newTracks.size()) return true;
+        for (int i = 0; i < oldTracks.size(); i++) {
+            Map<String, Object> a = oldTracks.get(i);
+            Map<String, Object> b = newTracks.get(i);
+            if (!Objects.equals(a.get("id"), b.get("id"))) return true;
+            if (!Objects.equals(a.get("agents"), b.get("agents"))) return true;
+        }
+        return false;
+    }
+
+    /** 发布 TrackChangeEvent：新轨道 id 集合 + 轨道参与者映射。 */
+    private void publishTrackChange(List<Map<String, Object>> trackMaps) {
+        List<String> trackIds = new ArrayList<>();
+        Map<String, List<String>> trackAgents = new LinkedHashMap<>();
+        for (Map<String, Object> m : trackMaps) {
+            String id = String.valueOf(m.getOrDefault("id", "track"));
+            trackIds.add(id);
+            Object agentsObj = m.get("agents");
+            List<String> agentList = new ArrayList<>();
+            if (agentsObj instanceof List<?> list) {
+                for (Object o : list) agentList.add(String.valueOf(o));
+            }
+            trackAgents.put(id, agentList);
+        }
+        eventBus.publish(new TrackChangeEvent("router", trackIds, trackAgents,
+                List.of(), trackAgents.values().stream()
+                        .flatMap(List::stream).distinct().toList()));
+        log.info("Track layout changed, published TrackChangeEvent: {}", trackIds);
     }
 
     // ═══════════════════════════════════════════════════════════

@@ -1,6 +1,7 @@
 package com.roleplay.engine.simulation.conversation;
 
 import com.roleplay.engine.simulation.AgentState;
+import com.roleplay.engine.simulation.track.TrackAssignment;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -20,6 +21,13 @@ public class ConversationGroup {
     private volatile boolean active = true;
     private String topic = "";
     private final Map<String, Double> engagement = new ConcurrentHashMap<>();
+    /** Phase 1 Track fusion: spatial assignments computed at group creation. */
+    private volatile Map<String, TrackAssignment> trackAssignments = Map.of();
+    /** Phase 2 Track fusion: cached WEAK-track eavesdrop summary (EavesdropSummarizer
+     *  product) so TrackStrategy does not call the LLM on every round. */
+    private volatile String trackSummary = "";
+    /** messageHistory size when {@link #trackSummary} was last computed. */
+    private volatile int trackSummaryHistorySize = 0;
 
     public ConversationGroup(String groupId, ConversationMode mode, List<AgentState> members) {
         this.groupId = groupId;
@@ -59,6 +67,16 @@ public class ConversationGroup {
     public void setEngagement(String name, double v) { engagement.put(name, Math.max(0, Math.min(1, v))); }
 
     public Set<String> getFrozenAgents() { return frozenAgents; }
+
+    public Map<String, TrackAssignment> getTrackAssignments() { return trackAssignments; }
+    public void setTrackAssignments(Map<String, TrackAssignment> assignments) {
+        this.trackAssignments = assignments == null ? Map.of() : Map.copyOf(assignments);
+    }
+    public TrackAssignment getTrackAssignment(String name) { return trackAssignments.get(name); }
+    public String getTrackSummary() { return trackSummary; }
+    public void setTrackSummary(String summary) { this.trackSummary = summary == null ? "" : summary; }
+    public int getTrackSummaryHistorySize() { return trackSummaryHistorySize; }
+    public void setTrackSummaryHistorySize(int size) { this.trackSummaryHistorySize = size; }
     public void freeze(String name) { frozenAgents.add(name); }
     public void unfreeze(String name) { frozenAgents.remove(name); }
     public boolean isFrozen(String name) { return frozenAgents.contains(name); }

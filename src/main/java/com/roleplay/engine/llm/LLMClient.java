@@ -5,6 +5,9 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.roleplay.engine.config.AppConfig;
 import com.roleplay.engine.core.Message;
+import com.roleplay.engine.interrupt.CancellationToken;
+import com.roleplay.engine.interrupt.StopType;
+import com.roleplay.engine.interrupt.TaskCancelledException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -59,11 +62,28 @@ public class LLMClient {
      * This is a BLOCKING call — designed to run in a Virtual Thread.
      */
     public String callSync(List<Message> messages) {
-        return callSync(messages, model, 300, 0.7);
+        return callSyncInternal(messages, model, 300, 0.7, null);
+    }
+
+    /**
+     * D1: 可中断调用 —— 携带 {@link CancellationToken}（需求文档第八条 §五）。
+     *
+     * <p>取消信号在三个检查点生效：每次尝试前 / HTTP 响应返回后解析前 / 重试等待前。
+     * 已取消时抛 {@link TaskCancelledException}（不重试）；线程被中断（硬停止的
+     * future.cancel(true)）也会立即 abort 进行中的 HTTP 调用并上抛取消信号。
+     */
+    public String callSync(List<Message> messages, CancellationToken token) {
+        return callSyncInternal(messages, model, 300, 0.7, token);
     }
 
     public String callSync(List<Message> messages, String modelOverride,
                            int maxTokens, double temperature) {
+        return callSyncInternal(messages, modelOverride, maxTokens, temperature, null);
+    }
+
+    private String callSyncInternal(List<Message> messages, String modelOverride,
+                                    int maxTokens, double temperature,
+                                    CancellationToken token) {
 
         String[] modelsToTry = {modelOverride, fallbackModel};
         Set<String> seen = new LinkedHashSet<>(Arrays.asList(modelsToTry));
@@ -72,6 +92,8 @@ public class LLMClient {
 
         for (String currentModel : seen) {
             for (int retry = 0; retry < 2; retry++) {
+                // 检查点 1：每次尝试前（取消 → 立即中断，不发起新请求）
+                if (token != null) token.checkpoint();
                 try {
                     String requestBody = buildChatRequest(messages, currentModel, maxTokens, temperature);
                     HttpRequest request = HttpRequest.newBuilder()
@@ -85,6 +107,9 @@ public class LLMClient {
                     HttpResponse<String> response = httpClient.send(request,
                             HttpResponse.BodyHandlers.ofString());
 
+                    // 检查点 2：响应返回后、解析前（软停止：回复已完整生成但未提交）
+                    if (token != null) token.checkpoint();
+
                     if (response.statusCode() == 200) {
                         return parseResponse(response.body());
                     } else {
@@ -93,7 +118,20 @@ public class LLMClient {
                         log.warn("LLM call failed (attempt {}/2, model {}): {}",
                                 retry + 1, currentModel, response.statusCode());
                     }
+                } catch (TaskCancelledException e) {
+                    // 取消信号直接上抛，不做重试
+                    throw e;
+                } catch (InterruptedException ie) {
+                    // 线程被中断（硬停止/状态停止的 future.cancel(true) abort 了 HTTP 调用）
+                    Thread.currentThread().interrupt();
+                    if (token != null && token.isCancelled()) {
+                        throw new TaskCancelledException(token.getStopType(), token.getReason(), ie);
+                    }
+                    throw new TaskCancelledException(StopType.HARD, "LLM 调用线程被中断", ie);
                 } catch (Exception e) {
+                    if (token != null && token.isCancelled()) {
+                        throw new TaskCancelledException(token.getStopType(), token.getReason(), e);
+                    }
                     lastError = e;
                     log.warn("LLM call exception (attempt {}/2, model {}): {}",
                             retry + 1, currentModel, e.getMessage());
@@ -103,7 +141,10 @@ public class LLMClient {
                 if (retry == 0) {
                     try { Thread.sleep(1000); } catch (InterruptedException ie) {
                         Thread.currentThread().interrupt();
-                        break;
+                        if (token != null && token.isCancelled()) {
+                            throw new TaskCancelledException(token.getStopType(), token.getReason(), ie);
+                        }
+                        throw new TaskCancelledException(StopType.HARD, "LLM 重试等待被中断", ie);
                     }
                 }
             }

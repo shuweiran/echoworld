@@ -146,6 +146,8 @@ public class SimulationController {
         state.setTargetX(x);
         state.setTargetY(y);
         state.setHasTarget(true);
+        // Phase 4: 手动目标标记——MovementConstraint 不得覆盖玩家手动指定。
+        state.setManualTarget(true);
         return Map.of("status", "ok");
     }
 
@@ -239,5 +241,57 @@ public class SimulationController {
     @GetMapping("/conversations")
     public Object getConversations() {
         return world.getRecentConversations();
+    }
+
+    // ── Phase 4: Track REST 暴露 ────────────────────────────────
+
+    /**
+     * World Director 手动目标注入。
+     * <pre>{@code POST /api/simulation/track/goal  {"agent":"小明","goal":"调查"}}
+     * goal 为空字符串 → 清除该角色的手动目标，恢复规则驱动。</pre>
+     */
+    @PostMapping("/track/goal")
+    public Map<String, Object> setTrackGoal(@RequestBody(required = false) Map<String, String> body) {
+        if (body == null) return Map.of("status", "error", "message", "body required");
+        String agent = body.getOrDefault("agent", "");
+        String goal = body.getOrDefault("goal", "");
+        if (agent.isBlank()) {
+            return Map.of("status", "error", "message", "agent required");
+        }
+        if (goal.isBlank()) {
+            simulationService.clearTrackGoal(agent);
+            return Map.of("status", "ok", "message", "Goal cleared for " + agent);
+        }
+        simulationService.setTrackGoal(agent, goal);
+        return Map.of("status", "ok", "message", "Goal set for " + agent, "agent", agent, "goal", goal);
+    }
+
+    /**
+     * 秘密任务注入（成员强制 ISOLATED）。
+     * <pre>{@code POST /api/simulation/track/secret  {"agents":["阿杰","小林"]}}</pre>
+     * 传入空数组可清除全部秘密任务。
+     */
+    @PostMapping("/track/secret")
+    public Map<String, Object> setSecretAgents(@RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) return Map.of("status", "error", "message", "body required");
+        Object agents = body.getOrDefault("agents", List.of());
+        List<String> names = new ArrayList<>();
+        if (agents instanceof List<?> list) {
+            for (Object o : list) {
+                if (o != null && !String.valueOf(o).isBlank()) names.add(String.valueOf(o));
+            }
+        }
+        simulationService.setSecretAgents(new java.util.LinkedHashSet<>(names));
+        return Map.of("status", "ok", "secret_agents", names);
+    }
+
+    /**
+     * 轨道状态汇总：目标 / 秘密任务 / 最近 TrackScore / 轨道分配摘要。
+     * <pre>{@code GET /api/simulation/track/state →
+     * {"goals":{...},"secret_agents":[...],"last_score":{...},"assignments":{...}}}</pre>
+     */
+    @GetMapping("/track/state")
+    public Map<String, Object> getTrackState() {
+        return simulationService.getTrackState();
     }
 }
