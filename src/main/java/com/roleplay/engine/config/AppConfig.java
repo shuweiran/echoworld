@@ -3,14 +3,25 @@ package com.roleplay.engine.config;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.springframework.boot.context.properties.ConfigurationProperties;
+
 /**
  * Application configuration — single source of truth for all engine parameters.
  * Maps from Python backend/config.py （AppConfig + nested configs）.
  *
  * <p>All fields have sensible defaults. API keys are resolved from
  * environment variables, file persistence, or runtime overrides.</p>
+ *
+ * <p>D25: {@code @ConfigurationProperties(prefix = "roleplay")} binds all
+ * {@code roleplay.*} keys from application.yml (incl. the
+ * {@code ${ROLEPLAY_LLM_API_KEY:}} environment-variable placeholder, which
+ * Spring resolves at startup) into this bean. Same pattern as
+ * {@code McpConfiguration}. Runtime overrides via
+ * {@code /api/config/apikey} still win because they write to this same bean
+ * after startup binding.</p>
  */
 @org.springframework.stereotype.Component
+@ConfigurationProperties(prefix = "roleplay")
 public class AppConfig {
 
     private LLMConfig llm = new LLMConfig();
@@ -48,6 +59,7 @@ public class AppConfig {
     public void setMode(ModeConfig mode) { this.mode = mode; }
 
     public FrontendConfig getFrontend() { return frontend; }
+    public void setFrontend(FrontendConfig frontend) { this.frontend = frontend; }
 
     public VoiceConfig getVoice() { return voice; }
     public void setVoice(VoiceConfig voice) { this.voice = voice; }
@@ -74,7 +86,9 @@ public class AppConfig {
         public String getModel() { return model; }
         public void setModel(String model) { this.model = model; }
         public int getMaxTokens() { return maxTokens; }
+        public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
         public double getTemperature() { return temperature; }
+        public void setTemperature(double temperature) { this.temperature = temperature; }
     }
 
     public static class MemoryConfig {
@@ -83,8 +97,11 @@ public class AppConfig {
         private boolean resume = false;
 
         public int getShortTermRounds() { return shortTermRounds; }
+        public void setShortTermRounds(int shortTermRounds) { this.shortTermRounds = shortTermRounds; }
         public int getSummaryInterval() { return summaryInterval; }
+        public void setSummaryInterval(int summaryInterval) { this.summaryInterval = summaryInterval; }
         public boolean isResume() { return resume; }
+        public void setResume(boolean resume) { this.resume = resume; }
     }
 
     public static class ArbiterConfig {
@@ -93,8 +110,11 @@ public class AppConfig {
         private String arbiterModel = "";
 
         public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public int getLoopDetectionRounds() { return loopDetectionRounds; }
+        public void setLoopDetectionRounds(int loopDetectionRounds) { this.loopDetectionRounds = loopDetectionRounds; }
         public String getArbiterModel() { return arbiterModel; }
+        public void setArbiterModel(String arbiterModel) { this.arbiterModel = arbiterModel; }
     }
 
     public static class MonitorConfig {
@@ -105,10 +125,15 @@ public class AppConfig {
         private int maxRetries = 3;
 
         public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public double getBudgetUsd() { return budgetUsd; }
+        public void setBudgetUsd(double budgetUsd) { this.budgetUsd = budgetUsd; }
         public String getFallbackModel() { return fallbackModel; }
+        public void setFallbackModel(String fallbackModel) { this.fallbackModel = fallbackModel; }
         public int getTimeoutSeconds() { return timeoutSeconds; }
+        public void setTimeoutSeconds(int timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
         public int getMaxRetries() { return maxRetries; }
+        public void setMaxRetries(int maxRetries) { this.maxRetries = maxRetries; }
     }
 
     public static class RoundConfig {
@@ -118,10 +143,16 @@ public class AppConfig {
         private int agentMaxTokens = 300;
         private int compressionInterval = 5;
 
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public boolean isParallelAgents() { return parallelAgents; }
+        public void setParallelAgents(boolean parallelAgents) { this.parallelAgents = parallelAgents; }
         public int getArbiterMaxTokens() { return arbiterMaxTokens; }
+        public void setArbiterMaxTokens(int arbiterMaxTokens) { this.arbiterMaxTokens = arbiterMaxTokens; }
         public int getAgentMaxTokens() { return agentMaxTokens; }
+        public void setAgentMaxTokens(int agentMaxTokens) { this.agentMaxTokens = agentMaxTokens; }
         public int getCompressionInterval() { return compressionInterval; }
+        public void setCompressionInterval(int compressionInterval) { this.compressionInterval = compressionInterval; }
     }
 
     public static class ModeConfig {
@@ -139,9 +170,13 @@ public class AppConfig {
         public String getDirectorCharacter() { return directorCharacter; }
         public void setDirectorCharacter(String dc) { this.directorCharacter = dc; }
         public List<String> getAdvancedTracks() { return advancedTracks; }
+        public void setAdvancedTracks(List<String> advancedTracks) { this.advancedTracks = advancedTracks; }
         public String getLanguage() { return language; }
         public void setLanguage(String language) { this.language = language; }
         public String getTrackActivity() { return trackActivity; }
+        public void setTrackActivity(String trackActivity) { this.trackActivity = trackActivity; }
+        /** 兼容 yml 的 {@code roleplay.mode.default}（default 是 Java 关键字，不能作字段名，故映射到 mode）。 */
+        public void setDefault(String mode) { this.mode = mode; }
     }
 
     public static class FrontendConfig {
@@ -150,8 +185,11 @@ public class AppConfig {
         private String distDir = "frontend/dist";
 
         public boolean isDevMode() { return devMode; }
+        public void setDevMode(boolean devMode) { this.devMode = devMode; }
         public int getDevPort() { return devPort; }
+        public void setDevPort(int devPort) { this.devPort = devPort; }
         public String getDistDir() { return distDir; }
+        public void setDistDir(String distDir) { this.distDir = distDir; }
     }
 
     /** 语音配置（D20）：engine=edge|cosyvoice，voice 为默认音色，autoSelect 自动选引擎。 */
