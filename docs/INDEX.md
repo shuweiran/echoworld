@@ -5,6 +5,15 @@
 
 ---
 
+## ⚠️ 接手注意点（先看这个，避免踩坑）
+
+1. **`RouterService.java` 达 45.6KB，是全工程最大的文件**——疑似"上帝类"，读它时花点耐心；相关逻辑已被 `DECISION_LOG.md` D-003（不重构 Router）和 SessionRegistry 分担
+2. **`README.md` 有 23.2KB，偏长**——快速上手直接读 `PROJECT_CONTEXT.md`（5 秒）而不是 README
+3. **终端 cat 中文会乱码**（PowerShell GBK 显示问题）——文件本身是 UTF-8，读文件用工具/编辑器
+4. **建议阅读顺序**：`PROJECT_CONTEXT.md`（5 秒）→ `DECISION_LOG.md` → 按需读 `docs/问题清单-20260731.md`；想看具体模块（剧本杀/狼人杀）再深入对应包，**不需要通读 111 个源文件**
+
+---
+
 ## 一、接手必读（按顺序，5 分钟进入状态）
 
 | 顺序 | 文件 | 用途 | 状态 |
