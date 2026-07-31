@@ -52,3 +52,7 @@ data/
 maven/
 mvn/
 mvn.zip
+
+# 独立 Python 项目（v4 旧版，自带 git）与演示产物
+roleplay-v4/
+demo/
