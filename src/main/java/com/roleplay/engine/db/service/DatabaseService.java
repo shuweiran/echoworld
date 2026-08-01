@@ -214,6 +214,25 @@ public class DatabaseService {
                 .collect(Collectors.toList());
     }
 
+    /**
+     * C3: 读取指定对局的最新快照（type=snapshot 行，name 前缀「对局快照:<sessionId>」）。
+     * 断线重连/重启恢复用：内存对局丢失后，从最近一次快照重建完整状态。
+     *
+     * @return 快照内容 map（含 type/session_id/phase/players/assignments/player_keys 等全量状态）；无快照返回 empty
+     */
+    public Optional<Map<String, Object>> getLatestScriptSnapshot(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return Optional.empty();
+        List<ScriptEntity> list = scriptRepo.findByNameStartingWithOrderByIdDesc("对局快照:" + sessionId);
+        if (list.isEmpty()) return Optional.empty();
+        Object content = entityToMap(list.get(0)).get("content");
+        if (content instanceof Map<?, ?> m) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> cm = (Map<String, Object>) m;
+            return Optional.of(cm);
+        }
+        return Optional.empty();
+    }
+
     // ── Game Sessions ──────────────────────────────────────────
 
     @Transactional
