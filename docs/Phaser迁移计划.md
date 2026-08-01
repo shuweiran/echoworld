@@ -33,12 +33,12 @@
 
 **交付物**（阶段 0 已完成，2026-08-01）：
 - 验证页 `static/simulation/phaser_validate/`（已交付：index.html 5 页签 + vendor/phaser.min.js 3.90.0 + 占位素材 + 地图 JSON 样例 maps/manor.json、maps/bsp-sample.json + 自测脚本 tools/self_test*.py）
-- 地图 JSON 契约草案文档 `docs/地图JSON契约-draft.md`（字段表 + 示例 + 宽容解析规则 + 校验器）
+- 地图 JSON 契约文档 `docs/地图JSON契约-v1.md`（字段表 + 示例 + 宽容解析规则 + 校验器；2026-08-01 未衡审核通过，由 -draft.md 更名定稿）
 - 验证结论：5 个功能点全部跑通，单点实现耗时均 ≤ 自研预估的一半（引擎红利兑现），详见 TEST_STATUS.md 阶段 0 条目
 
 **验收标准**（阶段 0 执行结果 2026-08-01）：
 - ✅ 5 个功能点全部跑通（瓦片渲染+碰撞 / BSP 分区 / Zone 热点 / Aseprite 动画 / 地图 JSON 契约草案），自测证据：http 5 页签 + file:// 5 页签 + 生命周期轮巡 ALL PASS 无 JS 异常（tools/self_test*.py + TEST_STATUS.md 阶段 0 条目）；实现耗时全部显著低于自研预估（引擎红利兑现，见 TEST_STATUS 条目中的耗时对比）
-- ⏳ 地图 JSON 契约草案（docs/地图JSON契约-draft.md）待未衡审查
+- ✅ 地图 JSON 契约草案已通过未衡审查并更名定稿 `docs/地图JSON契约-v1.md`（2026-08-01）
 - ✅ 验证页 file:// 与 http 均可访问（对齐 vision demo 惯例；file:// 走内嵌 base64 兑底，http 走真实文件管线）
 
 **退出条件**：任一功能点验证失败且无替代方案 → 回滚保持自研渲染（见 §3），本计划终止。

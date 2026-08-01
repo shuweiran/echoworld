@@ -245,3 +245,16 @@ ode --check）：bsp.js 多 seed（20260801/1/42/999）生成+validateMap 全过
 - **技术取舍**：本地 vendor 直引 Phaser 3.90（不依赖 CDN；CDN 备选 jsdelivr 已注明）；file:// 内嵌资源兜底 vs http 真实文件管线；素材为程序生成占位（零第三方版权，tools/gen_assets.js 可复现）；Aseprite JSON 帧键须为 0..15（Phaser 3.90 createFromAseprite 按索引串解析，源码核实）
 - **Java 测试基线**：未触碰，保持 190/0（28 类）
 - **git**：未 commit（未获授权）
+
+
+### 2026-08-01 13:36-14:00 — Phaser 阶段1 ScenePage 渲染层换 Phaser（Node/Python/Edge headless 自测，非 JUnit；台账 #55）
+- **范围**：前端 Only，后端 Java 零改动：新增 `roleplay-v4/frontend/src/phaser/`（SimulationScene.ts 渲染层 / PhaserSimulationView.tsx React 组件 / simulationData.ts 数据适配）；改 `ScenePage.tsx`（新增「2D 模拟（Phaser 内嵌）」按钮 + 内嵌渲染区域 + 回退按钮，原 window.open 保留）；新增 tools/ phaser_smoke.html + phaser_integration_smoke.html + self_test_stage1.py（冒烟）；构建产物同步 static/（index.html → index-B2ueyU_u.js）
+- **自测命令与结果**（前端目录 frontend 下执行）：
+  - ① `npm run build` 通过（tsc -b && vite build，60 modules，含 Phaser 1.79MB bundle——对齐迁移计划风险表「Phaser 体积 ~1MB 级低风险」）
+  - ② `python tools/self_test_stage1.py http://localhost:5173` → **纯渲染冒烟 10/10 ALL PASS**（phaser-version 3.90.0 / game-create / agents-render=3 / obstacles-render=2 / agents-removal=2 / game-destroy 收敛（pendingDestroy→runDestroy→canvas 移除）/ game-recreate（StrictMode double-mount 模拟）/ data-smoke-ok=1 无 JS 异常）
+  - ③ Edge headless → **真实后端集成冒烟 9/9 PASS**（phaser_integration_smoke.html 全部 data-smoke-ok=1：load-characters 2 角色 200 / start 200 / state agents=2 / Phaser 渲染 agents=2 / SSE world_snapshot 增量 / stop 200 / destroy 收敛 / React 组件层 PhaserSimulationView StrictMode 双挂载 canvas=1 + 数据流 agents≥2 + unmount 后画布移除）
+  - ④ **数据流不变**：ScenePage 新入口和 PhaserSimulationView 消费与原 simulation.html 相同的 /api/simulation/* REST+SSE 端点，appStore/useSSE/App.tsx 零改动（git diff 仅前端 phaser/ + ScenePage.tsx + tools/）
+- **阐述说明**：渐进式路线——ScenePage 新增「2D 模拟（Phaser 内嵌）」按钮 → PhaserSimulationView 内嵌渲染（默认 Phaser 3.90）→ 回退通道：原「进入 2D 模拟」checkbox + window.open('/simulation.html') 保留（新界面提供「原版窗口（回退）」按钮）；切换开关 = ScenePage 上的两个入口并存（渐进式原则）
+- **Java 测试基线**：未触碰，保持 214/0（29 类）（并行批次 D 已在 13:39 报 214/0）；本次无 mvn 重跑（前端测试）
+- **git**：未 commit（未获授权）；并行登记 P-0801-B 与台账 #52 相关，不动并行批次 D 的 8 个 Java 文件
+- **残留**：原 window.open 自研 Canvas 渲染（simulation.html 791 行）保留不删（回退通道）；任何前端改动都经 tsc 检查 + 构建冒烟

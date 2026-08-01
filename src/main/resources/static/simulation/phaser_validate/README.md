@@ -22,7 +22,7 @@
 | 2 | **BSP 分区** | ② BSP 分区 | 打开即见 BSP 递归二分生成的房间/走廊地图（固定 seed 可复现）；右侧显示生成 JSON（契约 v1）与校验器结果；「重新生成」随机 seed 再跑；校验器对坏 JSON 报错（页签 ⑤ 可试） |
 | 3 | **Zone 热点** | ③ Zone 热点 | 金色区域=搜证热点；走近触发提示条（onEnter 回调），点击热点 或 按 E 触发搜证（onInteract 回调）→ 底部弹出线索文本并计入「已搜证」列表 |
 | 4 | **Aseprite 动画** | ④ Aseprite 动画 | WASD 移动角色1（`load.aseprite` + `createFromAseprite` 管线），方向键移动角色2（spritesheet 管线）；走动切方向动画、静止回 idle 帧；右侧确认「4 个动画已创建」 |
-| 5 | **地图 JSON 契约草案** | ⑤ 地图 JSON 契约 | 字段表 + manor_01 样例 + 校验器（粘贴任意地图 JSON 运行校验）；契约文档 `docs/地图JSON契约-draft.md` |
+| 5 | **地图 JSON 契约 v1** | ⑤ 地图 JSON 契约 | 字段表 + manor_01 样例 + 校验器（粘贴任意地图 JSON 运行校验）；契约文档 `docs/地图JSON契约-v1.md` |
 
 ## 技术取舍说明
 

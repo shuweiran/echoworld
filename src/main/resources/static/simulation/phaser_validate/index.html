@@ -55,12 +55,12 @@
 <body>
 <header>
   <h1>Phaser 3.90 迁移验证 Demo · 阶段 0</h1>
-  <span class="meta">引擎版本 <b id="phaser-version">…</b> · 访问模式 <b id="access-mode">…</b> · 地图 JSON 契约草案 <a href="../../../docs/地图JSON契约-draft.md">docs/地图JSON契约-draft.md</a></span>
+  <span class="meta">引擎版本 <b id="phaser-version">…</b> · 访问模式 <b id="access-mode">…</b> · 地图 JSON 契约 v1 <a href="../../../docs/地图JSON契约-v1.md">docs/地图JSON契约-v1.md</a></span>
 </header>
 <nav id="tab-bar"></nav>
 <div id="panels"></div>
 <footer>
-  阶段 0 五个验证点：① 瓦片渲染+碰撞 ② BSP 分区 ③ Zone 热点 ④ Aseprite 动画 ⑤ 地图 JSON 契约草案（本页 ⑤ 页签）。<br>
+  阶段 0 五个验证点：① 瓦片渲染+碰撞 ② BSP 分区 ③ Zone 热点 ④ Aseprite 动画 ⑤ 地图 JSON 契约 v1（本页 ⑤ 页签）。<br>
   Phaser 3.90 以本地 vendor 文件引入（vendor/phaser.min.js，npm phaser@3.90.0 提取），不依赖 CDN（国内网络可用性 + file:// 兼容）；CDN 备选：<code>https://cdn.jsdelivr.net/npm/phaser@3.90.0/dist/phaser.min.js</code>。<br>
   素材为程序生成占位帧（tools/gen_assets.js，零第三方版权）。file:// 打开时资源自动走内嵌 base64（js/assets_embedded.js），http 打开时走真实文件管线。详见 README.md。
   <div id="boot-errors" style="display:none;margin-top:8px;color:#ff6b6b;font-family:monospace;white-space:pre-wrap"></div>

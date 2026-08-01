@@ -1,6 +1,6 @@
-# 地图 JSON 契约草案 v1（draft）— LLM 生成地图与 Phaser 渲染的对接面
+# 地图 JSON 契约 v1（定稿）— LLM 生成地图与 Phaser 渲染的对接面
 
-> **状态**：📄 草案（阶段 0 产出，待未衡审查）
+> **状态**：✅ **已定稿 v1**（2026-08-01 未衡审核通过，由 `地图JSON契约-draft.md` 更名升级；字段表冻结，阶段 2 按本契约落地）
 > **对应**：`docs/Phaser迁移计划.md` 阶段 0 验证点 ⑤ / 阶段 2 对接面；DECISION_LOG **D-020**
 > **版本纪律**：对齐剧本 schema v1（D-014）——**JSON 内嵌版本号**、**宽容解析归一**、**不扩展表结构**（阶段 2 落库时沿用）
 > **demo 实现**：`src/main/resources/static/simulation/phaser_validate/`（样例 `maps/manor.json`、`maps/bsp-sample.json`；渲染管线 `js/common.js`；校验器 `js/bsp.js validateMap`）
@@ -137,9 +137,9 @@ demo 页签 ⑤ 提供粘贴校验；阶段 2 将该校验器作为 LLM 生成�
 | `rooms[].name` | `locations[]` | 房间即剧本地点，供 DM 面板/讨论上下文引用 |
 | `spawn_points[]` | 剧本角色列表 | 玩家/角色出生位置（角色数 > 出生点数时循环分配） |
 
-## 6. 版本化路径（阶段 2 定稿时）
+## 6. 版本化路径（已走完，阶段 2 直接沿用）
 
-- 草案 v1 经未衡审查 → 定稿 v1（冻结字段表）
-- 定稿后契约文档更名 `docs/地图JSON契约-v1.md`（废弃本草案并指向），对齐 `docs/剧本-schema-v1.md` 的命名与纪律
+- ✅ 草案 v1 经未衡审查通过（2026-08-01）→ **定稿 v1**（字段表冻结）
+- ✅ 契约文档更名 `docs/地图JSON契约-v1.md`（原 `-draft.md` 已废弃并指向本文件，对齐 `docs/剧本-schema-v1.md` 命名与纪律）
 - 地图 JSON 落库（若需持久化）：内嵌 `map_version` 进 contentJson，**不扩展表结构**（D-013/D-014 纪律）
-- LLM 生成统一路径 + 宽容归一 + 兜底（对齐 D-014 双生成器统一模式）
+- LLM 生成统一路径 + 宽容归一 + 兜底（对齐 D-014 双生成器统一模式，阶段 2 落地）

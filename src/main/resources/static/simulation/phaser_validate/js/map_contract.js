@@ -5,7 +5,7 @@
  *   - 浏览器端：window.MAP_SAMPLES 供各 demo scene / 契约页使用
  *   - Node 端：module.exports 供 tools/export_assets.js 导出 maps/*.json 规范副本
  *
- * 契约草案文档：docs/地图JSON契约-draft.md（字段表/宽容解析规则/版本纪律对齐 D-014）
+ * 契约草案文档：docs/地图JSON契约-v1.md（字段表/宽容解析规则/版本纪律对齐 D-014）
  * 阶段 2：LLM 生成地图输出同结构 JSON，经宽容解析归一后交给 Phaser 渲染。
  *
  * manor 样例说明（剧本杀·老宅 20×14）：
