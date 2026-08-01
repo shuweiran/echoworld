@@ -186,7 +186,8 @@ public class TrackRequestService {
             只返回需要变更的角色。
             """, sceneDescription, plotSummary, modesText, goalsText);
 
-        Map<String, Object> result = llmClient.callJson(prompt, 300);
+        // D-023：N 角色变更建议 JSON（suggested_mode/reason/request_type/connect_to），300 偏紧，提升至 600
+        Map<String, Object> result = llmClient.callJson(prompt, 600);
         List<Map<String, Object>> suggestions = new ArrayList<>();
 
         for (Map.Entry<String, Object> entry : result.entrySet()) {
@@ -236,7 +237,8 @@ public class TrackRequestService {
             {"审批结果": [{"agent": "角色名", "approved": true/false, "reason": "审批理由"}]}
             """, sceneDescription, plotSummary, requestsText);
 
-        Map<String, Object> result = llmClient.callJson(prompt, 200);
+        // D-023：N 条审批 JSON（agent/approved/reason），200 偏紧，提升至 400
+        Map<String, Object> result = llmClient.callJson(prompt, 400);
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> reviews = (List<Map<String, Object>>) result.getOrDefault("审批结果", List.of());
 

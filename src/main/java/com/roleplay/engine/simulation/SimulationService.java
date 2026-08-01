@@ -420,7 +420,8 @@ public class SimulationService {
         CompletableFuture.runAsync(() -> {
             try {
                 String prompt = buildDirectorPrompt(userTriggered);
-                Map<String, Object> result = llmClient.callJson(prompt, 600);
+                // D-023：主控轮次大 JSON（decisions[]×角色数 + narration），600 偏紧，提升至 1000
+                Map<String, Object> result = llmClient.callJson(prompt, 1000);
                 if (result.isEmpty()) { world.setWorldNarration("(主控思考中...)"); return; }
 
                 @SuppressWarnings("unchecked")

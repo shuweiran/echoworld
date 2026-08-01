@@ -65,7 +65,8 @@ public class Compressor {
         String prompt = COMPRESS_PROMPT.replace("{messages}", lines);
 
         try {
-            Map<String, Object> data = llmClient.callJson(prompt, 150);
+            // D-023：压缩摘要 JSON（summary 40 字 + key_events 2-3 + open_loops 0-2 + importance），150 偏紧，提升至 300
+            Map<String, Object> data = llmClient.callJson(prompt, 300);
 
             @SuppressWarnings("unchecked")
             List<String> keyEvents = data.containsKey("key_events")

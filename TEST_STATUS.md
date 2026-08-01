@@ -5,16 +5,20 @@
 
 ---
 
-## 📊 当前基线（最新汇总，2026-08-01 13:39）
+## 📊 当前基线（最新汇总，2026-08-01 18:40）
 
 | 指标 | 值 |
 |---|---|
-| 测试类 | **29** |
-| 测试用例 | **214** |
+| 测试类 | **34** |
+| 测试用例 | **254** |
 | Failures / Errors | **0 / 0** |
-| 最后全量执行 | 2026-08-01 13:39（批次D 收尾：SpeechGateTest 24 用例，214/0） |
+| 最后全量执行 | 2026-08-01 18:47（Phaser 阶段2：MapValidatorTest 18 + BspMapGeneratorTest 7 + ScriptMapServiceTest 10 + ScriptMapPersistenceTest 2 = 37 用例，254/0，含 P-0801-D maxTokens 3 用例） |
 | 环境 | H2 mem + mock LLM（application-test.yml） |
-| 真机验证 | **merged 正式版 7 项 PASS**（2026-08-01 13:05，台账 #47：模式默认 merged / 玩家广播 / AI 演讲 fallback 升级 / 断线补发 recent / 模式往返切换 / 剧本杀阶段公告 / SSE announcement+script_* 并存） |
+| 真机验证 | **merged 正式版 7 项 PASS**（2026-08-01 13:05，台账 #47）；**P1 剧本生成 maxTokens 修复 4/4 完整生成 PASS**（2026-08-01 18:45，台账 #57：真实 LLM 生成完整 schema v1 剧本 4/4 次，不再走 defaultScript 兜底；讨论自动进 VOTE 且发言多样） |
+
+> v14 更新：基线从 217 → **254 tests / 34 类**（**Phaser 阶段2 LLM 地图生成接入**：MapValidatorTest 18 用例——契约 v1 校验（尺寸/层一致性/热点越界/出生点越界/碰撞值 0-1/房间边界/走廊连通等）/ BspMapGeneratorTest 7 用例——BSP 递归二分生成（房间数/走廊连通 BFS 全可达/种子可复现/降级输出契约 v1）/ ScriptMapServiceTest 10 用例——LLM 生成路径（正常/空输出兜底 BSP/宽容解析/缓存命中 regenerate 强制重生成/校验失败降级/快照落库恢复）/ ScriptMapPersistenceTest 2 用例——mapData 随对局快照持久化+重启恢复；详见 Round 14；**前端部分：文件已落地（mapData.ts/PhaserScriptMapView.tsx/ScriptMapScene.ts/client.ts scriptMap）但 ScenePage 接线未完成 + build 失败 23 处 TS 错误，未同步 static，见台账 #56**
+
+> v13 更新：基线从 214 → **217 tests / 30 类**（P1 缺陷修复：ScriptServiceMaxTokensTest 3 用例——mock 返回 2000+ token 完整剧本 JSON（5 角色×长 intro/secret + 5 线索 + secrets + background + truth）→ generateScript 解析成功且 roles/secrets/clues/killer_id/truth 字段齐全、长字段不截断；verify generateScript 必须以 maxTokens=4000 调用 callJson（600 旧值回归即失败）；LLM 空输出仍走 defaultScript 兜底符合 schema A1-3 不回归）；详见 Round 13
 
 > v12 更新：基线从 190 → **214 tests / 29 类**（批次D 收尾：SpeechGateTest 24 用例——触发必发言七类（MENTION/QUESTION/HUMAN_CLUE/EMOTION/ROUND_FIRST/CLUE/COLD_BREAK + 多触发命中本角色，talkativeness=0 仍发言）/ 低分静默（含 SILENCE_MARKER 占位）/ 阈值边界（pri 5→P=0.145 静默·pri 6→P=0.154 发言 + 自定义 floor 包络）/ wait_bias 打折（人类发言中未点名 0.154→0.077 静默，高动机仍发言）/ 动机分映射与高动机突破 / COLD_BREAK 候选与开关 / 静态工具（isMentioning/isQuestioning/scanTurns/reasonOf/null target 契约））；详见 Round 12
 
@@ -29,7 +33,7 @@
 
 ---
 
-## 测试类明细（214 tests / 29 类）
+## 测试类明细（254 tests / 34 类）
 
 | 测试类 | 用例 | 状态 | 对应 |
 |---|---|---|---|
@@ -61,6 +65,11 @@
 | **MergedSpeechModeTest** | 7 | ✅ | **合并方案正式版 merged（声学判定近/远·半径内可听→area·无听众+兜底开→global·兜底关→不升级·剧本杀阶段广播 merged 触发+总开关·merged 防双发）** |
 | **SpeechStrategySplitModeTest** | 5 | ✅ | **方案B 演讲内联广播（split 区域广播带坐标半径/merged 静默/运行时切换/HearingSystem 远近判定/无听众仍区域）** |
 | **ScriptGamePhaseAnnouncementTest** | 2 | ✅ | **方案B Step 3 剧本杀阶段 SYSTEM 广播（五处阶段切换 + 与 script_phase 并存）** |
+| **MapValidatorTest** | 18 | ✅ | **Phaser 阶段2 地图契约 v1 校验（尺寸/层一致性/热点越界/出生点越界/碰撞值/房间/走廊/宽容解析）** |
+| **BspMapGeneratorTest** | 7 | ✅ | **Phaser 阶段2 BSP 降级生成器（房间数/走廊 BFS 连通/种子复现/契约 v1 输出）** |
+| **ScriptMapServiceTest** | 10 | ✅ | **Phaser 阶段2 LLM 地图生成（正常/空输出兜底/宽容解析/缓存与 regenerate/校验降级/快照）** |
+| **ScriptMapPersistenceTest** | 2 | ✅ | **Phaser 阶段2 地图随对局快照落库+重启恢复** |
+| **ScriptServiceMaxTokensTest** | 3 | ✅ | **P1 缺陷修复：LLM 剧本生成 JSON 截断（600→4000 maxTokens，长字段不截断）** |
 | **新增稳定性/中断/DB 测试** | ~26 | ✅ | 并行工作流新增（中断系统/DB/模拟） |
 
 ---
@@ -74,6 +83,23 @@
 ---
 
 ## 📝 执行历史（追加式）
+### 2026-08-01 18:36-18:50 — Phaser 阶段2 LLM 地图生成接入（Round 14，254 tests；台账 #56）
+- **命令**：mvn test（全量，surefire 跑批 18:47 汇总 34 类）
+- **结果**：254 tests / **0 failures** / **0 errors** / 34 类 BUILD SUCCESS（217 基线 + 4 类 37 用例）
+- **新增**：`simulation/map/MapValidatorTest` 18 用例——契约 v1 校验器：宽度/高度/瓦片尺寸合法性、ground/collision 层行列一致、collision 值域 0-1、热点坐标越界、出生点越界/落碰撞格、房间矩形边界、rooms/corridors 结构、宽容解析（旧格式缺字段归一）、校验通过/警告/错误分类；`simulation/map/BspMapGeneratorTest` 7 用例——BSP 递归二分：房间数符合预期、房间不重叠、走廊 L 形连通且 BFS 全可达、固定 seed 输出可复现、非法参数降级、输出符合契约 v1（map_version/layers/zones/spawn_points）；`service/ScriptMapServiceTest` 10 用例——LLM 生成路径（mock 返回契约 v1 JSON 透传）、LLM 空/非法输出 → BSP 兜底降级（fallback 原因记录）、宽容解析归一、缓存命中（不重复调 LLM）、regenerate=true 强制重生成、校验失败降级、快照落库/恢复 map_data 往返；`service/ScriptMapPersistenceTest` 2 用例——generateMap 后快照含 map_data、重启恢复后 getMap 取回一致
+- **回归**：既有 217 基线零破坏（含 P-0801-D maxTokens 3 用例、SpeechGateTest 24 用例、LONG-01 10 万字全绿）；surefire 逐类核验 34 个 txt 报告 0 失败 0 错误
+- **验证细节**：后端路径完整——ScriptController POST /api/script/map（L74-88）→ ScriptGameService.generateMap（L475-520，mapData 字段+快照持久化 L1631/1690）→ ScriptMapService（LLM 生成+宽容解析+MapValidator 校验+BspMapGenerator 降级兜底）；前端文件已落地（mapData.ts/PhaserScriptMapView.tsx/ScriptMapScene.ts/client.ts scriptMap）但 **ScenePage 接线未完成（仅状态声明 L43-45）+ npm run build 失败 23 处 TS 错误 → static 未同步**（详见台账 #56，待 coder 修复后重跑构建）
+- **git**：未 commit（统一 gate，未获授权）
+
+### 2026-08-01 18:39–18:45 — P1 缺陷修复：LLM 剧本生成 JSON 截断（Round 13，217 tests）
+- **命令**：mvn test（全量；新测试类先行单跑 3/0 通过后全量复跑）
+- **结果**：217 tests / **0 failures** / 30 类 / BUILD SUCCESS（surefire 报告逐类核对：30 类之和 217，0 失败 0 错误）
+- **修复（D-023，见 DECISION_LOG）**：ScriptService.generateScript 的 llmClient.callJson(prompt, 600) → **4000**（根因：4 角色剧本 schema v1 JSON 真实输出需 2000-4000 tokens，600 硬截断 → LLMClient 日志 Unexpected end-of-input → 真机 3/3 走 defaultScript 兜底，且 SpeechGate 静默分支不可观测）。全局 maxTokens 排查同步修正 6 处同类大 JSON 调用（均多角色/多条目结构化输出）：ArbiterService 轨道配置 400→600、主持整合 800→1000、TrackRequestService 需求评估 300→600、审批 200→400、Compressor 压缩摘要 150→300、SimulationService 主控轮次 600→1000；短回答类保留（分类 20 / 旁白 120 / 窃听摘要 120 / 单目标 300 / 单场景 300 / 单角色 400）
+- **新增**：ScriptServiceMaxTokensTest 3 用例——①mock 返回 2000+ token 完整剧本 JSON（5 角色 × 200 字 intro/secret + 5 线索 + secrets + background 300 字 + truth）→ generateScript 解析成功且 roles/secrets/clues/killer_id/truth 字段齐全、长字段不截断（角色/线索数完整保留）②verify generateScript 必须以 maxTokens=4000 调用 callJson（600 旧值回归即失败）③LLM 空输出仍走 defaultScript 兜底符合 schema（A1-3：secrets 键集合==roles 不回归）
+- **回归**：既有 214 基线零破坏（含 LONG-01 10 万字：P50=3ms / P95=5ms / Max=40ms，堆增长 -11.5% 无 OOM——未触发堆测量脆性）；单跑 ScriptServiceMaxTokensTest 3/0（0.007s）
+- **文档**：DECISION_LOG 新增 D-023；docs/修改记录.md 台账 #57；本文件 v13
+- **git**：未 commit（未获授权）
+
 ### 2026-08-01 13:35–13:39 — 批次D 收尾：SpeechGate 专项测试（Round 12，214 tests）
 - **命令**：`mvn test`（全量；新测试类先行单跑 24/0 通过后全量复跑）
 - **结果**：214 tests / **0 failures** / 29 类 / BUILD SUCCESS（surefire 报告逐类核对：24 类之和 214，0 失败 0 错误）

@@ -36,7 +36,10 @@ public class ScriptService {
     public Map<String, Object> generateScript(String theme, List<String> characters) {
         List<String> players = characters == null ? List.of() : characters;
         String prompt = ScriptSchemaV1.buildPrompt(theme, players.size());
-        Map<String, Object> raw = llmClient.callJson(prompt, 600);
+        // P1 缺陷修复（D-023）：4 角色完整剧本 JSON（metadata+roles[]×4+clues[]+secrets+killer_id+truth）
+        // 真实输出需 2000-4000 tokens，旧值 600 被硬截断 → LLM 输出 Unexpected end-of-input → 3/3 走 defaultScript 兜底。
+        // 4000 远低于 DeepSeek 单次输出建议上限 8192，且仅剧本生成这类大 JSON 调用使用。
+        Map<String, Object> raw = llmClient.callJson(prompt, 4000);
         if (raw == null || raw.isEmpty()) {
             raw = ScriptSchemaV1.defaultScript(theme, players);
         }

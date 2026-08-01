@@ -160,3 +160,13 @@
 - **放弃**：①把静默做成概率随机（门控确定性可测，随机留给 LLM 内容层）；②静默轮不产出任何记录（占位符保证发言记录/轮次结构完整，前端/冷场检测可消费）；③阈值写死（D-004 纪律，已配置化）
 - **已知限制**：①阈值区间 silence_floor ∈ [0.10, 0.20] 为 demo 实测安全区间，0.25 会冷场失衡、凶手获益——仍为单值配置非动态自适应（P1 可做按对局情绪/冷场统计自适应）；②门控实例为 service 实例级（与 D-012 讨论引擎同限制，多局并发共享）；③被点名判定 isMentioning 为规则近似（@名/句首/标点后），复杂句式可能漏判（P2 可接入 LLM 判定或语义解析）；④前端 SILENCE_MARKER 渲染与 @AI 输入提示未做（批次 D 收尾报告已注明，P-0801-B 占用前端文件未动，建议后续批次处理）
 - **影响**：①新增 SpeechGateTest 24 用例（触发必发言七类/低分静默含占位/阈值边界 0.15 附近/ wait_bias 打折/动机分映射/COLD_BREAK/静态工具 isMentioning·isQuestioning·scanTurns·reasonOf），全量 214 tests / 0 failures（190 基线 + 24）；②人类发言权豁免：人类 @某 AI → 该 AI 强制发言且注入辩解目标；③静默成员跳过 LLM 生成（成本控制）；④schema 契约文档 docs/剧本-schema-v1.md 同步 talkativeness 字段；⑤注意：任务书原指定登记 D-019，但 D-019 已被演讲广播方案B 占用，按序顺延登记为 **D-022**；⑥未 git commit（未获授权）
+
+---
+
+## 2026-08-01（P1 缺陷修复批次）
+
+### D-023 LLM 剧本生成 maxTokens 修复：600→4000 根治 JSON 截断，全局调用点按输出复杂度分级设值（P1，台账 #57）
+- **决策**：①**主修复**——ScriptService.generateScript 的 llmClient.callJson(prompt, 600) → **4000**（真机验证 3/3 生成失败根因：4 角色剧本 schema v1 JSON（metadata+roles[]×4+clues[]+secrets+killer_id+truth+background）真实输出需 2000-4000 tokens，600 被硬截断 → LLMClient 日志 Unexpected end-of-input: expected close marker for Array → 全员走 defaultScript 兜底，且 SpeechGate 静默分支不可观测（兜底剧本全员 talkativeness=0.5 恒过阈值））；4000 远低于 DeepSeek 单次输出建议上限 8192，仅剧本生成类大 JSON 使用；②**全局分级设值**（grep 全部 14 个 callJson/callSimple 调用点评估）——「多角色/多条目结构化 JSON 类」6 处同步提升：ArbiterService 轨道配置 400→600、主持整合 800→1000、TrackRequestService 需求评估 300→600、审批 200→400、Compressor 压缩摘要 150→300、SimulationService 主控轮次 600→1000；「短回答/单字段类」5 处保留（分类 20 / 旁白 120 / 窃听摘要 120 / 单目标 300 / 单场景 300 / 单角色 400——输出量级与 maxTokens 匹配）
+- **原因**：①真机实证——修复前 3/3 init 走兜底（角色名全是「嫌疑人_X」），修复后 4/4 独立生成完整剧本（角色名具体化、killer_id/truth/clues/locations/secret 齐全）；②600 tokens ≈ 400-600 中文字，仅够 metadata+2 角色 intro，硬截断必然破坏 JSON 闭合 → callJson 三连重试后返回空 map → normalize 落入 defaultScript；③同类风险调用点（多角色 decisions/tracks/审批列表 JSON）在真实 LLM 下同样有截断风险，一并按复杂度修正，避免逐个爆雷
+- **放弃**：①把 max_tokens 做成配置项（各调用点输出量级差异大，per-call 常量更直白，D-004「阈值勿 hardcode」纪律对行为阈值适用，此处为容量预算）；②全部调用点统一放大到 4000（短回答类放大无收益且增加截断容忍/延迟）；③改 LLMClient 做 max_tokens 自动估算（过度设计，量级差异已知且固定）
+- **影响**：①全量 217 tests / 0 failures（214 基线 + ScriptServiceMaxTokensTest 3 用例：2000+ token 长剧本 JSON 解析字段齐全不截断 / verify maxTokens=4000 防回归 / 空输出兜底 A1-3 不回归）；②真机复验：8000 实例重启（java -jar，pid 21676）后 4/4 次真实 LLM 完整生成剧本，后端日志无 end-of-input/callJson failed；讨论流程正常（真实多样发言 8 条，自动进 VOTE）；静默占位本次 2 轮内未触发（概率性，门控路径已由 SpeechGateTest 24 用例锁定）；③运行成本：仅剧本生成/主控轮次等大 JSON 调用点 token 预算上升，短回答类不变；④未 git commit（未获授权）；⑤并行批次 P-0801-C（Phaser 阶段2 地图生成）在作业期间写入未完成代码（MapValidator/ScriptMapService 编译错误中间态 + ScriptMapServiceTest 构造不匹配），本批次打包经 -Dmaven.test.skip=true 规避其未完成测试编译完成，已在其登记行注明

@@ -119,7 +119,8 @@ public class ArbiterService {
                 restrictedList);
         }
 
-        Map<String, Object> result = llmClient.callJson(prompt, 400);
+        // D-023：≤6 角色多轨道结构化 JSON（reasoning+tracks[]+agent_actions），400 偏紧，提升至 600
+        Map<String, Object> result = llmClient.callJson(prompt, 600);
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> rawTracks = (List<Map<String, Object>>) result.getOrDefault("tracks", List.of());
         String reasoning = (String) result.getOrDefault("reasoning", "");
@@ -314,9 +315,10 @@ public class ArbiterService {
                 """, sceneDescription, tracksStr, outputsStr);
         }
 
-        Map<String, Object> result = llmClient.callJson(prompt, 800);
+        // D-023：主持整合大 JSON（narration 80-100 字 + scene_progress + next_round + chain_analysis，狼人杀分支另含 7 字段），800 偏紧，提升至 1000
+        Map<String, Object> result = llmClient.callJson(prompt, 1000);
         if (result == null || result.isEmpty()) {
-            result = llmClient.callJson(prompt, 800);
+            result = llmClient.callJson(prompt, 1000);
         }
 
         Map<String, Object> output = new LinkedHashMap<>();
