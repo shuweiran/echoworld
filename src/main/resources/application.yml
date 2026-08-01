@@ -59,6 +59,18 @@ roleplay:
     dm:
       # 主持人面板 key（C4）：空=放开（与审批门同开放模式）；非空时 DM 端点需请求头 X-DM-Key 匹配，否则 403
       key: ""
+    discussion:
+      # 讨论引擎（GAP-3 批次 A + 批次 D 发言门控）：
+      #   max-rounds=轮数（默认 2）；
+      #   silence-floor=静默阈值（demo 实测安全区间 [0.10,0.20]，0.25 会冷场失衡凶手获益；默认 0.15）；
+      #   priority-decay-rounds=临时应激目标（被质疑→辩解）衰减轮数（默认 3）；
+      #   wait-bias=人类发言中未被点名 AI 的静默等待系数（默认 0.5）；
+      #   cold-break=冷场破冰开关（连续全员静默→按动机指定破冰者，默认 true）
+      max-rounds: 2
+      silence-floor: 0.15
+      priority-decay-rounds: 3
+      wait-bias: 0.5
+      cold-break: true
   broadcast:
     # 演讲与广播合并地基：公告管线节流参数（AnnouncementService 读取）
     window-ms: 1000       # 滑动窗口长度

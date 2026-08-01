@@ -148,6 +148,22 @@ public class ScriptController {
         return ResponseEntity.ok(scriptGameService.search(sessionId, player, location));
     }
 
+    /**
+     * 批次 D: 人类发言入口（人机混合讨论）—— 人类发言权豁免（不过门控直接注入讨论流）；
+     * 消息中 @角色名 → 目标 AI 强制发言；clue=true → 公开新线索，相关 AI 按动机触发。
+     */
+    @PostMapping("/discussion_say")
+    public ResponseEntity<Map<String, Object>> discussionSay(@RequestBody Map<String, String> body) {
+        String player = body.getOrDefault("player", "");
+        String message = body.getOrDefault("message", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        boolean clue = Boolean.parseBoolean(body.getOrDefault("clue", "false"));
+        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.discussionSay(sessionId, player, message, clue));
+    }
+
     /** C2: 线索转交（body: player, target_player, clue_id；C3: +player_key）—— 转交后 ownership 变更，接收方 status 可见。 */
     @PostMapping("/transfer_clue")
     public ResponseEntity<Map<String, Object>> transferClue(@RequestBody Map<String, String> body) {

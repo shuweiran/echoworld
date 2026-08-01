@@ -149,3 +149,14 @@
 - **原因**：①对比报告结论——A 稳定性胜（广播外挂对话链路）、B 真实游戏性胜（空间声学+AI 自主+玩家空间感知）、灵活性各有所长，正式版合并两方案优点；②wouldOthersListen 阈值硬编码是 D-004 纪律欠账，声学判定集中后正式路径不再有硬编码阈值；③「无听众→全局公告」是游戏性便利（信息可达）与真实性（空间感）之争，用配置吸收，不再需要双路径共存做形态取舍；④剧本杀阶段广播已是统一管线红利（SYSTEM 级横幅通道），无理由继续留在 demo 开关后
 - **放弃**：①继续双路径共存默认 auto（正式版形态决策含糊）；②把判定留在策略层（B 模式，判定分散易漂移）；③无听众恒全局公告（方案A 语义，牺牲空间感）或无听众恒区域（方案B 语义，信息易哑火）二选一
 - **影响**：①默认行为=merged：AI 演讲产出经回调，HearingSystem 判定半径内可听听众≥1→区域演讲，否则按 fallback-to-global 决定升级全局公告或保持区域；②auto/split 行为逐字节不变（回退对比可用，POST /api/announcements/mode 运行时切换，三值合法）；③剧本杀五处阶段切换无条件发 SYSTEM 横幅（总开关可关）；④全量 190 tests / 0 failures（183 基线 + MergedSpeechModeTest 7 用例：声学判定正确性三分支/剧本杀阶段广播 merged 触发+开关/merged 防双发回归）；npm run build 通过并同步 static/（index-OlgI0-rr.js）；⑤遗留：前端断线补发接线（P3，台账 #37）、8000 实例重启后新产物生效
+
+---
+
+## 2026-08-01（批次 D：发言门控 SpeechGate）
+
+### D-022 SpeechGate 发言门控：每轮先判“是否发言”，规则触发必发言 + 阈值打分静默（P0-1，台账 #52）
+- **决策**：讨论引擎（D-012 剧本杀 DISCUSSION 链路）每轮 LLM 生成前加**发言门控** `simulation/conversation/SpeechGate.java`（纯确定性组件，无 LLM 无随机，可单测）：①**规则触发 → 必发言**——被点名（MENTION）/被提问（QUESTION，点名+问句标记）/新线索公开（CLUE）/人类公开线索相关（HUMAN_CLUE，动机分≥50）/情绪超阈值（EMOTION，ANGRY/SAD/CONFUSED/SURPRISED）/轮次首句（ROUND_FIRST，开局自我介绍）/冷场破冰（COLD_BREAK）七类事件，命中即发言**不受 talkativeness 概率限制**；②**阈值打分 → 静默**——否则 P = motiveScore(动机优先级) × 人格化 talkativeness（roles[].talkativeness，缺省 0.5），人类发言中且未被点名再 × wait_bias；P < silence_floor → 静默（跳过 LLM 生成省成本，以占位符 `SILENCE_MARKER=“……（沉默）”` 入发言记录，冷场检测亦以该标记识别全员静默）；③**接线**——ScriptGameService.buildRoundGate 每轮编排：排空人类发言事件（人类发言权豁免：直接注入对话流不过门控，该角色 AI 不代声）→ 扫描新增发言生成点名/提问触发（被质疑者注入辩解临时目标 pri=100，N 轮衰减回落，对齐 Bates 情绪→目标再评价）→ 人类线索/情绪/轮次首句/冷场破冰 → 逐成员 decide；④**阈值可配**（对齐 D-004 勿 hardcode 纪律）：`roleplay.game.discussion.silence-floor`（默认 **0.15**）/`wait-bias`（默认 **0.5**）/`cold-break`（默认 **true**）三键 yml 双份（主/test）；⑤**schema 扩展**——ScriptSchemaV1 roles[] 补 `talkativeness`（缺省 0.5，兼容 `personality.talkativeness` 嵌套），initGame 按角色名装载 playerTalkativeness
+- **原因**：①调研结论（tmp/AI动机与静默机制调研.md P0-1 + speech-demo 对比报告，demo 实测参数直接采用）——真实 LLM 下全员每轮必发言产生“话痨冷场失衡”与“全员抢话信息密度低”双问题，凶手因话多反而获益；②“是否发言”与“说什么”解耦——门控只输出决策，发言内容仍由 TrackStrategy+LLM 生成，改动面最小且可单测；③规则触发优先是防冷场第一道闸（事件驱动确定性），打分静默只作用于无事件的低意愿轮次
+- **放弃**：①把静默做成概率随机（门控确定性可测，随机留给 LLM 内容层）；②静默轮不产出任何记录（占位符保证发言记录/轮次结构完整，前端/冷场检测可消费）；③阈值写死（D-004 纪律，已配置化）
+- **已知限制**：①阈值区间 silence_floor ∈ [0.10, 0.20] 为 demo 实测安全区间，0.25 会冷场失衡、凶手获益——仍为单值配置非动态自适应（P1 可做按对局情绪/冷场统计自适应）；②门控实例为 service 实例级（与 D-012 讨论引擎同限制，多局并发共享）；③被点名判定 isMentioning 为规则近似（@名/句首/标点后），复杂句式可能漏判（P2 可接入 LLM 判定或语义解析）；④前端 SILENCE_MARKER 渲染与 @AI 输入提示未做（批次 D 收尾报告已注明，P-0801-B 占用前端文件未动，建议后续批次处理）
+- **影响**：①新增 SpeechGateTest 24 用例（触发必发言七类/低分静默含占位/阈值边界 0.15 附近/ wait_bias 打折/动机分映射/COLD_BREAK/静态工具 isMentioning·isQuestioning·scanTurns·reasonOf），全量 214 tests / 0 failures（190 基线 + 24）；②人类发言权豁免：人类 @某 AI → 该 AI 强制发言且注入辩解目标；③静默成员跳过 LLM 生成（成本控制）；④schema 契约文档 docs/剧本-schema-v1.md 同步 talkativeness 字段；⑤注意：任务书原指定登记 D-019，但 D-019 已被演讲广播方案B 占用，按序顺延登记为 **D-022**；⑥未 git commit（未获授权）

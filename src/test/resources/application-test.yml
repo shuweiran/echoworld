@@ -44,6 +44,13 @@ roleplay:
     dm:
       # C4 主持人面板 key：测试默认放开（与审批门同模式）；DM key 越权用例在 controller 层反射注入验证
       key: ""
+    discussion:
+      # 批次 D 发言门控：与主 yml 同步默认值（silence-floor=0.15 / priority-decay-rounds=3 / wait-bias=0.5 / cold-break=true）
+      max-rounds: 2
+      silence-floor: 0.15
+      priority-decay-rounds: 3
+      wait-bias: 0.5
+      cold-break: true
   broadcast:
     # 演讲与广播合并地基：公告管线节流参数（测试用默认窗口，便于覆盖节流/合并用例）
     window-ms: 1000

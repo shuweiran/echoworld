@@ -5,16 +5,18 @@
 
 ---
 
-## 📊 当前基线（最新汇总，2026-08-01 10:00）
+## 📊 当前基线（最新汇总，2026-08-01 13:39）
 
 | 指标 | 值 |
 |---|---|
-| 测试类 | **28** |
-| 测试用例 | **190** |
+| 测试类 | **29** |
+| 测试用例 | **214** |
 | Failures / Errors | **0 / 0** |
-| 最后全量执行 | 2026-08-01 13:10（合并方案正式版 merged 落地，190/0） |
+| 最后全量执行 | 2026-08-01 13:39（批次D 收尾：SpeechGateTest 24 用例，214/0） |
 | 环境 | H2 mem + mock LLM（application-test.yml） |
 | 真机验证 | **merged 正式版 7 项 PASS**（2026-08-01 13:05，台账 #47：模式默认 merged / 玩家广播 / AI 演讲 fallback 升级 / 断线补发 recent / 模式往返切换 / 剧本杀阶段公告 / SSE announcement+script_* 并存） |
+
+> v12 更新：基线从 190 → **214 tests / 29 类**（批次D 收尾：SpeechGateTest 24 用例——触发必发言七类（MENTION/QUESTION/HUMAN_CLUE/EMOTION/ROUND_FIRST/CLUE/COLD_BREAK + 多触发命中本角色，talkativeness=0 仍发言）/ 低分静默（含 SILENCE_MARKER 占位）/ 阈值边界（pri 5→P=0.145 静默·pri 6→P=0.154 发言 + 自定义 floor 包络）/ wait_bias 打折（人类发言中未点名 0.154→0.077 静默，高动机仍发言）/ 动机分映射与高动机突破 / COLD_BREAK 候选与开关 / 静态工具（isMentioning/isQuestioning/scanTurns/reasonOf/null target 契约））；详见 Round 12
 
 > v11 更新：基线从 183 → **190 tests / 28 类**（合并方案正式版：MergedSpeechModeTest 7 用例——声学判定单事实源 HearingSystem.countHearingListeners 近/远、merged 半径内可听→area 演讲、无听众+fallback=true→global 公告、无听众+fallback=false→不升级保持 area、剧本杀阶段 SYSTEM 广播 merged 默认触发、script-phase-broadcast=false 总开关静默、merged 下 SpeechStrategy 不内联推送防双发回归；speech-mode 默认 merged，auto/split 保留回退；SpeechStrategySplitModeTest 默认断言改 merged）；真机验证 7 项 PASS（台账 #47，2026-08-01 13:05）
 > v10 更新：基线从 176 → **183 tests / 27 类**（方案B 分步落地：SpeechStrategySplitModeTest 5 用例——split 内联区域广播/auto 静默/运行时切换/HearingSystem 远近判定/无听众仍区域；ScriptGamePhaseAnnouncementTest 2 用例——五处阶段切换 SYSTEM 广播 + 与 script_phase 并存）
@@ -27,7 +29,7 @@
 
 ---
 
-## 测试类明细（190 tests / 28 类）
+## 测试类明细（214 tests / 29 类）
 
 | 测试类 | 用例 | 状态 | 对应 |
 |---|---|---|---|
@@ -46,6 +48,7 @@
 | **DatabaseServiceTest** | 1 | ✅ | LONG-02 |
 | **InteractionDetectorBoundaryTest** | 2 | ✅ | 阈值 40 边界 |
 | **TrackDirectorSecretOverrideTest** | 4 | ✅ | 秘密强制 ISOLATED |
+| **SpeechGateTest** | 24 | ✅ | **批次D 发言门控（P0-1：触发必发言七类/低分静默含占位/阈值边界 0.15/wait_bias/动机分/COLD_BREAK/isMentioning/isQuestioning/scanTurns/reasonOf）** |
 | **ScriptGameServiceTest** | 12 | ✅ | **剧本杀 D6/D7（平票重投/非法票/揭晓审批）** |
 | **ScriptGameDiscussionTest** | 4 | ✅ | **剧本杀 GAP-3（讨论接对话引擎 A3-1~A3-4）** |
 | **AnnouncementServiceTest** | 7 | ✅ | **演讲+广播合并地基（优先级/节流/合并/自动选择/事件总线/SSE/断线补发）** |
@@ -71,6 +74,15 @@
 ---
 
 ## 📝 执行历史（追加式）
+### 2026-08-01 13:35–13:39 — 批次D 收尾：SpeechGate 专项测试（Round 12，214 tests）
+- **命令**：`mvn test`（全量；新测试类先行单跑 24/0 通过后全量复跑）
+- **结果**：214 tests / **0 failures** / 29 类 / BUILD SUCCESS（surefire 报告逐类核对：24 类之和 214，0 失败 0 错误）
+- **新增**：SpeechGateTest 24 用例（纯单测，SpeechGate 为确定性组件无 Spring/mock LLM）——①触发必发言：MENTION/QUESTION/HUMAN_CLUE/EMOTION/ROUND_FIRST/CLUE/COLD_BREAK 七类触发 + 多触发并存命中本角色，talkativeness=0 仍发言（不受概率限制）；②低分静默：无触发+低动机(pri 0→0.1)+低健谈(0.1) → P=0.01<0.15 静默，原因含「静默·P=」，占位符 SILENCE_MARKER==「……（沉默）」断言；③阈值边界：默认 0.15 附近 pri 5→P=0.145 静默 / pri 6→P=0.154 发言；自定义 floor 0.1535/0.1545 包络 P=0.154 两侧；④wait_bias：人类发言中未被点名 P×0.5 打折（0.154→0.077 静默，原因含「人类发言中」）；高动机 pri 100 打折后 0.5 仍发言；⑤动机分：motiveScore 0→0.1/5→0.145/50→0.55/100→1.0、负值与超界钳制；高动机(pri 100)+低健谈(0.2)→P=0.2 突破阈值发言；⑥COLD_BREAK：候选全低分仍必发言（原因「触发·冷场破冰」）+ 开关默认 true/显式 false；⑦静态工具：isMentioning（@名/句首/标点后点名，嵌入词「是管家/管家婆」不误判，前字符空格不误判）；isQuestioning（？/怎么/解释/为什么/你说）；scanTurns（QUESTION/MENTION 产出、自点名/空发言/空 speaker/空 map 跳过、null 入参空安全）；reasonOf 七类型映射；null target 触发与 null 列表不强制发言（全员相关事件由调用方转 per-member 触发）
+- **回归**：既有 190 基线零破坏（含 LONG-01 10 万字：P50=2ms / P95=4ms / Max=26ms，堆增长 -22.2% 无 OOM——未触发堆测量脆性）；单跑 SpeechGateTest 24/0（0.074s）
+- **文档**：docs/剧本-schema-v1.md 同步 roles[].talkativeness（缺省 0.5，兼容 personality.talkativeness 嵌套）；DECISION_LOG 新增 D-022（SpeechGate 决策记录，任务书要求 D-019 已被方案B 占用按序顺延）；docs/修改记录.md 台账 #52；本文件 v12
+- **前端**：未动（收尾三评估：SILENCE_MARKER 渲染与 @AI 输入提示——P-0801-B Phaser 批次占用 App.tsx/ScenePage.tsx/appStore/package.json 等前端文件，且改动需 npm run build 重操作；经查讨论区消息渲染走通用消息列表（无静默占位特殊样式），输入框为普通文本框无 @ 提及逻辑，建议后续批次处理，见报告）
+- **git**：未 commit（未获授权）
+
 ### 2026-08-01 11:58–12:40 — 方案B 分步落地 demo（Round 10，183 tests）
 - **命令**：`mvn test`（全量）
 - **结果**：183 tests / **0 failures** / 27 类 / BUILD SUCCESS
@@ -215,7 +227,7 @@
 
 
 ### 2026-08-01 12:43-13:40 — Phaser 阶段0 验证 demo（Node/Python/Edge headless 自测，非 JUnit；台账 #49）
-- **范围**：新增 src/main/resources/static/simulation/phaser_validate/（纯静态 demo，零 Java/前端构建改动）+ docs/地图JSON契约-draft.md；Java 测试基线不变（190/0，未运行 mvn）
+- **范围**：新增 src/main/resources/static/simulation/phaser_validate/（纯静态 demo，零 Java/前端构建改动）+ docs/地图JSON契约-draft.md（未衡审核通过后已更名 `地图JSON契约-v1.md`）；Java 测试基线不变（190/0，未运行 mvn）
 - **自测命令与结果**（demo 目录下执行）：
   - python tools/self_test.py http://127.0.0.1:8899（需先 python -m http.server 8899）→ **http 模式 5/5 页签 ALL PASS**：①瓦片渲染+碰撞（stats 面板：老宅 20×14 / ground 行数 14×列数 20 / 碰撞格 160 / 1 玩家+3 AI / canvas 已建）②BSP 分区（生成器/校验器 ✅ 通过/map_version 1/json-bsp 预览/canvas）③Zone 热点（热点数/互动方式/线索绑定/clue-box/canvas）④Aseprite 动画（「4 个动画已创建」（createFromAseprite）+ load.aseprite + spritesheet 管线/canvas）⑤地图 JSON 契约（schema-table/校验器输入输出/contract-json 样例）；每页签 boot-errors 为空（无 JS 异常）
   - python tools/self_test_file.py → **file:// 模式 5/5 ALL PASS**（内嵌 base64 资源兜底：浏览器禁 file:// XHR，检测 protocol 后自动切换 js/assets_embedded.js 的 data URI）

@@ -291,7 +291,7 @@ public class ConversationManager {
     }
 
     private void executeRound(ConversationGroup group, ConversationStrategy strategy) {
-        executeRound(group, strategy, null);
+        executeRound(group, strategy, null, null);
     }
 
     /**
@@ -300,6 +300,16 @@ public class ConversationManager {
      */
     private void executeRound(ConversationGroup group, ConversationStrategy strategy,
                               Map<String, String> contextCapture) {
+        executeRound(group, strategy, contextCapture, null);
+    }
+
+    /**
+     * GAP-3: 可捕获上下文 + 门控决策的轮次执行（批次 D）。
+     * gate 非空时：skipSpeakers 完全跳过（人类已发言、AI 不代声）；speakMap=false 的成员
+     * 跳过 LLM 生成（成本控制）并以静默占位入 responses（processResults 统一入发言记录）。
+     */
+    private void executeRound(ConversationGroup group, ConversationStrategy strategy,
+                              Map<String, String> contextCapture, RoundGateDecision gate) {
         // D1: 已停止 → 不再启动新一轮生成，直接解散
         if (stopped) {
             group.setActive(false);
@@ -325,6 +335,12 @@ public class ConversationManager {
             String name = entry.getKey();
             String context = entry.getValue().get("context");
 
+            // 批次 D：门控——本轮已由人类发言的角色，AI 不代声（完全跳过，不产生占位）
+            if (gate != null && gate.skipSpeakers().contains(name)) {
+                latch.countDown();
+                continue;
+            }
+
             // Skip LLM for player-controlled agents - use their existing message
             AgentState playerState = world.getState(name);
             if (playerState != null && playerState.isPlayerControlled()) {
@@ -334,6 +350,13 @@ public class ConversationManager {
                 } else {
                     responses.put(name, "...");
                 }
+                latch.countDown();
+                continue;
+            }
+
+            // 批次 D：门控——静默成员跳过 LLM 生成，输出静默占位（“……（沉默）”）
+            if (gate != null && !gate.speakMap().getOrDefault(name, true)) {
+                responses.put(name, SpeechGate.SILENCE_MARKER);
                 latch.countDown();
                 continue;
             }
@@ -478,8 +501,21 @@ public class ConversationManager {
      * 轮次阶段（同步驱动）：复用 TrackStrategy 的 prepareContext/processResults；
      * WEAK=摘要隔离由 EavesdropSummarizer 承担（只给摘要，不给明文）。
      * 结束后解散群组并返回发言记录 + 最后一轮上下文。
+     * 旧签名（无门控）保留：全员每轮必发言（批次 A 行为，2D/旧测试路径不变）。
      */
     public ScriptDiscussionResult runScriptDiscussionRounds(ConversationGroup group, int maxRounds) {
+        return runScriptDiscussionRounds(group, maxRounds, null);
+    }
+
+    /**
+     * 轮次阶段（同步驱动，批次 D 门控版）：每轮先经 {@code roundGate} 决策“谁发言/谁静默”，
+     * 再走 TrackStrategy。静默成员跳过 LLM 调用（省成本），输出静默占位“……（沉默）”入发言记录；
+     * skipSpeakers（本轮已由人类发言、AI 不代声）完全跳过不产生占位。
+     *
+     * @param roundGate 每轮门控决策（group, 轮次下标 0-based → 决策）；null = 全员必发言（旧行为）
+     */
+    public ScriptDiscussionResult runScriptDiscussionRounds(ConversationGroup group, int maxRounds,
+            java.util.function.BiFunction<ConversationGroup, Integer, RoundGateDecision> roundGate) {
         if (group == null) return new ScriptDiscussionResult(List.of(), Map.of());
         ConversationStrategy strategy = strategies.get(ConversationMode.GROUP_DISCUSSION);
         if (strategy == null) strategy = strategies.get(ConversationMode.DYAD);
@@ -492,7 +528,8 @@ public class ConversationManager {
         int rounds = Math.max(1, maxRounds);
         for (int r = 0; r < rounds && group.isActive() && strategy.shouldContinue(group) && !stopped; r++) {
             try {
-                executeRound(group, strategy, lastContexts);
+                RoundGateDecision gate = roundGate == null ? null : roundGate.apply(group, r);
+                executeRound(group, strategy, lastContexts, gate);
             } catch (Exception e) {
                 log.warn("Script discussion group {} round {} failed: {}",
                         group.getGroupId(), r + 1, e.getMessage());
@@ -506,6 +543,15 @@ public class ConversationManager {
                 group.getGroupId(), roundCount, transcript.size());
         return new ScriptDiscussionResult(transcript, lastContexts);
     }
+
+    /**
+     * 剧本杀讨论门控决策（批次 D）：每轮
+     * <ul>
+     *   <li>{@code speakMap}：name → true=LLM 发言 / false=静默占位（跳过 LLM）</li>
+     *   <li>{@code skipSpeakers}：完全跳过（人类已发言，AI 不代声；不产生占位）</li>
+     * </ul>
+     */
+    public record RoundGateDecision(Map<String, Boolean> speakMap, Set<String> skipSpeakers) {}
 
     private void dissolveGroup(String groupId) {
         ConversationGroup group = activeGroups.remove(groupId);

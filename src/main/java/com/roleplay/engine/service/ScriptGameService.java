@@ -14,6 +14,7 @@ import com.roleplay.engine.simulation.Emotion;
 import com.roleplay.engine.simulation.SimulationWorld;
 import com.roleplay.engine.simulation.conversation.ConversationGroup;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
+import com.roleplay.engine.simulation.conversation.SpeechGate;
 import com.roleplay.engine.simulation.director.WorldDirectorService;
 import com.roleplay.engine.simulation.track.TrackAssignment;
 import org.slf4j.Logger;
@@ -76,6 +77,22 @@ public class ScriptGameService {
     @Value("${roleplay.game.discussion.max-rounds:2}")
     private int discussionMaxRounds = 2;
 
+    /** 批次 D: 发言门控静默阈值（demo 实测安全区间 [0.10, 0.20]，默认 0.15；0.25 会冷场失衡）。 */
+    @Value("${roleplay.game.discussion.silence-floor:0.15}")
+    private double discussionSilenceFloor = 0.15;
+
+    /** 批次 D: 临时应激目标（被质疑→辩解）衰减轮数（demo：pri100 衰减 25/轮≈4 轮；默认 3）。 */
+    @Value("${roleplay.game.discussion.priority-decay-rounds:3}")
+    private int priorityDecayRounds = 3;
+
+    /** 批次 D: 人类发言中，未被点名的 AI 静默等待系数（P × wait-bias；默认 0.5，对齐 demo）。 */
+    @Value("${roleplay.game.discussion.wait-bias:0.5}")
+    private double discussionWaitBias = 0.5;
+
+    /** 批次 D: 冷场破冰总开关（连续全员静默 → 按动机指定破冰者；默认 true）。 */
+    @Value("${roleplay.game.discussion.cold-break:true}")
+    private boolean discussionColdBreak = true;
+
     /** C2: 玩家初始行动点基础值（角色 ap_bonus 叠加；行动力限制，蓝图 P2，可配置）。 */
     @Value("${roleplay.game.ap.base:3}")
     private int apBase = 3;
@@ -87,6 +104,8 @@ public class ScriptGameService {
     public static final String GOAL_FIND_TRUTH = "查明真相";
     /** GAP-3: 目标驱动 —— 持秘密角色注入“隐藏秘密”。 */
     public static final String GOAL_HIDE_SECRET = "隐藏秘密";
+    /** 批次 D: 临时应激目标 —— 被质疑/被点名时瞬时拉满优先级的“辩解”目标（衰减后回落）。 */
+    public static final String GOAL_DEFEND = "辩解";
     /** GAP-3: 讨论组 ID 前缀。 */
     private static final String DISCUSSION_GROUP_PREFIX = "script_discussion_";
 
@@ -126,6 +145,13 @@ public class ScriptGameService {
         final Map<String, Integer> playerAp = new LinkedHashMap<>();
         // C2: 行动点上限 —— player → 初始 AP（status/ap_max 展示用）
         final Map<String, Integer> playerApMax = new LinkedHashMap<>();
+        // 批次 D: 人格化健谈度 —— player → talkativeness（发言门控概率输入；缺省 0.5，schema roles[].talkativeness）
+        final Map<String, Double> playerTalkativeness = new LinkedHashMap<>();
+        // 批次 D: 人类玩家标记 —— player → isHuman（当前全部玩家为真人；人类发言豁免门控、AI 按事件响应）
+        final Map<String, Boolean> playerIsHuman = new LinkedHashMap<>();
+        // 批次 D: 人类发言事件队列（discussionSay 入队，讨论线程每轮开头排空注入）
+        final java.util.concurrent.ConcurrentLinkedQueue<Map<String, Object>> pendingHumanEvents =
+                new java.util.concurrent.ConcurrentLinkedQueue<>();
         // C3: 角色令牌 —— player → roleKey（每个玩家唯一；断线重连/顶号认证，对齐 Chronos roleKey）
         final Map<String, String> playerKeys = new LinkedHashMap<>();
         final Map<String, String> votes = new LinkedHashMap<>(); // voter → suspect
@@ -307,6 +333,19 @@ public class ScriptGameService {
             game.playerApMax.put(player, ap);
         }
 
+        // 批次 D: 按角色分配 talkativeness（schema roles[].talkativeness，缺省 0.5；发言门控概率输入）
+        Map<String, Double> talkativenessByName = ScriptSchemaV1.talkativenessByRoleName(script);
+        for (String player : game.players) {
+            String role = game.assignments.getOrDefault(player, "");
+            double tt = role.isEmpty() ? ScriptSchemaV1.DEFAULT_TALKATIVENESS
+                    : talkativenessByName.getOrDefault(role, ScriptSchemaV1.DEFAULT_TALKATIVENESS);
+            game.playerTalkativeness.put(player, Math.max(0.0, Math.min(1.0, tt)));
+        }
+        // 批次 D: 人类玩家标记（当前剧本杀全员为真人玩家；AI 讨论角色由引擎代声）
+        for (String player : game.players) {
+            game.playerIsHuman.put(player, true);
+        }
+
         // C3: 每玩家生成唯一 roleKey（对齐 Chronos：开房生成每角色 roleKey；断线重连/顶号认证一体）
         for (String player : game.players) {
             game.playerKeys.put(player, UUID.randomUUID().toString());
@@ -449,6 +488,15 @@ public class ScriptGameService {
         // 转交：ownership 变更（源移除 → 目标加入）
         myClues.remove(clueId);
         game.playerClues.computeIfAbsent(targetPlayer, k -> new ArrayList<>()).add(clueId);
+        // 批次 D: 讨论阶段转交线索 = 线索公开事件 → 相关 AI 按动机触发发言（人类线索链）
+        if (game.phase == Phase.DISCUSSION) {
+            Map<String, Object> ev = new LinkedHashMap<>();
+            ev.put("player", player);
+            ev.put("text", player + " 公开了线索「" + clue.get("title") + "」并转交给 " + targetPlayer);
+            ev.put("clue", true);
+            ev.put("ts", System.currentTimeMillis());
+            game.pendingHumanEvents.add(ev);
+        }
         // C3: 状态变更 → 快照落库（线索归属可恢复）
         saveSnapshot(game);
 
@@ -807,16 +855,24 @@ public class ScriptGameService {
                               : "未持秘密角色：公开讨论（MERGED）"));
         }
 
-        // 4) 建组（同步，A3-1 可立即断言）→ 后台驱动轮次 → 结束自动进 VOTE（A3-3）
+        // 4) 建组（同步，A3-1 可立即断言）→ 后台驱动轮次（批次 D：SpeechGate 发言门控）→ 结束自动进 VOTE（A3-3）
         ConversationGroup group = discussionConversation.createScriptDiscussionGroup(
                 DISCUSSION_GROUP_PREFIX + game.sessionId, members, tracks);
         game.discussionActive = true;
+        // 批次 D: 门控实例（阈值可配，对齐 D-004；默认值=demo 实测安全区间）
+        SpeechGate speechGate = new SpeechGate(discussionSilenceFloor, discussionWaitBias, discussionColdBreak);
+        // 批次 D: 发言扫描游标（只扫描自上次门控以来的新增发言，防重复触发）
+        final int[] scannedTurns = {0};
         discussionExecutor.submit(() -> {
             try {
+                java.util.function.BiFunction<ConversationGroup, Integer, ConversationManager.RoundGateDecision> gate =
+                        buildRoundGate(game, speechGate, scannedTurns);
                 ConversationManager.ScriptDiscussionResult result =
-                        discussionConversation.runScriptDiscussionRounds(group, discussionMaxRounds);
+                        discussionConversation.runScriptDiscussionRounds(group, discussionMaxRounds, gate);
                 game.discussionTranscript.addAll(result.transcript());
                 game.discussionContexts.putAll(result.lastContexts());
+                // 批次 D: 排空讨论结束后到达的人类发言（仍入讨论记录，保证不丢）
+                drainLateHumanEvents(game);
                 log.info("Script game {} discussion done: {} turns",
                         game.sessionId, result.transcript().size());
             } catch (Exception e) {
@@ -830,6 +886,186 @@ public class ScriptGameService {
                 broadcastPhase(game, "vote");
             }
         });
+    }
+
+    /**
+     * 批次 D: 讨论门控编排（每轮一次，由 ConversationManager 在每轮 LLM 生成前调用）——
+     * ① 排空人类发言事件（人类发言权豁免：直接注入对话流，不过门控；该角色本轮 AI 不代声）；
+     * ② 扫描自上次以来的新增发言（含人类 @）→ 点名/提问触发 + 被点名角色注入辩解临时目标
+     *    （瞬时高优先、N 轮衰减回落，对齐 Bates 情绪→目标再评价）；
+     * ③ 人类公开新线索 → 相关 AI（动机优先级≥50）按动机触发发言；
+     * ④ 情绪超阈值 → 必发言；⑤ 轮次首句 → 全员必发言（开局自我介绍）；
+     * ⑥ 冷场破冰：上一轮全员静默且无人类发言 → 按动机选破冰者（侦探提问/凶手转移焦点）；
+     * ⑦ 逐成员 SpeechGate 决策（talkativeness × 动机分 × wait_bias vs silence-floor）。
+     */
+    private java.util.function.BiFunction<ConversationGroup, Integer, ConversationManager.RoundGateDecision>
+            buildRoundGate(ScriptGame game, SpeechGate speechGate, int[] scannedTurns) {
+        return (group, roundIdx) -> {
+            // 0) 临时应激目标每轮衰减（被质疑→辩解 pri100，N 轮后回落主动机）
+            worldDirector.decayTemporaryGoals();
+
+            // 1) 排空人类发言事件 → 直接注入对话流（人类发言权豁免，不过门控）
+            List<Map<String, Object>> events = new ArrayList<>();
+            Map<String, Object> ev;
+            while ((ev = game.pendingHumanEvents.poll()) != null) events.add(ev);
+            boolean humanSpokeThisRound = !events.isEmpty();
+            Set<String> humanSpokenPlayers = new HashSet<>();
+            for (Map<String, Object> e : events) {
+                String p = str(e.get("player"));
+                String txt = str(e.get("text"));
+                humanSpokenPlayers.add(p);
+                group.recordTurn(p, txt.isBlank() ? "（发言）" : txt);
+            }
+
+            // 2) 扫描新增发言（人类与 AI 统一：@某AI → 该 AI 强制发言；被点名 → 辩解应激）
+            List<SpeechGate.SpeechTrigger> triggers = new ArrayList<>();
+            List<Map<String, String>> history = group.getMessageHistory();
+            int from = Math.min(scannedTurns[0], history.size());
+            scannedTurns[0] = history.size();
+            for (int i = from; i < history.size(); i++) {
+                Map<String, String> turn = history.get(i);
+                String speaker = turn.get("speaker");
+                String msg = turn.get("message");
+                if (speaker == null || msg == null || msg.isBlank()) continue;
+                for (String member : game.players) {
+                    if (member.equals(speaker)) continue;
+                    if (SpeechGate.isMentioning(msg, member)) {
+                        SpeechGate.TriggerType tt = SpeechGate.isQuestioning(msg, member)
+                                ? SpeechGate.TriggerType.QUESTION : SpeechGate.TriggerType.MENTION;
+                        triggers.add(new SpeechGate.SpeechTrigger(tt, member));
+                        // 被质疑 → 辩解临时目标瞬时拉满（Bates：情绪→目标再评价；priority-decay-rounds 轮衰减）
+                        worldDirector.pushTemporaryGoal(member, GOAL_DEFEND, 100, priorityDecayRounds);
+                    }
+                }
+            }
+
+            // 3) 人类公开新线索 → 相关 AI 按动机触发发言（动机优先级≥50 的角色=高相关：凶手脱罪/平民隐藏）
+            for (Map<String, Object> e : events) {
+                if (Boolean.TRUE.equals(e.get("clue"))) {
+                    for (String member : game.players) {
+                        if (worldDirector.getGoalPriority(member) >= 50) {
+                            triggers.add(new SpeechGate.SpeechTrigger(SpeechGate.TriggerType.HUMAN_CLUE, member));
+                        }
+                    }
+                }
+            }
+
+            // 4) 情绪超阈值 → 必发言（ANGRY/SAD/CONFUSED/SURPRISED，对齐 demo emotion_threshold）
+            for (String member : game.players) {
+                AgentState st = discussionWorld.getState(member);
+                if (st != null && (st.getEmotion() == Emotion.ANGRY || st.getEmotion() == Emotion.SAD
+                        || st.getEmotion() == Emotion.CONFUSED || st.getEmotion() == Emotion.SURPRISED)) {
+                    triggers.add(new SpeechGate.SpeechTrigger(SpeechGate.TriggerType.EMOTION, member));
+                }
+            }
+
+            // 5) 轮次首句：开局每人自我介绍（混合节奏开局的固定节拍，防冷场第一道闸）
+            if (roundIdx == 0) {
+                for (String member : game.players) {
+                    triggers.add(new SpeechGate.SpeechTrigger(SpeechGate.TriggerType.ROUND_FIRST, member));
+                }
+            }
+
+            // 6) 冷场破冰：上一轮全员静默且无人类发言 → 按动机选破冰者（侦探提问/凶手转移焦点/外向者兜底）
+            String iceBreaker = null;
+            if (speechGate.isColdBreakEnabled()) {
+                int n = game.players.size();
+                List<Map<String, String>> h = group.getMessageHistory();
+                if (h.size() >= n) {
+                    boolean allSilent = true;
+                    for (int i = h.size() - n; i < h.size(); i++) {
+                        String m = h.get(i).get("message");
+                        if (m == null || !m.contains(SpeechGate.SILENCE_MARKER)) { allSilent = false; break; }
+                    }
+                    if (allSilent) {
+                        iceBreaker = pickIceBreaker(game);
+                    }
+                }
+            }
+
+            // 7) 逐成员 SpeechGate 决策（talkativeness × 动机分 × wait_bias vs silence-floor）
+            Map<String, Boolean> speakMap = new LinkedHashMap<>();
+            Set<String> skip = new HashSet<>(humanSpokenPlayers);
+            for (String member : game.players) {
+                if (skip.contains(member)) continue; // 人类已发言 → AI 不代声（人类发言权豁免）
+                double talk = game.playerTalkativeness.getOrDefault(member, ScriptSchemaV1.DEFAULT_TALKATIVENESS);
+                int pri = worldDirector.getGoalPriority(member);
+                SpeechGate.GateDecision d = speechGate.decide(member, talk, pri, triggers,
+                        member.equals(iceBreaker), humanSpokeThisRound);
+                speakMap.put(member, d.speak());
+            }
+            return new ConversationManager.RoundGateDecision(speakMap, skip);
+        };
+    }
+
+    /** 冷场破冰者：按动机选择——查明真相（侦探位）优先，其次最高动机优先级、最健谈者兜底。 */
+    private String pickIceBreaker(ScriptGame game) {
+        for (String member : game.players) {
+            if (GOAL_FIND_TRUTH.equals(worldDirector.getGoal(member))) return member;
+        }
+        String best = null;
+        int bestPri = -1;
+        double bestTalk = -1;
+        for (String member : game.players) {
+            int pri = worldDirector.getGoalPriority(member);
+            double talk = game.playerTalkativeness.getOrDefault(member, ScriptSchemaV1.DEFAULT_TALKATIVENESS);
+            if (pri > bestPri || (pri == bestPri && talk > bestTalk)) {
+                bestPri = pri;
+                bestTalk = talk;
+                best = member;
+            }
+        }
+        return best;
+    }
+
+    /** 批次 D: 排空讨论结束后到达的人类发言（仍入讨论记录；引擎排空过的队列此处为空，不重复）。 */
+    private void drainLateHumanEvents(ScriptGame game) {
+        Map<String, Object> ev;
+        while ((ev = game.pendingHumanEvents.poll()) != null) {
+            Map<String, String> turn = new LinkedHashMap<>();
+            turn.put("speaker", str(ev.get("player")));
+            turn.put("message", str(ev.get("text")));
+            turn.put("round", String.valueOf(game.round));
+            game.discussionTranscript.add(turn);
+        }
+    }
+
+    /**
+     * 批次 D: 人类发言入口（人机混合讨论）——人类发言权豁免（不过门控，直接注入讨论流）；
+     * 消息中 @角色名 会被解析为强制触发（目标 AI 必发言、其余 AI 本轮倾向静默等待 wait_bias）；
+     * isClue=true 表示人类公开新线索 → 相关 AI 按动机触发发言。
+     */
+    public Map<String, Object> discussionSay(String sessionId, String player, String message, boolean isClue) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (game.phase != Phase.DISCUSSION) return Map.of("error", "当前不是讨论阶段");
+        if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
+        if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
+        if (message == null || message.isBlank()) return Map.of("error", "发言内容不能为空");
+
+        Map<String, Object> ev = new LinkedHashMap<>();
+        ev.put("player", player);
+        ev.put("text", message);
+        ev.put("clue", isClue);
+        ev.put("ts", System.currentTimeMillis());
+        game.pendingHumanEvents.add(ev);
+
+        // 可观测：被 @ 的目标（强制发言名单，响应回显供前端展示）
+        List<String> mentioned = new ArrayList<>();
+        for (String member : game.players) {
+            if (!member.equals(player) && SpeechGate.isMentioning(message, member)) mentioned.add(member);
+        }
+        log.info("Script game {} human {} spoke: {}{} @{}",
+                sessionId, player,
+                message.length() > 60 ? message.substring(0, 60) : message,
+                isClue ? "（公开线索）" : "", mentioned);
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("player", player);
+        r.put("message", message);
+        r.put("clue", isClue);
+        r.put("mentions", mentioned);
+        return r;
     }
 
     /** 懒创建讨论引擎（独立实例，不与 2D 模拟共享，避免重 init 互相覆盖）。 */
@@ -1314,6 +1550,7 @@ public class ScriptGameService {
         content.put("player_clues", new LinkedHashMap<>(game.playerClues));
         content.put("player_ap", new LinkedHashMap<>(game.playerAp));
         content.put("player_ap_max", new LinkedHashMap<>(game.playerApMax));
+        content.put("player_talkativeness", new LinkedHashMap<>(game.playerTalkativeness));
         content.put("player_keys", new LinkedHashMap<>(game.playerKeys));
         content.put("votes", new LinkedHashMap<>(game.votes));
         content.put("locations", new ArrayList<>(game.locations));
@@ -1356,6 +1593,12 @@ public class ScriptGameService {
         }
         game.playerAp.putAll(intMap(c.get("player_ap")));
         game.playerApMax.putAll(intMap(c.get("player_ap_max")));
+        // 批次 D: talkativeness 快照恢复（旧快照无此键 → 空 map，门控按缺省 0.5 兜底）
+        game.playerTalkativeness.putAll(doubleMap(c.get("player_talkativeness")));
+        // 批次 D: 人类玩家标记（全员真人，缺省 true；恢复后按玩家补齐）
+        for (String p : game.players) {
+            game.playerIsHuman.put(p, true);
+        }
         game.playerKeys.putAll(strMap(c.get("player_keys")));
         game.votes.putAll(strMap(c.get("votes")));
         game.locations.addAll(strList(c.get("locations")));
@@ -1426,6 +1669,20 @@ public class ScriptGameService {
             for (Map.Entry<?, ?> e : m.entrySet()) {
                 if (e.getKey() == null) continue;
                 out.put(str(e.getKey()), e.getValue() == null ? "" : str(e.getValue()));
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Double> doubleMap(Object o) {
+        Map<String, Double> out = new LinkedHashMap<>();
+        if (o instanceof Map<?, ?> m) {
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                if (e.getKey() == null) continue;
+                if (e.getValue() instanceof Number n) {
+                    out.put(str(e.getKey()), n.doubleValue());
+                }
             }
         }
         return out;

@@ -52,12 +52,17 @@ public class WorldDirectorService {
     /** 手动设定的目标优先级（sticky，高于任何规则目标）。 */
     private static final int MANUAL_GOAL_PRIORITY = 100;
 
-    /** agent → 当前有效目标（规则或手动）。 */
+    /** agent → 当前有效目标（规则或手动或临时）。 */
     private final Map<String, String> agentGoals = new ConcurrentHashMap<>();
     /** agent → 手动设定目标（粘性，updateGoals 不覆盖）。 */
     private final Map<String, String> manualGoals = new ConcurrentHashMap<>();
+    /** agent → 手动目标优先级（批次 D：动机优先级，默认 MANUAL_GOAL_PRIORITY=100）。 */
+    private final Map<String, Integer> manualPriorities = new ConcurrentHashMap<>();
     /** agent → 目标详情（含优先级），供输出/调试。 */
     private final Map<String, AgentGoal> goalDetails = new ConcurrentHashMap<>();
+    /** agent → 临时应激目标（批次 D：被质疑→辩解，瞬时高优先 + N 轮衰减回落，对齐 Bates 情绪→目标再评价）。
+     *  临时目标存在时压过手动/规则目标；衰减到期后回落。 */
+    private final Map<String, TemporaryGoal> temporaryGoals = new ConcurrentHashMap<>();
 
     /** Phase 4 LLM 扩展点：可为 null（null 时 generateGoalWithLLM 直接规则回退）。 */
     private final LLMClient llmClient;
@@ -73,22 +78,130 @@ public class WorldDirectorService {
     /** 目标输出记录：与需求文档输出对齐，含优先级用于冲突裁决。 */
     public record AgentGoal(String agentId, String goal, int priority) {}
 
-    /** 显式设定目标（玩家指令 / 秘密任务注入）。粘性：规则更新不覆盖。 */
+    /**
+     * 临时应激目标（批次 D）：瞬时高优先级、N 轮线性衰减后回落（Bates 1994：情绪→目标再评价）。
+     * 示例：被质疑 → 辩解目标 pri 100 压过日常隐藏/脱罪目标，衰减 N 轮后回落到主动机。
+     */
+    public static final class TemporaryGoal {
+        public final String goal;
+        public volatile int priority;
+        public volatile int remainingRounds;
+        public final int decayStep;
+
+        TemporaryGoal(String goal, int priority, int remainingRounds, int decayStep) {
+            this.goal = goal;
+            this.priority = priority;
+            this.remainingRounds = remainingRounds;
+            this.decayStep = decayStep;
+        }
+    }
+
+    /** 显式设定目标（玩家指令 / 秘密任务注入）。粘性：规则更新不覆盖。旧签名保留（等价 pri=100 sticky）。 */
     public void setGoal(String agent, String goal) {
-        manualGoals.put(agent, goal);
+        setGoal(agent, goal, MANUAL_GOAL_PRIORITY, true);
+    }
+
+    /** 显式设定目标并指定优先级（粘性）。 */
+    public void setGoal(String agent, String goal, int priority) {
+        setGoal(agent, goal, priority, true);
+    }
+
+    /**
+     * 显式设定目标：priority 为动机优先级（高优先=更愿意为推进该目标而主动发言），
+     * sticky=true 粘性（updateGoals 不覆盖）/ false 非粘性（规则可覆盖）。
+     */
+    public void setGoal(String agent, String goal, int priority, boolean sticky) {
+        if (agent == null || agent.isBlank()) return;
+        int p = Math.max(1, priority);
+        if (sticky) {
+            manualGoals.put(agent, goal);
+            manualPriorities.put(agent, p);
+            agentGoals.put(agent, goal);
+            goalDetails.put(agent, new AgentGoal(agent, goal, p));
+        } else {
+            // 非粘性：立即生效但不受 updateGoals 保护（规则可覆盖），也不锁 manualGoals
+            agentGoals.put(agent, goal);
+            goalDetails.put(agent, new AgentGoal(agent, goal, p));
+        }
+    }
+
+    /**
+     * 临时应激目标：瞬时高优先级压过当前目标，decayRounds 轮线性衰减后移除并回落到手动/规则目标。
+     * （批次 D：被质疑→辩解 pri 100，priority-decay-rounds 可配，默认 3 轮）
+     */
+    public void pushTemporaryGoal(String agent, String goal, int priority, int decayRounds) {
+        if (agent == null || agent.isBlank() || goal == null || goal.isBlank()) return;
+        int rounds = Math.max(1, decayRounds);
+        int step = Math.max(1, Math.max(1, priority) / rounds);
+        temporaryGoals.put(agent, new TemporaryGoal(goal, Math.max(1, priority), rounds, step));
         agentGoals.put(agent, goal);
-        goalDetails.put(agent, new AgentGoal(agent, goal, MANUAL_GOAL_PRIORITY));
+        goalDetails.put(agent, new AgentGoal(agent, goal, Math.max(1, priority)));
+    }
+
+    /**
+     * 每轮衰减临时目标（调用方在每轮决策前调用）。到期 → 移除并回落到手动（粘性）目标或规则目标。
+     * 返回本轮受影响（衰减/到期）的角色列表，供调用方观测。
+     */
+    public List<String> decayTemporaryGoals() {
+        List<String> affected = new java.util.ArrayList<>();
+        if (temporaryGoals.isEmpty()) return affected;
+        for (Map.Entry<String, TemporaryGoal> e : temporaryGoals.entrySet()) {
+            TemporaryGoal tg = e.getValue();
+            tg.remainingRounds--;
+            if (tg.remainingRounds <= 0) {
+                affected.add(e.getKey());
+            } else {
+                tg.priority = Math.max(1, tg.priority - tg.decayStep);
+                affected.add(e.getKey());
+            }
+        }
+        for (String a : affected) {
+            TemporaryGoal tg = temporaryGoals.get(a);
+            if (tg != null) {
+                agentGoals.put(a, tg.goal);
+                goalDetails.put(a, new AgentGoal(a, tg.goal, tg.priority));
+            } else {
+                recomputeEffectiveGoal(a);
+            }
+        }
+        return affected;
+    }
+
+    /** 临时目标到期/被清除后，回落到手动（粘性）目标；无手动目标则清空（交由规则 updateGoals 重建）。 */
+    private void recomputeEffectiveGoal(String agent) {
+        if (manualGoals.containsKey(agent)) {
+            String g = manualGoals.get(agent);
+            agentGoals.put(agent, g);
+            goalDetails.put(agent, new AgentGoal(agent, g, manualPriorities.getOrDefault(agent, MANUAL_GOAL_PRIORITY)));
+        } else {
+            agentGoals.remove(agent);
+            goalDetails.remove(agent);
+        }
     }
 
     /** 清除手动目标与有效目标，恢复规则驱动。 */
     public void clearGoal(String agent) {
         manualGoals.remove(agent);
+        manualPriorities.remove(agent);
+        temporaryGoals.remove(agent);
         agentGoals.remove(agent);
         goalDetails.remove(agent);
     }
 
     public String getGoal(String agent) {
         return agentGoals.get(agent);
+    }
+
+    /** 当前有效目标优先级（批次 D：动机优先级——临时目标 > 手动目标 > 规则目标详情；缺省 50）。 */
+    public int getGoalPriority(String agent) {
+        if (agent == null) return 50;
+        TemporaryGoal tg = temporaryGoals.get(agent);
+        if (tg != null) return tg.priority;
+        if (manualGoals.containsKey(agent)) {
+            return manualPriorities.getOrDefault(agent, MANUAL_GOAL_PRIORITY);
+        }
+        AgentGoal g = goalDetails.get(agent);
+        return g != null ? g.priority() : 50;
     }
 
     /** 当前全部有效目标（agent → goal）。 */
@@ -118,6 +231,11 @@ public class WorldDirectorService {
         for (AgentState s : agents) {
             String name = s.getAgentName();
             if (name == null) continue;
+            // 临时应激目标优先于一切（批次 D：辩解等瞬时目标压过手动/规则）。
+            if (temporaryGoals.containsKey(name)) {
+                updated.put(name, temporaryGoals.get(name).goal);
+                continue;
+            }
             // 手动目标粘性优先：外部注入的目标不被规则覆盖。
             if (manualGoals.containsKey(name)) {
                 updated.put(name, manualGoals.get(name));

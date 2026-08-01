@@ -29,6 +29,7 @@
 | `roles[].intro` | string | 可选 | 角色介绍，缺省空串 | `roles[].role_intro` |
 | `roles[].is_hidden` | bool | 可选 | 是否隐藏角色，缺省 false | `roles[].is_hidden` |
 | `roles[].secret` | string | 可选 | **该角色不可告人的秘密**（D5 按角色发放的权威来源） | （Chronos 无，本项目扩展） |
+| `roles[].talkativeness` | double | 可选 | **人格化健谈度（批次 D）**：发言门控概率输入 [0,1]，侦探/外向角色给 0.6-0.9、内向寡言角色给 0.2-0.4，**缺省 0.5 中性**；也兼容嵌套写法 `roles[].personality.talkativeness`；被点名/被提问/轮次首句等规则触发时强制发言不受其限制 | （Chronos 无，本项目扩展，见 DECISION_LOG D-022） |
 | `roles[].ap_bonus` | int | 可选 | **行动点加成（C2）**：该角色初始 AP 额外加成（侦探类角色给 1-2，行动点多，蓝图 P2 角色差异化搜证），缺省 0 | （Chronos 无，本项目扩展） |
 | `clues[]` | array | ✅ | 线索表（缺省兜底 3 条） | `clues[]` |
 | `clues[].id` | string | ✅ | 线索 id，形如 `clue_1` | `clues[].clue_id` |
@@ -47,7 +48,8 @@
 
 > **宽容解析规则**（`ScriptSchemaV1.normalize`，旧→新映射）：
 > - `name` → `metadata.title`（v1 输出同时保留 `name` 键兼容）
-> - `roles: ["管家"]` → `roles[]` 对象（id 递增、intro/is_hidden/secret/ap_bonus 缺省）
+> - `roles: ["管家"]` → `roles[]` 对象（id 递增、intro/is_hidden/secret/ap_bonus/talkativeness 缺省）
+> - **`talkativeness` 缺省 0.5**（批次 D：旧剧本/测试 mock 无此字段时发言门控按中性健谈度，向后兼容；`roles[].personality.talkativeness` 嵌套写法归一为顶层 `talkativeness`）
 > - `clues[].public=true` → `visible_to_owner_only=false`（反向亦然），`public`/`related_role` 派生保留
 > - **`ap_cost` 缺省 1、`ap_bonus` 缺省 0**（C2：旧剧本无此字段时搜证按 1 扣 AP、角色无加成，向后兼容）
 > - `killer`（角色名）→ 反查 `roles[].id` 得 `killer_id`
@@ -70,9 +72,9 @@
   "name": "庄园疑云",
   "background": "风雨交加的夜晚，庄园主人倒在血泊中，在场宾客皆有嫌疑……",
   "roles": [
-    {"id": "role_1", "name": "管家", "intro": "服侍庄园三代人", "is_hidden": false, "secret": "你贪图遗产，案发当晚去过书房", "ap_bonus": 0},
-    {"id": "role_2", "name": "女仆", "intro": "新来的女仆，沉默寡言", "is_hidden": false, "secret": "你知道主人有私生子", "ap_bonus": 0},
-    {"id": "role_3", "name": "侦探", "intro": "退休警探，受邀查案", "is_hidden": false, "secret": "你隐瞒了案发时在场的事实", "ap_bonus": 2}
+    {"id": "role_1", "name": "管家", "intro": "服侍庄园三代人", "is_hidden": false, "secret": "你贪图遗产，案发当晚去过书房", "ap_bonus": 0, "talkativeness": 0.4},
+    {"id": "role_2", "name": "女仆", "intro": "新来的女仆，沉默寡言", "is_hidden": false, "secret": "你知道主人有私生子", "ap_bonus": 0, "talkativeness": 0.3},
+    {"id": "role_3", "name": "侦探", "intro": "退休警探，受邀查案", "is_hidden": false, "secret": "你隐瞒了案发时在场的事实", "ap_bonus": 2, "talkativeness": 0.8}
   ],
   "locations": ["客厅", "书房", "花园", "厨房", "地下室"],
   "clues": [
@@ -111,5 +113,6 @@
 | `timeline` DAG（entry_node + nodes + advance_condition） | 无，流程为六态状态机（SETUP→INVESTIGATION→DISCUSSION→VOTE→REVEAL→ENDED） | 线性流程 + 状态机已满足需求；DAG 节点化留 P2 |
 | `visible_to` 表达式（roles/others/if_clue） | 收敛为 `clues[].visible_to_owner_only` + 服务端按玩家过滤 toMap | 本项目无多节点内容块 |
 | `ap_cost` / CLUE_SEARCH 节点 | ✅ **已支持（批次 C2）**：`clues[].ap_cost`（缺省 1）+ 搜证扣 AP（基础值 `roleplay.game.ap.base` 默认 3 + 角色 `ap_bonus`）；AP 不足整次拒绝 | 行动力限制（蓝图 P2 后备）已落地，见 DECISION_LOG D-016 |
+| `roles[].talkativeness` | ✅ **已支持（批次 D）**：`roles[].talkativeness`（缺省 0.5，兼容 `personality.talkativeness` 嵌套）→ `ScriptGameService` 按角色名装载 `playerTalkativeness`，作为发言门控 `P = 动机分 × talkativeness` 的概率输入（被点名等规则触发不受限） | 人格化发言概率（P0-1 发言门控）已落地，见 DECISION_LOG D-022 |
 | `assets.bgm/images` | 无 | 前端无此消费 |
 | `transferable` | ✅ **已启用（批次 C2）**：`clues[].transferable=true` 的线索可经 `POST /api/script/transfer_clue` 转交（仅持有者可转交，转交后 ownership 变更，接收方 status/my_clues 可见） | 线索转交（蓝图 P2 后备）已落地，见 DECISION_LOG D-016 |

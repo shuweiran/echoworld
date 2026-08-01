@@ -27,6 +27,9 @@ public final class ScriptSchemaV1 {
     /** 当前 schema 版本。 */
     public static final int CURRENT_VERSION = 1;
 
+    /** 默认角色健谈度（批次 D：talkativeness 人格化发言概率，缺省 0.5 中性）。 */
+    public static final double DEFAULT_TALKATIVENESS = 0.5;
+
     /** 兜底秘密文案（每个角色必有秘密，A1-3：LLM 异常兜底仍含 secrets 且键集合==roles）。 */
     private static final String FALLBACK_SECRET = "你有一段不愿为人所知的往事，它与这起案件有着隐秘的联系。";
 
@@ -51,7 +54,8 @@ public final class ScriptSchemaV1 {
             - metadata：title 剧本名称；player_min/player_max 按角色数给合理区间；tags 风格标签
             - roles[]：每个角色一个对象，id 形如 "role_1"（从 1 递增）、name 角色名、intro 角色介绍、
               is_hidden 是否隐藏角色（默认 false）、secret 该角色不可告人的秘密、
-              ap_bonus 行动点加成（侦探类角色给 1-2，其余给 0，默认 0）
+              ap_bonus 行动点加成（侦探类角色给 1-2，其余给 0，默认 0）、
+              talkativeness 健谈程度（0.0-1.0，侦探/外向角色给 0.6-0.9，内向寡言角色给 0.2-0.4，默认 0.5）
             - 每个角色都有作案动机和秘密，其中一个角色是凶手
             - killer_id：指向凶手角色的 id
             - clues[]：至少 3 条线索，每条含 id、title（线索名）、location（所属地点）、content（线索内容）、
@@ -65,7 +69,7 @@ public final class ScriptSchemaV1 {
             {"schema_version": 1,
              "metadata": {"title": "剧本名称", "player_min": 2, "player_max": 5, "tags": ["本格推理"]},
              "background": "背景故事（100-150字）",
-             "roles": [{"id": "role_1", "name": "角色1", "intro": "角色介绍", "is_hidden": false, "secret": "秘密内容", "ap_bonus": 0}],
+             "roles": [{"id": "role_1", "name": "角色1", "intro": "角色介绍", "is_hidden": false, "secret": "秘密内容", "ap_bonus": 0, "talkativeness": 0.5}],
              "locations": ["地点1", "地点2"],
              "clues": [{"id": "clue_1", "title": "线索名", "location": "地点1", "content": "线索内容", "transferable": false, "visible_to_owner_only": false, "ap_cost": 1}],
              "secrets": {"角色1": "秘密内容"},
@@ -249,6 +253,37 @@ public final class ScriptSchemaV1 {
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  批次 D: talkativeness 人格化健谈度（发言门控概率输入）
+    // ═══════════════════════════════════════════════════════════
+
+    /** 角色健谈度（缺省 0.5；兼容 roles[].personality.talkativeness 嵌套写法，缺省 0.5）。 */
+    public static double roleTalkativeness(Map<String, Object> role) {
+        if (role == null) return DEFAULT_TALKATIVENESS;
+        Object t = role.get("talkativeness");
+        if (t instanceof Number n) return clamp01(n.doubleValue());
+        Object per = role.get("personality");
+        if (per instanceof Map<?, ?> pm) {
+            Object pt = pm.get("talkativeness");
+            if (pt instanceof Number n) return clamp01(n.doubleValue());
+        }
+        return DEFAULT_TALKATIVENESS;
+    }
+
+    /** 角色名 → 健谈度 映射（initGame 按玩家分配到的角色查发言概率；缺省 0.5）。 */
+    public static Map<String, Double> talkativenessByRoleName(Map<String, Object> script) {
+        Map<String, Double> m = new LinkedHashMap<>();
+        for (Map<String, Object> role : roleObjects(script)) {
+            String name = str(role.get("name"));
+            if (!name.isBlank()) m.put(name, roleTalkativeness(role));
+        }
+        return m;
+    }
+
+    private static double clamp01(double v) {
+        return Math.max(0.0, Math.min(1.0, v));
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  解析辅助
     // ═══════════════════════════════════════════════════════════
 
@@ -264,12 +299,21 @@ public final class ScriptSchemaV1 {
                     idx++;
                 } else if (o instanceof Map<?, ?> mm) {
                     String id = str(mm.get("id"));
-                    roles.add(role(id.isBlank() ? "role_" + idx : id,
+                    Map<String, Object> rl = role(id.isBlank() ? "role_" + idx : id,
                         str(mm.get("name")),
                         str(mm.get("intro")),
                         Boolean.TRUE.equals(mm.get("is_hidden")),
                         str(mm.get("secret")),
-                        intOf(mm.get("ap_bonus"), 0)));
+                        intOf(mm.get("ap_bonus"), 0));
+                    // 批次 D: talkativeness（roles[].talkativeness 或 roles[].personality.talkativeness，缺省 0.5）
+                    Object t = mm.get("talkativeness");
+                    if (t instanceof Number n) {
+                        rl.put("talkativeness", clamp01(n.doubleValue()));
+                    } else if (mm.get("personality") instanceof Map<?, ?> pm
+                            && pm.get("talkativeness") instanceof Number pn) {
+                        rl.put("talkativeness", clamp01(pn.doubleValue()));
+                    }
+                    roles.add(rl);
                     idx++;
                 }
             }
