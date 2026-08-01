@@ -1,7 +1,7 @@
 # 📖 文档地图 INDEX.md — Roleplay-Java 唯一文档入口
 
 > **AI 接手第一步：读本文件**，按场景定位要读的文档。本索引是**活文档**，新增/废弃文档必须同步更新本表（见文末维护规则）。
-> 最后更新：2026-08-01 20:4x（Phaser 迁移三阶段闭环状态同步）
+> 最后更新：2026-08-01 21:5x（新增 QUICKSTART.md 登记）
 
 ---
 
@@ -39,6 +39,7 @@
 | **做 2D 渲染 / Phaser 迁移** | `docs/Phaser迁移计划.md`（三阶段全闭环） | `DECISION_LOG.md`（D-020）、`docs/地图JSON契约-v1.md`（阶段 0 产出，已定稿）、阶段 2 后端 `src/main/java/com/roleplay/engine/simulation/map/` + `service/ScriptMapService.java`、前端 `roleplay-v4/frontend/src/phaser/`（mapData.ts / ScriptMapScene.ts / PhaserScriptMapView.tsx） |
 | **查历史修改** | `docs/修改记录.md`（台账，谁改了什么+核查状态） | git log |
 | **接手新会话** | 第一节「接手必读」5 件 | 本文件 |
+| **AI 接手速查（5 分钟）** | `docs/QUICKSTART.md`（新增 2026-08-01，AI 接手 5 分钟速查） | 第一节「接手必读」5 件 |
 | **考古旧方案** | `docs/archive/`（已废弃，仅参考） | — |
 
 ---
@@ -56,9 +57,10 @@
 | CLAUDE.md | Claude Code 入口 | 07-31 16:52 | 指向上述文件 |
 | .aiignore | AI 忽略清单 | 07-31 16:57 | target/日志/DB/缓存 |
 
-### docs/（活文档，10 件）
+### docs/（活文档，11 件）
 | 文件 | 类型 | 最后更新 | 说明 |
 |---|---|---|---|
+| QUICKSTART.md | AI 接手速查 | 08-01 新增 | 5 分钟上手路径（2026-08-01 新增；动态事实不复制，指向 PROJECT_CONTEXT.md） |
 | 问题清单-20260731.md | 缺陷登记 | 07-31 21:33 | A-G 全量 + H 文档对照 |
 | 剧本杀差距分析-待办.md | 开发蓝图 v3 | 07-31 21:26 | Step 3v/4v 剩余 |
 | 剧本杀调研报告-raw.md | 调研取证 | 07-31 16:06 | 行号级证据 |
