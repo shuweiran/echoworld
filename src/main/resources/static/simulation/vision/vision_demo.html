@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2D 视觉系统 Demo — 障碍物遮挡 × 迷雾 × 草丛</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; height: 100vh; overflow: hidden; }
+#main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#toolbar { display: flex; gap: 8px; padding: 8px 16px; background: #1e293b; border-bottom: 1px solid #334155; align-items: center; flex-wrap: wrap; }
+#toolbar h2 { font-size: 15px; margin-right: 12px; color: #38bdf8; white-space: nowrap; }
+.btn { padding: 5px 14px; border: 1px solid #475569; border-radius: 6px; cursor: pointer; font-size: 13px; background: #334155; color: #e2e8f0; transition: all 0.15s; }
+.btn:hover { background: #475569; }
+.btn.active { background: #16a34a; border-color: #16a34a; }
+.btn.danger { background: #991b1b; border-color: #991b1b; }
+.btn.danger:hover { background: #b91c1c; }
+#fps-info { font-size: 11px; color: #64748b; margin-left: auto; white-space: nowrap; }
+#canvas-wrap { flex: 1; position: relative; overflow: hidden; }
+canvas { display: block; width: 100%; height: 100%; }
+#panel { width: 330px; background: #1e293b; border-left: 1px solid #334155; display: flex; flex-direction: column; overflow-y: auto; flex-shrink: 0; }
+#panel h3 { padding: 10px 14px; font-size: 13px; color: #94a3b8; border-bottom: 1px solid #334155; }
+.section { padding: 10px 14px; border-bottom: 1px solid #1e293b; }
+.section h4 { font-size: 12px; color: #38bdf8; margin-bottom: 8px; font-weight: 600; }
+.row { display: flex; align-items: center; gap: 8px; font-size: 12px; margin: 5px 0; color: #cbd5e1; }
+.row label { flex-shrink: 0; }
+.row input[type=range] { flex: 1; accent-color: #38bdf8; }
+.row .val { color: #38bdf8; font-weight: 600; min-width: 34px; text-align: right; }
+.row input[type=checkbox] { accent-color: #38bdf8; }
+.switch { color: #94a3b8; }
+.ai-card { background: #0f172a; border-left: 3px solid #475569; border-radius: 6px; padding: 7px 9px; margin: 6px 0; font-size: 12px; line-height: 1.55; }
+.ai-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ai-name { font-weight: 600; font-size: 12px; }
+.badge { font-size: 10px; padding: 1px 7px; border-radius: 8px; font-weight: 600; }
+.badge.WANDER { background: #47556933; color: #94a3b8; border: 1px solid #475569; }
+.badge.SEARCH { background: #f59e0b22; color: #fbbf24; border: 1px solid #f59e0b66; }
+.badge.CHASE { background: #ef444422; color: #f87171; border: 1px solid #ef444466; }
+.saw { font-size: 11px; font-weight: 600; }
+.saw.yes { color: #4ade80; }
+.saw.no { color: #64748b; }
+.ai-detail { color: #64748b; font-size: 11px; }
+.ai-reason { color: #cbd5e1; font-size: 11px; }
+.pv-row { display: flex; align-items: center; gap: 6px; font-size: 12px; margin: 4px 0; color: #cbd5e1; }
+.pv-row .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.pv-row .st { margin-left: auto; font-size: 11px; }
+.st.ok { color: #4ade80; }
+.st.dim { color: #fbbf24; }
+.st.bad { color: #94a3b8; }
+#event-log { font-size: 11px; color: #94a3b8; line-height: 1.6; max-height: 110px; overflow-y: auto; }
+#event-log div { padding: 1px 0; border-bottom: 1px dashed #1e293b; }
+.legend-row { display: flex; align-items: center; gap: 8px; margin: 3px 0; font-size: 11px; color: #94a3b8; }
+.legend-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.legend-line { width: 18px; height: 0; border-top: 2px solid; flex-shrink: 0; }
+.guide { font-size: 11px; color: #64748b; line-height: 1.7; }
+.guide b { color: #94a3b8; }
+</style>
+</head>
+<body>
+<div id="main">
+  <div id="toolbar">
+    <h2>👁 视觉系统 Demo</h2>
+    <button class="btn" id="btn-pause" onclick="togglePause()">暂停</button>
+    <button class="btn danger" onclick="resetDemo()">重置</button>
+    <div id="fps-info">FPS: <span id="fps">-</span></div>
+  </div>
+  <div id="canvas-wrap">
+    <canvas id="cvs"></canvas>
+  </div>
+</div>
+
+<div id="panel">
+  <h3>视觉系统控制台</h3>
+
+  <div class="section">
+    <h4>🕹 玩家视野（可调）</h4>
+    <div class="row"><label>视野角</label><input type="range" id="fov-slider" min="60" max="180" step="5" value="100"><span class="val" id="fov-val">100°</span></div>
+    <div class="row"><label>视野范围</label><input type="range" id="range-slider" min="150" max="450" step="10" value="300"><span class="val" id="range-val">300</span></div>
+  </div>
+
+  <div class="section">
+    <h4>🌫 环境效果</h4>
+    <div class="row"><input type="checkbox" id="chk-fog" checked><label for="chk-fog">迷雾（雾内视野范围缩小 / 雾中实体变淡）</label></div>
+    <div class="row"><input type="checkbox" id="chk-grass" checked><label for="chk-grass">草丛（AI 看不见草丛里的你，玩家看得见草丛里的 AI）</label></div>
+  </div>
+
+  <div class="section">
+    <h4>🎯 可视化开关</h4>
+    <div class="row"><input type="checkbox" id="chk-cones" checked><label for="chk-cones">AI 视野锥</label></div>
+    <div class="row"><input type="checkbox" id="chk-los" checked><label for="chk-los">玩家→AI 视线连线</label></div>
+    <div class="row"><input type="checkbox" id="chk-ai-lines" checked><label for="chk-ai-lines">AI 感知连线（AI 看到玩家时红线）</label></div>
+  </div>
+
+  <div class="section">
+    <h4>🤖 AI 感知（AI 能看到什么 → 决定行为）</h4>
+    <div id="ai-cards"></div>
+  </div>
+
+  <div class="section">
+    <h4>🧍 玩家视角（被遮挡实体淡出）</h4>
+    <div id="player-view"></div>
+  </div>
+
+  <div class="section">
+    <h4>📜 事件流</h4>
+    <div id="event-log"></div>
+  </div>
+
+  <div class="section">
+    <h4>图例</h4>
+    <div class="legend-row"><div class="legend-dot" style="background:#38bdf8"></div>玩家（可移动）</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#475569"></div>AI（闲逛）</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#fbbf24"></div>AI（搜寻：听到/最近见过你）</div>
+    <div class="legend-row"><div class="legend-dot" style="background:#f87171"></div>AI（追击：此刻看到你）</div>
+    <div class="legend-row"><div class="legend-line" style="border-color:#4ade80"></div>视线畅通</div>
+    <div class="legend-row"><div class="legend-line" style="border-color:#ef4444"></div>被墙/障碍遮挡</div>
+    <div class="legend-row"><div class="legend-line" style="border-color:#c084fc"></div>目标藏在草丛</div>
+    <div class="legend-row"><div class="legend-line" style="border-color:#fbbf24"></div>迷雾削弱</div>
+    <div class="legend-row"><div class="legend-line" style="border-color:#64748b"></div>太远 / 视野角外</div>
+  </div>
+
+  <div class="section">
+    <h4>演示引导</h4>
+    <div class="guide">
+      ① 初始状态：玩家透过门缝看到草丛边的「影卫·青」（高亮绿圈）；<b>墙后的「守卫·铁」看不见</b>（淡出 + 红色虚线）；「猎手·风」太远、「巡游·金」在视野角外<br>
+      ② 对准门缝（墙中缝 y≈260~330）就能看到对面；走到墙后区域测试「AI 看不到墙后的你」<br>
+      ③ 走进<b>迷雾</b>：视野范围缩小；雾中实体变淡<br>
+      ④ 躲进<b>草丛</b>：AI 扫过却看不见你（看 AI 卡片与事件流）；走出草丛立刻被追击<br>
+      ⑤ WASD / 方向键 或 <b>点击地图</b> 移动玩家；空格暂停
+    </div>
+  </div>
+</div>
+
+<script src="vision_core.js"></script>
+<script>
+'use strict';
+const VC = window.VisionCore;
+const WORLD_W = 1000, WORLD_H = 600;
+
+const cvs = document.getElementById('cvs');
+const ctx = cvs.getContext('2d');
+
+// ── 世界：障碍物 / 草丛 / 迷雾（坐标系与 static/simulation.html 一致）──
+const world = {
+  obstacles: [
+    { x: 330, y: 60,  w: 16, h: 200, type: 'WALL',   blocksVision: true,  label: '墙' },
+    { x: 330, y: 330, w: 16, h: 200, type: 'WALL',   blocksVision: true,  label: '墙' },   // 与上墙之间留门缝 y≈260~330
+    { x: 520, y: 120, w: 18, h: 18,  type: 'PILLAR', blocksVision: true,  label: '柱' },
+    { x: 520, y: 462, w: 18, h: 18,  type: 'PILLAR', blocksVision: true,  label: '柱' },
+    { x: 700, y: 110, w: 18, h: 18,  type: 'PILLAR', blocksVision: true,  label: '柱' },
+    { x: 700, y: 470, w: 18, h: 18,  type: 'PILLAR', blocksVision: true,  label: '柱' },
+    { x: 560, y: 60,  w: 90, h: 14,  type: 'ROCK',   blocksVision: true,  label: '岩' },
+    { x: 150, y: 540, w: 120, h: 12, type: 'BENCH',  blocksVision: false, label: '长椅' }, // 不挡视线
+  ],
+  grassPatches: [
+    { x: 380, y: 285, w: 120, h: 90, label: '草丛' },
+  ],
+  fogZones: [
+    { x: 215, y: 110, r: 85, label: '迷雾' },
+    { x: 770, y: 150, r: 95, label: '迷雾' },
+    { x: 770, y: 455, r: 90, label: '迷雾' },
+  ],
+};
+
+// ── 显示开关 ──
+const prefs = { fog: true, grass: true, cones: true, los: true, aiLines: true };
+
+// ── 实体 ──
+function makePlayer() {
+  return { kind: 'player', agentName: '玩家', x: 200, y: 300, r: 12, color: '#38bdf8',
+           facing: 0, fov: 100, viewRange: 300, moveSpeed: 130, state: 'IDLE' };
+}
+function makeAI(name, x, y, color, anchorR) {
+  return {
+    kind: 'ai', agentName: name, x: x, y: y, r: 12, color: color,
+    facing: Math.random() * Math.PI * 2,
+    fov: 110, viewRange: 260, hearRange: 150,
+    moveSpeed: 55, chaseSpeed: 92,
+    anchorX: x, anchorY: y, anchorR: anchorR || 130,
+    heading: Math.random() * Math.PI * 2,
+    state: 'WANDER', reason: '', vis: null,
+    sawPlayer: false, heardPlayer: false,
+    lastSeenPos: null, lastSeenT: -99, lastHearT: -99,
+    turnT: 2 + Math.random() * 2, grassEventT: -99,
+  };
+}
+let player, ais, targetPt, simT, running, lastTs;
+
+function buildAgents() {
+  player = makePlayer();
+  ais = [
+    makeAI('守卫·铁', 430, 150, '#f472b6', 120),  // 墙后巡逻：初始被墙遮挡（淡出）
+    makeAI('影卫·青', 400, 310, '#34d399', 60),   // 门缝旁草丛：初始透过门缝可见（高亮）
+    makeAI('猎手·风', 600, 330, '#fb923c', 100),
+    makeAI('巡游·金', 180, 150, '#e879f9', 90),   // 常驻迷雾
+  ];
+  targetPt = null; simT = 0; running = true; lastTs = performance.now();
+}
+
+// ── 输入 ──
+const keys = {};
+window.addEventListener('keydown', e => {
+  if (['ArrowUp','ArrowDown','ArrowLeft','ArrowRight',' '].includes(e.key)) e.preventDefault();
+  keys[e.key] = true;
+  if (e.key === ' ') { const t = document.activeElement && document.activeElement.tagName; if (t !== 'INPUT' && t !== 'TEXTAREA') togglePause(); }
+});
+window.addEventListener('keyup', e => { keys[e.key] = false; });
+
+cvs.addEventListener('click', e => {
+  const rect = cvs.getBoundingClientRect();
+  const s = Math.min(cvs.width / WORLD_W, cvs.height / WORLD_H);
+  const ox = (cvs.width - WORLD_W * s) / 2, oy = (cvs.height - WORLD_H * s) / 2;
+  const wx = (e.clientX - rect.left - ox) / s, wy = (e.clientY - rect.top - oy) / s;
+  if (wx < 0 || wx > WORLD_W || wy < 0 || wy > WORLD_H) return;
+  targetPt = { x: wx, y: wy };
+});
+
+function resize() {
+  const wrap = document.getElementById('canvas-wrap');
+  cvs.width = wrap.clientWidth; cvs.height = wrap.clientHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ── 移动物理 ──
+function collidesAt(x, y, r) {
+  for (const o of world.obstacles) {
+    if (VC.circleRectHit(x, y, r, o.x, o.y, o.w, o.h)) return true;
+  }
+  return false;
+}
+function moveEntity(e, dx, dy) {
+  if (!collidesAt(e.x + dx, e.y, e.r)) e.x += dx;
+  if (!collidesAt(e.x, e.y + dy, e.r)) e.y += dy;
+  e.x = VC.clamp(e.x, e.r + 2, WORLD_W - e.r - 2);
+  e.y = VC.clamp(e.y, e.r + 2, WORLD_H - e.r - 2);
+}
+
+// ── 事件流 ──
+const events = [];
+function logEvent(msg) {
+  events.unshift('[' + simT.toFixed(1) + 's] ' + msg);
+  if (events.length > 6) events.pop();
+}
+
+// ── 更新：玩家 ──
+function updatePlayer(dt) {
+  let dx = 0, dy = 0;
+  if (keys['ArrowLeft'] || keys['a']) dx -= 1;
+  if (keys['ArrowRight'] || keys['d']) dx += 1;
+  if (keys['ArrowUp'] || keys['w']) dy -= 1;
+  if (keys['ArrowDown'] || keys['s']) dy += 1;
+  if (targetPt) {
+    const d = VC.dist(player.x, player.y, targetPt.x, targetPt.y);
+    if (d < 8) { targetPt = null; }
+    else { dx = (targetPt.x - player.x) / d; dy = (targetPt.y - player.y) / d; }
+  }
+  if (dx || dy) {
+    const len = Math.hypot(dx, dy);
+    moveEntity(player, dx / len * player.moveSpeed * dt, dy / len * player.moveSpeed * dt);
+    player.facing = Math.atan2(dy, dx);
+    player.state = 'MOVE';
+  } else { player.state = 'IDLE'; }
+}
+
+// ── 更新：AI（视野决定行为：可见→追击 / 听到或最近见过→搜寻 / 否则闲逛）──
+function updateAI(ai, dt) {
+  const env = { obstacles: world.obstacles, grassPatches: prefs.grass ? world.grassPatches : [], fogZones: prefs.fog ? world.fogZones : [] };
+  const vis = VC.visibilityOf(ai, player, env, { losPad: 6, grassHideDist: 46 });
+  ai.vis = vis;
+  ai.sawPlayer = vis.visible;
+  const d = VC.dist(ai.x, ai.y, player.x, player.y);
+  ai.heardPlayer = d <= ai.hearRange;
+  if (vis.visible) { ai.lastSeenPos = { x: player.x, y: player.y }; ai.lastSeenT = simT; }
+  if (ai.heardPlayer) ai.lastHearT = simT;
+
+  const prevState = ai.state;
+  if (ai.sawPlayer) ai.state = 'CHASE';
+  else if (simT - ai.lastSeenT < 3 || simT - ai.lastHearT < 1.5) ai.state = 'SEARCH';
+  else ai.state = 'WANDER';
+
+  // 草丛掩护事件（AI 扫过草丛没发现你）
+  if (vis.reason === VC.REASON.IN_GRASS && simT - ai.grassEventT > 2) {
+    ai.grassEventT = simT;
+    logEvent('🌿 ' + ai.agentName + ' 扫过草丛，没有发现你（草丛掩护生效）');
+  }
+  if (prevState !== ai.state) {
+    if (ai.state === 'CHASE') logEvent('🔥 ' + ai.agentName + ' 看见你了，开始追击！');
+    else if (ai.state === 'SEARCH') logEvent('🔎 ' + ai.agentName + ' 听到动静，开始搜寻…');
+    else if (prevState === 'CHASE') logEvent('😶 ' + ai.agentName + ' 跟丢了，恢复闲逛');
+  }
+
+  let speed = ai.moveSpeed, tx = null, ty = null;
+  if (ai.state === 'CHASE') {
+    speed = ai.chaseSpeed;
+    if (d >= 40) { tx = player.x; ty = player.y; }
+  } else if (ai.state === 'SEARCH') {
+    speed = ai.moveSpeed * 0.85;
+    const t = ai.lastSeenPos || { x: player.x, y: player.y };
+    tx = t.x; ty = t.y;
+    if (VC.dist(ai.x, ai.y, tx, ty) < 50) ai.state = 'WANDER';
+  } else {
+    ai.turnT -= dt;
+    if (ai.turnT <= 0) { ai.heading = Math.random() * Math.PI * 2; ai.turnT = 2 + Math.random() * 2.5; }
+    if (VC.dist(ai.x, ai.y, ai.anchorX, ai.anchorY) > ai.anchorR) {
+      ai.heading = VC.angleTo(ai.x, ai.y, ai.anchorX, ai.anchorY);
+    }
+    tx = ai.x + Math.cos(ai.heading) * 50;
+    ty = ai.y + Math.sin(ai.heading) * 50;
+  }
+
+  if (tx != null) {
+    const ang = Math.atan2(ty - ai.y, tx - ai.x);
+    ai.facing = ang;
+    const px = ai.x, py = ai.y;
+    moveEntity(ai, Math.cos(ang) * speed * dt, Math.sin(ang) * speed * dt);
+    if (ai.state === 'WANDER' && VC.dist2(px, py, ai.x, ai.y) < 0.01) {
+      ai.heading = Math.random() * Math.PI * 2; ai.turnT = 1; // 卡墙转向
+    }
+  } else {
+    ai.facing += dt * 0.8; // 原地警戒环视
+  }
+}
+
+// ── 绘制 ──
+const OB_COLOR = {
+  WALL: '#334155', PILLAR: '#3f3f46', ROCK: '#57534e',
+  BENCH: '#78350f', TREE: '#064e3b', BUSH: '#14532d',
+};
+
+function draw() {
+  const W = cvs.width, H = cvs.height;
+  ctx.clearRect(0, 0, W, H);
+  const s = Math.min(W / WORLD_W, H / WORLD_H);
+  const ox = (W - WORLD_W * s) / 2, oy = (H - WORLD_H * s) / 2;
+  ctx.save();
+  ctx.translate(ox, oy);
+  ctx.scale(s, s);
+
+  // 边框 + 网格
+  ctx.strokeStyle = '#334155'; ctx.lineWidth = 2; ctx.strokeRect(0, 0, WORLD_W, WORLD_H);
+  ctx.strokeStyle = '#1e293b'; ctx.lineWidth = 0.5;
+  for (let x = 100; x < WORLD_W; x += 100) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, WORLD_H); ctx.stroke(); }
+  for (let y = 100; y < WORLD_H; y += 100) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WORLD_W, y); ctx.stroke(); }
+
+  // 草丛（掩体）
+  for (const g of world.grassPatches) {
+    if (!prefs.grass) break;
+    ctx.fillStyle = '#16a34a22';
+    ctx.fillRect(g.x, g.y, g.w, g.h);
+    ctx.strokeStyle = '#4ade8088'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    ctx.strokeRect(g.x, g.y, g.w, g.h); ctx.setLineDash([]);
+    // 草丛纹理
+    ctx.strokeStyle = '#4ade8066'; ctx.lineWidth = 1;
+    for (let i = 0; i < 10; i++) {
+      const gx = g.x + 10 + (i * (g.w - 20)) / 10, gy = g.y + 15 + ((i * 37) % (g.h - 30));
+      ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx - 3, gy - 8); ctx.moveTo(gx, gy); ctx.lineTo(gx + 3, gy - 8); ctx.stroke();
+    }
+    ctx.font = '10px sans-serif'; ctx.fillStyle = '#4ade80cc'; ctx.textAlign = 'center';
+    ctx.fillText(g.label, g.x + g.w / 2, g.y - 6);
+  }
+
+  // 障碍物
+  for (const o of world.obstacles) {
+    ctx.fillStyle = OB_COLOR[o.type] || '#3f3f46';
+    ctx.strokeStyle = o.blocksVision === false ? '#47556988' : '#64748b';
+    ctx.lineWidth = 1;
+    ctx.fillRect(o.x, o.y, o.w, o.h);
+    ctx.strokeRect(o.x, o.y, o.w, o.h);
+    if (o.label) { ctx.font = '9px sans-serif'; ctx.fillStyle = '#94a3b8'; ctx.textAlign = 'center'; ctx.fillText(o.label, o.x + o.w / 2, o.y + o.h / 2 + 3); }
+  }
+
+  // 环境开关生效时使用的环境快照
+  const env = { obstacles: world.obstacles, grassPatches: prefs.grass ? world.grassPatches : [], fogZones: prefs.fog ? world.fogZones : [] };
+
+  // ── 视野多边形：玩家 ──
+  const ppoly = VC.buildVisionPolygon(player, env, { stepDeg: 2, losPad: 6 });
+  ctx.beginPath(); ctx.moveTo(player.x, player.y);
+  for (const p of ppoly) ctx.lineTo(p.x, p.y);
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(56,189,248,0.10)'; ctx.fill();
+  ctx.strokeStyle = 'rgba(56,189,248,0.45)'; ctx.lineWidth = 1.5; ctx.stroke();
+
+  // ── AI 视野锥 ──
+  if (prefs.cones) {
+    for (const ai of ais) {
+      const poly = VC.buildVisionPolygon(ai, env, { stepDeg: 4, losPad: 6 });
+      ctx.beginPath(); ctx.moveTo(ai.x, ai.y);
+      for (const p of poly) ctx.lineTo(p.x, p.y);
+      ctx.closePath();
+      ctx.fillStyle = ai.sawPlayer ? hexA(ai.color, 0.22) : hexA(ai.color, 0.09);
+      ctx.fill();
+      ctx.strokeStyle = ai.sawPlayer ? hexA(ai.color, 0.8) : hexA(ai.color, 0.35);
+      ctx.lineWidth = 1; ctx.stroke();
+    }
+  }
+
+  // ── 玩家→AI 视线连线 ──
+  if (prefs.los) {
+    for (const ai of ais) {
+      const pv = VC.visibilityOf(player, ai, env, { losPad: 6 });
+      let col, dash = [];
+      if (pv.reason === VC.REASON.VISIBLE) { col = '#4ade80'; }
+      else if (pv.reason === VC.REASON.BLOCKED) { col = '#ef4444'; dash = [5, 4]; }
+      else if (pv.reason === VC.REASON.IN_GRASS) { col = '#c084fc'; dash = [5, 4]; }
+      else if (pv.reason === VC.REASON.FOG_DIM) { col = '#fbbf24'; dash = [5, 4]; }
+      else { col = '#64748b'; dash = [2, 4]; }
+      ctx.strokeStyle = col; ctx.lineWidth = 1; ctx.setLineDash(dash);
+      ctx.globalAlpha = pv.visible ? 0.75 : 0.55;
+      ctx.beginPath(); ctx.moveTo(player.x, player.y); ctx.lineTo(ai.x, ai.y); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha = 1;
+    }
+  }
+
+  // ── AI 感知连线（AI 看到玩家 → 红线 + 标记）──
+  if (prefs.aiLines) {
+    for (const ai of ais) {
+      if (!ai.sawPlayer) continue;
+      ctx.strokeStyle = '#ef444488'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(ai.x, ai.y); ctx.lineTo(player.x, player.y); ctx.stroke();
+      const midx = (ai.x + player.x) / 2, midy = (ai.y + player.y) / 2 - 8;
+      ctx.font = 'bold 11px sans-serif'; ctx.fillStyle = '#f87171'; ctx.textAlign = 'center';
+      ctx.fillText('看到!', midx, midy);
+    }
+  }
+
+  // ── 实体：以「玩家视角」渲染可见性 ──
+  for (const ai of ais) {
+    const pv = VC.visibilityOf(player, ai, env, { losPad: 6 });
+    const seen = pv.visible;
+    const alpha = seen ? (pv.factor || 1) : 0.14;
+    const r = ai.r;
+    ctx.globalAlpha = alpha;
+
+    // 淡出实体：虚线灰圈 + ? + 原因
+    if (!seen) {
+      ctx.strokeStyle = '#64748b'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+      ctx.beginPath(); ctx.arc(ai.x, ai.y, r, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font = 'bold 13px sans-serif'; ctx.fillStyle = '#94a3b8'; ctx.textAlign = 'center';
+      ctx.fillText('?', ai.x, ai.y + 4);
+    } else {
+      ctx.fillStyle = ai.color;
+      ctx.beginPath(); ctx.arc(ai.x, ai.y, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2; ctx.stroke();
+      // 可见实体高亮圈
+      ctx.strokeStyle = '#4ade80'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(ai.x, ai.y, r + 4, 0, Math.PI * 2); ctx.stroke();
+    }
+
+    // 名字（可见实线 / 淡出半透明）
+    ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
+    ctx.fillStyle = seen ? ai.color : 'rgba(148,163,184,0.5)';
+    ctx.fillText(ai.agentName, ai.x, ai.y + r + 16);
+
+    // AI 状态标记（元信息：用户上帝视角可读）
+    const stMap = { CHASE: ['❗追击', '#f87171'], SEARCH: ['❓搜寻', '#fbbf24'], WANDER: ['◦闲逛', '#94a3b8'] };
+    const st = stMap[ai.state];
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillStyle = seen ? st[1] : hexA(st[1], 0.55);
+    ctx.fillText(st[0], ai.x, ai.y - r - 10);
+
+    // 淡出实体原因标签
+    if (!seen) {
+      const why = { BLOCKED: '墙后', OUT_OF_RANGE: '太远', OUT_OF_FOV: '视野外', IN_GRASS: '草丛', FOG_DIM: '雾中' };
+      ctx.font = '9px sans-serif'; ctx.fillStyle = 'rgba(148,163,184,0.6)';
+      ctx.fillText(why[pv.reason] || '', ai.x, ai.y + r + 28);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── 玩家 ──
+  ctx.fillStyle = player.color;
+  ctx.beginPath(); ctx.arc(player.x, player.y, player.r, 0, Math.PI * 2); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2.5; ctx.stroke();
+  // 朝向指示
+  ctx.strokeStyle = '#ffffffcc'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(player.x, player.y);
+  ctx.lineTo(player.x + Math.cos(player.facing) * 22, player.y + Math.sin(player.facing) * 22); ctx.stroke();
+  ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = '#38bdf8';
+  ctx.fillText('玩家', player.x, player.y + player.r + 16);
+
+  // ── 迷雾覆盖层（画在实体之上）──
+  if (prefs.fog) {
+    for (const f of world.fogZones) {
+      const grd = ctx.createRadialGradient(f.x, f.y, f.r * 0.2, f.x, f.y, f.r);
+      grd.addColorStop(0, 'rgba(226,232,240,0.13)');
+      grd.addColorStop(0.7, 'rgba(226,232,240,0.07)');
+      grd.addColorStop(1, 'rgba(226,232,240,0)');
+      ctx.fillStyle = grd;
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(226,232,240,0.35)'; ctx.lineWidth = 1; ctx.setLineDash([5, 5]);
+      ctx.beginPath(); ctx.arc(f.x, f.y, f.r, 0, Math.PI * 2); ctx.stroke(); ctx.setLineDash([]);
+      ctx.font = '10px sans-serif'; ctx.fillStyle = 'rgba(226,232,240,0.55)'; ctx.textAlign = 'center';
+      ctx.fillText(f.label, f.x, f.y + 3);
+    }
+  }
+
+  ctx.restore();
+
+  // 屏幕空间提示
+  ctx.font = '11px sans-serif';
+  ctx.fillStyle = 'rgba(148,163,184,0.7)';
+  ctx.textAlign = 'left';
+  ctx.fillText('WASD / 方向键 或 点击 移动玩家 · 空格暂停', 10, H - 10);
+  const inFogNow = VC.observerInFog(player, env.fogZones) ? '是' : '否';
+  ctx.fillText('玩家视野 ' + player.fov + '° / ' + Math.round(player.viewRange) + 'px · 雾中:' + inFogNow, 10, H - 26);
+}
+
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+}
+
+// ── 面板更新（节流 150ms）──
+const REASON_ZH = {
+  VISIBLE: '视线畅通 ✓', BLOCKED: '被墙/障碍遮挡 ✗', OUT_OF_RANGE: '超出视野 ✗',
+  OUT_OF_FOV: '在视野角外 ✗', IN_GRASS: '藏在草丛 ✗', FOG_DIM: '雾中可见度降低',
+};
+let panelAcc = 0;
+function updatePanel() {
+  const cards = document.getElementById('ai-cards');
+  const pvList = document.getElementById('player-view');
+  const env = { obstacles: world.obstacles, grassPatches: prefs.grass ? world.grassPatches : [], fogZones: prefs.fog ? world.fogZones : [] };
+  const stMap = { WANDER: '闲逛', SEARCH: '搜寻', CHASE: '追击' };
+
+  cards.innerHTML = ais.map(ai => {
+    const v = ai.vis || { reason: 'INIT', dist: 0, factor: 1 }; // 首帧前 updatePanel 的兜底
+    let reason;
+    if (ai.state === 'CHASE') reason = '🔥 看到玩家！距离 ' + Math.round(v.dist) + 'px，视线畅通';
+    else if (v.reason === VC.REASON.BLOCKED) reason = '被障碍物遮挡（' + Math.round(v.dist) + 'px）';
+    else if (v.reason === VC.REASON.IN_GRASS) reason = '目标藏在草丛中（' + Math.round(v.dist) + 'px）';
+    else if (v.reason === VC.REASON.OUT_OF_RANGE) reason = '超出视野 ' + Math.round(v.dist) + 'px（范围 ' + Math.round(ai.viewRange * (VC.observerInFog(ai, env.fogZones) ? 0.6 : 1)) + 'px）';
+    else if (v.reason === VC.REASON.OUT_OF_FOV) reason = '目标在视野角外（' + Math.round(v.dist) + 'px）';
+    else if (v.reason === VC.REASON.FOG_DIM) reason = '雾中可见，但可见度降低';
+    else reason = REASON_ZH[v.reason] || v.reason;
+    const badge = '<span class="badge ' + ai.state + '">' + stMap[ai.state] + '</span>';
+    const saw = '<span class="saw ' + (ai.sawPlayer ? 'yes' : 'no') + '">' + (ai.sawPlayer ? '看到玩家 ✓' : '未看到 ✗') + '</span>';
+    return '<div class="ai-card" style="border-left-color:' + ai.color + '">' +
+      '<div class="ai-head"><span class="ai-name" style="color:' + ai.color + '">' + ai.agentName + '</span>' + badge + saw + '</div>' +
+      '<div class="ai-detail">距离 ' + Math.round(v.dist) + 'px · 视野 ' + ai.fov + '°/' + Math.round(ai.viewRange) + 'px · 听觉 ' + ai.hearRange + 'px</div>' +
+      '<div class="ai-reason">判定：' + reason + '</div></div>';
+  }).join('');
+
+  pvList.innerHTML = ais.map(ai => {
+    const pv = VC.visibilityOf(player, ai, env, { losPad: 6 });
+    let st, cls;
+    if (pv.visible && pv.factor >= 1) { st = '可见'; cls = 'ok'; }
+    else if (pv.visible) { st = '可见·雾中变淡'; cls = 'dim'; }
+    else if (pv.reason === VC.REASON.BLOCKED) { st = '被墙挡住 ✗'; cls = 'bad'; }
+    else if (pv.reason === VC.REASON.OUT_OF_RANGE) { st = '太远 ✗'; cls = 'bad'; }
+    else if (pv.reason === VC.REASON.OUT_OF_FOV) { st = '视野外 ✗'; cls = 'bad'; }
+    else if (pv.reason === VC.REASON.IN_GRASS) { st = '草丛中(仍可见)'; cls = 'ok'; }
+    else { st = pv.reason; cls = 'bad'; }
+    return '<div class="pv-row"><span class="dot" style="background:' + ai.color + '"></span>' + ai.agentName +
+      '<span class="st ' + cls + '">' + st + '</span></div>';
+  }).join('');
+
+  document.getElementById('event-log').innerHTML = events.map(e => '<div>' + esc(e) + '</div>').join('');
+}
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+// ── 控制 ──
+function togglePause() {
+  running = !running;
+  document.getElementById('btn-pause').textContent = running ? '暂停' : '继续';
+  document.getElementById('btn-pause').classList.toggle('active', !running);
+  lastTs = performance.now();
+}
+function resetDemo() {
+  buildAgents();
+  events.length = 0;
+  document.getElementById('btn-pause').textContent = '暂停';
+  document.getElementById('btn-pause').classList.remove('active');
+  updatePanel();
+}
+
+// ── 控件绑定 ──
+document.getElementById('fov-slider').addEventListener('input', e => {
+  player.fov = +e.target.value;
+  document.getElementById('fov-val').textContent = player.fov + '°';
+});
+document.getElementById('range-slider').addEventListener('input', e => {
+  player.viewRange = +e.target.value;
+  document.getElementById('range-val').textContent = player.viewRange;
+});
+document.getElementById('chk-fog').addEventListener('change', e => { prefs.fog = e.target.checked; });
+document.getElementById('chk-grass').addEventListener('change', e => { prefs.grass = e.target.checked; });
+document.getElementById('chk-cones').addEventListener('change', e => { prefs.cones = e.target.checked; });
+document.getElementById('chk-los').addEventListener('change', e => { prefs.los = e.target.checked; });
+document.getElementById('chk-ai-lines').addEventListener('change', e => { prefs.aiLines = e.target.checked; });
+
+// ── 主循环 ──
+function frame(ts) {
+  const dt = Math.min(0.05, (ts - lastTs) / 1000);
+  lastTs = ts;
+  if (running) {
+    simT += dt;
+    updatePlayer(dt);
+    for (const ai of ais) updateAI(ai, dt);
+  }
+  draw();
+  panelAcc += dt;
+  if (panelAcc > 0.15) { panelAcc = 0; updatePanel(); }
+  const fps = Math.round(1 / Math.max(dt, 1e-3));
+  document.getElementById('fps').textContent = fps;
+  requestAnimationFrame(frame);
+}
+
+buildAgents();
+updatePanel();
+requestAnimationFrame(ts => { lastTs = ts; requestAnimationFrame(frame); });
+</script>
+</body>
+</html>
