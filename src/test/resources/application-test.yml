@@ -37,5 +37,24 @@ roleplay:
   mode:
     default: "free"
     language: "zh"
+  game:
+    ap:
+      # C2 行动点：测试环境与主 yml 同步（ScriptGameService @Value 默认 3，显式声明便于覆盖）
+      base: 3
+    dm:
+      # C4 主持人面板 key：测试默认放开（与审批门同模式）；DM key 越权用例在 controller 层反射注入验证
+      key: ""
+  broadcast:
+    # 演讲与广播合并地基：公告管线节流参数（测试用默认窗口，便于覆盖节流/合并用例）
+    window-ms: 1000
+    max-per-window: 5
+    max-pending: 20
+    recent-ring-size: 100
+    # 演讲广播模式（默认 merged=正式版；auto/split 为方案A/B 旧行为回退对比）
+    speech-mode: merged
+    # 无听众兜底（merged 生效）：true=升级全局公告 / false=仅区域演讲
+    fallback-to-global: true
+    # 剧本杀阶段切换 SYSTEM 广播总开关（默认 true=启用）
+    script-phase-broadcast: true
   frontend:
     dev-mode: false

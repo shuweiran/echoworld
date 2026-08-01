@@ -1,6 +1,7 @@
 package com.roleplay.engine.simulation.conversation;
 
 import com.roleplay.engine.agent.Agent;
+import com.roleplay.engine.broadcast.AnnouncementService;
 import com.roleplay.engine.interrupt.AgentTaskManager;
 import com.roleplay.engine.interrupt.CancellationToken;
 import com.roleplay.engine.interrupt.InterruptManager;
@@ -49,6 +50,21 @@ public class ConversationManager {
     /** D1: 停止标志 —— 模拟停止后群组循环不再开始新一轮生成。 */
     private volatile boolean stopped = false;
 
+    /** 演讲→广播监听器（演讲与广播合并地基）：PUBLIC_SPEAKING 轮次产出后回调，
+     *  由 SimulationService 注册，把 AI 演讲接入 AnnouncementService 统一管线。 */
+    private java.util.function.Consumer<SpeechTurn> speechBroadcastListener;
+
+    /** 方案B 共存开关：init 注入的 AnnouncementService（可空）。executeRound 在
+     *  split 模式下抑制方案A 回调，避免与 SpeechStrategy 内联广播重复推送。 */
+    private AnnouncementService announcementService;
+
+    /** 一次演讲产出（供广播管线使用：谁、说了什么、所属群组）。 */
+    public record SpeechTurn(String groupId, String speaker, String text) {}
+
+    public void setSpeechBroadcastListener(java.util.function.Consumer<SpeechTurn> listener) {
+        this.speechBroadcastListener = listener;
+    }
+
     public ConversationManager() {}
 
     /**
@@ -92,8 +108,23 @@ public class ConversationManager {
     public void init(SimulationWorld world, LLMClient llmClient,
                      java.util.function.Function<String, Agent> agentLookup,
                      java.util.function.Supplier<String> narrationSupplier) {
+        init(world, llmClient, agentLookup, narrationSupplier, null, null, null);
+    }
+
+    /**
+     * 方案B（分步落地）init：额外注入 AnnouncementService + HearingSystem/全量状态提供者，
+     * 传给 SpeechStrategy 使其 processResults 可内联发区域广播（speech-mode=split 时）。
+     * 旧四参 init 保留（方案A 路径 / 单元测试零依赖）。
+     */
+    public void init(SimulationWorld world, LLMClient llmClient,
+                     java.util.function.Function<String, Agent> agentLookup,
+                     java.util.function.Supplier<String> narrationSupplier,
+                     AnnouncementService announcementService,
+                     java.util.function.Supplier<HearingSystem> hearingSystem,
+                     java.util.function.Supplier<Collection<AgentState>> allStates) {
         this.world = world;
         this.llmClient = llmClient;
+        this.announcementService = announcementService;
 
         java.util.function.Function<String, String> narFn = s -> narrationSupplier.get();
 
@@ -109,7 +140,8 @@ public class ConversationManager {
         strategies.put(ConversationMode.GROUP_DISCUSSION, trackStrategy);
         strategies.put(ConversationMode.DEBATE, trackStrategy);
         strategies.put(ConversationMode.PUBLIC_SPEAKING,
-                new SpeechStrategy(agentLookup, narFn, getOrCreateTopicManager("speech")));
+                new SpeechStrategy(agentLookup, narFn, getOrCreateTopicManager("speech"),
+                        announcementService, hearingSystem, allStates));
     }
 
     public TopicManager getOrCreateTopicManager(String groupId) {
@@ -259,6 +291,15 @@ public class ConversationManager {
     }
 
     private void executeRound(ConversationGroup group, ConversationStrategy strategy) {
+        executeRound(group, strategy, null);
+    }
+
+    /**
+     * GAP-3: 可捕获上下文的轮次执行。contextCapture 非空时，每轮 prepareContext 后记录
+     * 各成员本轮上下文（name → context），供剧本杀讨论验证 WEAK 隔离（A3-2）。
+     */
+    private void executeRound(ConversationGroup group, ConversationStrategy strategy,
+                              Map<String, String> contextCapture) {
         // D1: 已停止 → 不再启动新一轮生成，直接解散
         if (stopped) {
             group.setActive(false);
@@ -266,6 +307,15 @@ public class ConversationManager {
         }
         Map<String, Map<String, String>> agentContexts = new ConcurrentHashMap<>();
         strategy.prepareContext(group, agentContexts);
+        if (contextCapture != null) {
+            contextCapture.clear();
+            for (var e : agentContexts.entrySet()) {
+                Map<String, String> info = e.getValue();
+                if (info != null && info.get("context") != null) {
+                    contextCapture.put(e.getKey(), info.get("context"));
+                }
+            }
+        }
 
         Map<String, String> responses = new ConcurrentHashMap<>();
         CountDownLatch latch = new CountDownLatch(agentContexts.size());
@@ -345,6 +395,26 @@ public class ConversationManager {
 
         strategy.processResults(group, responses, llmClient);
 
+        // 演讲与广播合并地基：演讲模式（PUBLIC_SPEAKING）产出 → 统一广播管线。
+        // 由 SimulationService 的监听器判定听众（merged=HearingSystem 声学判定 / auto=wouldOthersListen）
+        // 后走 AnnouncementService.enqueueAutoSpeech（演讲=区域广播 / 无听众=按兜底配置决定全局公告）。
+        // 方案B（speech-mode=split）时此处抑制——内联广播已由 SpeechStrategy.processResults
+        // 直接入队，三条路径互斥不重复推送（同一实例可经 POST /api/announcements/mode 切换）。
+        if (group.getMode() == ConversationMode.PUBLIC_SPEAKING
+                && speechBroadcastListener != null
+                && (announcementService == null
+                    || !"split".equals(announcementService.getSpeechMode()))) {
+            String speaker = group.getCurrentSpeaker();
+            String speech = responses.get(speaker);
+            if (speech != null && !speech.isBlank()) {
+                try {
+                    speechBroadcastListener.accept(new SpeechTurn(group.getGroupId(), speaker, speech));
+                } catch (Exception e) {
+                    log.warn("Speech broadcast listener failed for {}: {}", speaker, e.getMessage());
+                }
+            }
+        }
+
         Map<String, Object> convEntry = new LinkedHashMap<>();
         convEntry.put("group", group.getGroupId());
         convEntry.put("mode", group.getMode().name());
@@ -361,6 +431,80 @@ public class ConversationManager {
             log.info("Group {} round {} | {} responses",
                     group.getGroupId(), group.getRoundCount(), responses.size());
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  GAP-3: 剧本杀讨论（显式成员 + 显式轨道，不依赖 2D 空间听觉）
+    // ═══════════════════════════════════════════════════════════
+
+    /** 剧本杀讨论结果：完整发言记录 + 最后一轮各成员上下文（供 WEAK 隔离验证）。 */
+    public record ScriptDiscussionResult(
+            List<Map<String, String>> transcript,
+            Map<String, String> lastContexts) {}
+
+    /**
+     * 建组阶段（同步）：创建固定成员讨论组并注册到 activeGroups。
+     * 轨道分配由调用方显式给出（剧本杀：持秘密角色 WEAK / 未持 MERGED），
+     * 不经过空间听觉与 ModeClassifier。
+     *
+     * @return 讨论组（供 {@link #runScriptDiscussionRounds} 驱动）
+     */
+    public ConversationGroup createScriptDiscussionGroup(
+            String groupId, List<AgentState> members,
+            Map<String, TrackAssignment> trackAssignments) {
+        ConversationGroup group = new ConversationGroup(
+                groupId, ConversationMode.GROUP_DISCUSSION, members);
+        group.setTrackAssignments(trackAssignments == null ? Map.of() : trackAssignments);
+
+        for (AgentState s : members) {
+            s.setInConversation(true);
+            s.setVx(0);
+            s.setVy(0);
+            group.freeze(s.getAgentName());
+        }
+        String firstSpeaker = members.get(0).getAgentName();
+        group.setCurrentSpeaker(firstSpeaker);
+        activeGroups.put(groupId, group);
+
+        TopicManager tm = getOrCreateTopicManager(groupId);
+        tm.initiateTopic(groupId, "剧本杀案情讨论", firstSpeaker,
+                members.stream().map(AgentState::getAgentName).toList());
+        log.info("Script discussion group created: {} | members={}", groupId,
+                members.stream().map(AgentState::getAgentName).toList());
+        return group;
+    }
+
+    /**
+     * 轮次阶段（同步驱动）：复用 TrackStrategy 的 prepareContext/processResults；
+     * WEAK=摘要隔离由 EavesdropSummarizer 承担（只给摘要，不给明文）。
+     * 结束后解散群组并返回发言记录 + 最后一轮上下文。
+     */
+    public ScriptDiscussionResult runScriptDiscussionRounds(ConversationGroup group, int maxRounds) {
+        if (group == null) return new ScriptDiscussionResult(List.of(), Map.of());
+        ConversationStrategy strategy = strategies.get(ConversationMode.GROUP_DISCUSSION);
+        if (strategy == null) strategy = strategies.get(ConversationMode.DYAD);
+        if (strategy == null) {
+            dissolveGroup(group.getGroupId());
+            return new ScriptDiscussionResult(List.of(), Map.of());
+        }
+
+        Map<String, String> lastContexts = new LinkedHashMap<>();
+        int rounds = Math.max(1, maxRounds);
+        for (int r = 0; r < rounds && group.isActive() && strategy.shouldContinue(group) && !stopped; r++) {
+            try {
+                executeRound(group, strategy, lastContexts);
+            } catch (Exception e) {
+                log.warn("Script discussion group {} round {} failed: {}",
+                        group.getGroupId(), r + 1, e.getMessage());
+                break;
+            }
+        }
+        List<Map<String, String>> transcript = new ArrayList<>(group.getMessageHistory());
+        int roundCount = group.getRoundCount();
+        dissolveGroup(group.getGroupId());
+        log.info("Script discussion finished: {} | rounds={} turns={}",
+                group.getGroupId(), roundCount, transcript.size());
+        return new ScriptDiscussionResult(transcript, lastContexts);
     }
 
     private void dissolveGroup(String groupId) {

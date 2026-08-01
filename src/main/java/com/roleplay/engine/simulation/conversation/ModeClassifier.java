@@ -104,7 +104,12 @@ public class ModeClassifier {
         return ConversationMode.DYAD;
     }
 
-    private boolean wouldOthersListen(AgentState speaker, Map<String, AgentState> allStates) {
+    /**
+     * 演讲听众判定（演讲/广播合并地基复用点）：speaker 周围 2.5×hearRange 内、
+     * 距离 &gt; 50 的未入群角色 ≥2 → 有人听 → 该发言应走「演讲」（区域广播）。
+     * 公开供 SimulationService 的 AI 自动选择调用（原 private）。
+     */
+    public boolean wouldOthersListen(AgentState speaker, Map<String, AgentState> allStates) {
         int listeners = 0;
         for (AgentState other : allStates.values()) {
             if (other == speaker || other.isInConversation()) continue;

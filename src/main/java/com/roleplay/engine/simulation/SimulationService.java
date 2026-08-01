@@ -1,6 +1,8 @@
 package com.roleplay.engine.simulation;
 
 import com.roleplay.engine.agent.Agent;
+import com.roleplay.engine.broadcast.AnnouncementService;
+import com.roleplay.engine.broadcast.BroadcastMessage;
 import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.db.service.DatabaseService;
 import com.roleplay.engine.interrupt.AgentTaskManager;
@@ -9,6 +11,7 @@ import com.roleplay.engine.interrupt.StopType;
 import com.roleplay.engine.interrupt.WorldEventBus;
 import com.roleplay.engine.llm.LLMClient;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
+import com.roleplay.engine.simulation.conversation.ModeClassifier;
 import com.roleplay.engine.simulation.director.TrackDirectorService;
 import com.roleplay.engine.simulation.director.WorldDirectorService;
 import com.roleplay.engine.simulation.movement.MovementConstraint;
@@ -50,6 +53,8 @@ public class SimulationService {
     private final MovementConstraint movementConstraint = new MovementConstraint();
     /** Phase 4: 最近一次 orchestrator.tick 的轨道分配，供移动 tick 前的约束层使用。 */
     private volatile Map<String, TrackAssignment> lastTrackAssignments = Map.of();
+    /** 演讲与广播合并地基：统一公告管线（AI 演讲产出 → 自动选形态 → 优先级队列 → SSE）。 */
+    private final AnnouncementService announcementService;
     private final ExecutorService taskExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private volatile long lastDirectorTime = 0;
     private final Set<String> pendingUserMessages = ConcurrentHashMap.newKeySet();
@@ -58,20 +63,28 @@ public class SimulationService {
 
     public SimulationService(SimulationWorld world, LLMClient llmClient, DatabaseService databaseService,
                              InterruptManager interruptManager, AgentTaskManager agentTaskManager,
-                             WorldEventBus eventBus) {
+                             WorldEventBus eventBus, AnnouncementService announcementService) {
         this.world = world;
         this.llmClient = llmClient;
         this.databaseService = databaseService;
         this.interruptManager = interruptManager;
         this.agentTaskManager = agentTaskManager;
         this.eventBus = eventBus;
+        this.announcementService = announcementService;
         this.worldDirector = new WorldDirectorService(llmClient);
         conversationManager.init(world, llmClient,
                 name -> world.getAgent(name),
-                () -> world.getWorldNarration());
+                () -> world.getWorldNarration(),
+                // 方案B（分步落地）：传 AnnouncementService + HearingSystem/全量状态给
+                // SpeechStrategy，使其 processResults 可内联发区域广播（speech-mode=split 时）
+                announcementService,
+                world::getHearingSystem,
+                () -> world.getAllStates().values());
         // D1: 注入中断系统（2D 对话生成可被模拟停止 / 事件驱动取消）
         conversationManager.setInterruptManager(interruptManager);
         conversationManager.setAgentTaskManager(agentTaskManager);
+        // 演讲与广播合并地基：PUBLIC_SPEAKING 轮次产出 → 统一广播管线（自动选演讲/广播形态）
+        conversationManager.setSpeechBroadcastListener(this::onSpeechBroadcast);
         // Phase 3 wiring: Track Director decides group track assignments (with World
         // Director goals for conflict detection); legacy spatial-only path stays as
         // fallback inside ConversationManager when trackDirector is null.
@@ -239,6 +252,98 @@ public class SimulationService {
         if (state == null) return;
         state.setCurrentMessage(message);
         pendingUserMessages.add(agentName);
+    }
+
+    // ── 演讲与广播合并地基：AI 发言自动选择形态，接入统一公告管线 ──
+
+    /**
+     * 演讲听众判定（管线层单事实源）：
+     * <ul>
+     *   <li>{@code merged}（正式版默认）——HearingSystem 声学判定
+     *       （{@code HearingSystem.countHearingListeners}：computeAudibility+canHear 距离衰减，
+     *       半径内可听听众计数），判定集中回管线层，与方案B split 共用同一声学工具方法；</li>
+     *   <li>{@code auto}（方案A 旧行为回退）——ModeClassifier.wouldOthersListen 硬编码启发式
+     *       （2.5×hearRange/距离>50/≥2，D-004 纪律欠账仅保留于回退路径）。</li>
+     * </ul>
+     */
+    private boolean hasAudience(AgentState state) {
+        if ("merged".equals(announcementService.getSpeechMode())) {
+            return world.getHearingSystem().countHearingListeners(state, world.getAllStates().values()) > 0;
+        }
+        // auto（方案A 旧行为）｜split（演示端点沿用 auto 判定，内联路径与回调互斥）
+        return new ModeClassifier().wouldOthersListen(state, world.getAllStates());
+    }
+
+    /**
+     * 无听众兜底开关（merged 生效，单事实源）：
+     * merged → roleplay.broadcast.fallback-to-global 配置；auto/split（旧行为回退）→ 恒 true
+     * （方案A 原语义：无听众自动升级全局公告，供回退对比不读配置）。
+     */
+    private boolean effectiveFallback() {
+        if (!"merged".equals(announcementService.getSpeechMode())) return true;
+        return announcementService.isFallbackToGlobal();
+    }
+
+    /**
+     * 2D 演讲轮次产出回调：按当前模式判定听众并接入统一公告管线——
+     * merged=HearingSystem 声学判定（有听众→演讲 area / 无听众→按兜底配置升级全局公告或保持区域）；
+     * auto=wouldOthersListen 硬编码判定（无听众恒全局公告）。
+     */
+    private void onSpeechBroadcast(ConversationManager.SpeechTurn turn) {
+        try {
+            AgentState state = world.getState(turn.speaker());
+            if (state == null) return;
+            boolean hasAudience = hasAudience(state);
+            announcementService.enqueueAutoSpeech(turn.speaker(), turn.text(),
+                    state.getX(), state.getY(), state.getHearRange(),
+                    hasAudience, effectiveFallback());
+        } catch (Exception e) {
+            log.warn("Speech→broadcast failed: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * 演示/外部触发：AI 自动演讲或广播（POST /api/simulation/speech）。
+     * 不指定 speaker 时自动选第一个 NPC；不指定 text 时用演示文案。
+     * 形态由系统自动判定（merged=HearingSystem 声学判定 + 兜底配置 / auto=wouldOthersListen），
+     * 响应 mode 反映实际入队形态（speech=区域 / announcement=全局）。
+     */
+    public Map<String, Object> publishAiSpeech(String speaker, String text) {
+        Map<String, Object> result = new LinkedHashMap<>();
+        if (speaker == null || speaker.isBlank()) {
+            speaker = world.getAgentNames().stream()
+                    .filter(n -> !PLAYER_AGENT_NAME.equals(n))
+                    .findFirst().orElse("");
+        }
+        if (speaker.isBlank()) {
+            result.put("status", "error");
+            result.put("message", "2D 世界无 NPC，请先 POST /api/simulation/init");
+            return result;
+        }
+        AgentState state = world.getState(speaker);
+        if (state == null) {
+            result.put("status", "error");
+            result.put("message", "未知 agent: " + speaker);
+            return result;
+        }
+        if (text == null || text.isBlank()) {
+            text = "诸位静一静，听我说！我有一件重要的事要宣布——只要我们齐心协力，没有解决不了的难题！";
+        }
+        boolean hasAudience = hasAudience(state);
+        boolean fallback = effectiveFallback();
+        boolean area = hasAudience || !fallback;
+        BroadcastMessage msg = announcementService.enqueueAutoSpeech(
+                speaker, text, state.getX(), state.getY(), state.getHearRange(),
+                hasAudience, fallback);
+        result.put("status", msg != null ? "ok" : "dropped");
+        result.put("speaker", speaker);
+        result.put("mode", area ? BroadcastMessage.MODE_SPEECH : BroadcastMessage.MODE_ANNOUNCEMENT);
+        result.put("has_audience", hasAudience);
+        result.put("x", Math.round(state.getX()));
+        result.put("y", Math.round(state.getY()));
+        result.put("radius", Math.round(state.getHearRange()));
+        result.put("text", text);
+        return result;
     }
 
     // ── Phase 4: Track REST 支撑 ───────────────────────────────

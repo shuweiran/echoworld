@@ -218,6 +218,19 @@ public class SimulationController {
         return Map.of("status", "ok", "message", "Directive sent to director");
     }
 
+    /**
+     * AI 自动演讲/广播触发（演讲与广播合并地基 demo 入口）。
+     * <pre>{@code POST /api/simulation/speech  {"speaker":"小明","text":"...","mode":"auto"}}
+     * speaker/text 省略时自动选第一个 NPC + 演示文案；
+     * 形态由系统自动判定（ModeClassifier.wouldOthersListen：有听众→演讲 area，无听众→全局广播）。</pre>
+     */
+    @PostMapping("/speech")
+    public Map<String, Object> aiSpeech(@RequestBody(required = false) Map<String, String> body) {
+        String speaker = body != null ? body.getOrDefault("speaker", "") : "";
+        String text = body != null ? body.getOrDefault("text", "") : "";
+        return simulationService.publishAiSpeech(speaker, text);
+    }
+
     @PostMapping("/scene/{sceneName}")
     public Map<String, Object> setScene(@PathVariable String sceneName) {
         if (!Obstacle.availableScenes().contains(sceneName.toLowerCase())) {

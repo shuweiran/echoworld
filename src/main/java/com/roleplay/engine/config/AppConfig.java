@@ -35,6 +35,8 @@ public class AppConfig {
     private FrontendConfig frontend = new FrontendConfig();
     /** 语音配置（D20：/api/config/voice 运行时落地，TtsService 读取）。 */
     private VoiceConfig voice = new VoiceConfig();
+    /** 广播配置（演讲与广播合并地基）：roleplay.broadcast.*，AnnouncementService 节流参数。 */
+    private BroadcastConfig broadcast = new BroadcastConfig();
 
     private String host = "0.0.0.0";
     private int port = 8000;
@@ -68,6 +70,9 @@ public class AppConfig {
 
     public VoiceConfig getVoice() { return voice; }
     public void setVoice(VoiceConfig voice) { this.voice = voice; }
+
+    public BroadcastConfig getBroadcast() { return broadcast; }
+    public void setBroadcast(BroadcastConfig broadcast) { this.broadcast = broadcast; }
 
     public String getHost() { return host; }
     public void setHost(String host) { this.host = host; }
@@ -232,5 +237,61 @@ public class AppConfig {
         public void setAutoSelect(boolean autoSelect) { this.autoSelect = autoSelect; }
         public String getVoice() { return voice; }
         public void setVoice(String voice) { this.voice = voice; }
+    }
+
+    /**
+     * 广播节流配置（演讲与广播合并地基）：映射 yml {@code roleplay.broadcast.*}。
+     * window-ms=滑动窗口长度、max-per-window=每窗口每 channel 上限、
+     * max-pending=优先级队列深度上限、recent-ring-size=断线补发环形缓冲大小。
+     *
+     * <p>{@code speech-mode} 为演讲广播模式开关（默认 merged=正式版）：
+     * <ul>
+     *   <li>{@code merged}（默认，正式版合并方案）——走方案A 管线架构
+     *       （ConversationManager 回调 → SimulationService 判定 → enqueueAutoSpeech），
+     *       听众判定用 HearingSystem 声学模型（computeAudibility+canHear 距离衰减，
+     *       半径内可听听众计数，单事实源 {@code HearingSystem.countHearingListeners}），
+     *       无听众时是否升级全局公告由 {@code fallback-to-global} 决定；</li>
+     *   <li>{@code auto}（方案A 旧行为，供回退对比）——判定用
+     *       ModeClassifier.wouldOthersListen 硬编码启发式（2.5×hearRange/距离>50/≥2），
+     *       无听众恒升级全局公告（不读 fallback 配置）；</li>
+     *   <li>{@code split}（方案B 旧行为，供回退对比）——SpeechStrategy.processResults
+     *       内联直接调 AnnouncementService.enqueue（演讲即刻变区域广播，携带 speaker
+     *       坐标与半径）。同一运行实例可经 POST /api/broadcast/mode 运行时切换，
+     *       各路径互斥（merged/auto 走回调、split 走内联），不会重复推送。</li>
+     * </ul>
+     *
+     * <p>{@code fallback-to-global}=无听众兜底（正式版 merged 生效）：true=无听众时自动
+     * 升级全局公告（信息不哑火，默认）；false=不升级，仅区域演讲（纯空间语义，半径外自然无人展示）。
+     *
+     * <p>{@code script-phase-broadcast}=剧本杀阶段切换 SYSTEM 广播总开关（默认 true=启用）：
+     * 五处阶段切换（initGame/startDiscussion/startVoting/resolveVote/confirmEnded）发
+     * SYSTEM 级 announcement 到全局横幅通道，与 script_phase SSE 会话面板通道并存。
+     */
+    public static class BroadcastConfig {
+        private long windowMs = 1000;
+        private int maxPerWindow = 5;
+        private int maxPending = 20;
+        private int recentRingSize = 100;
+        /** 演讲广播模式：merged=正式版（默认）｜auto=方案A 旧行为｜split=方案B 旧行为。 */
+        private String speechMode = "merged";
+        /** 无听众兜底：true=自动升级全局公告（默认）；false=不升级，仅区域演讲。 */
+        private boolean fallbackToGlobal = true;
+        /** 剧本杀阶段切换 SYSTEM 广播总开关（默认 true=启用，进正式版）。 */
+        private boolean scriptPhaseBroadcast = true;
+
+        public long getWindowMs() { return windowMs; }
+        public void setWindowMs(long windowMs) { this.windowMs = windowMs; }
+        public int getMaxPerWindow() { return maxPerWindow; }
+        public void setMaxPerWindow(int maxPerWindow) { this.maxPerWindow = maxPerWindow; }
+        public int getMaxPending() { return maxPending; }
+        public void setMaxPending(int maxPending) { this.maxPending = maxPending; }
+        public int getRecentRingSize() { return recentRingSize; }
+        public void setRecentRingSize(int recentRingSize) { this.recentRingSize = recentRingSize; }
+        public String getSpeechMode() { return speechMode; }
+        public void setSpeechMode(String speechMode) { this.speechMode = speechMode; }
+        public boolean isFallbackToGlobal() { return fallbackToGlobal; }
+        public void setFallbackToGlobal(boolean fallbackToGlobal) { this.fallbackToGlobal = fallbackToGlobal; }
+        public boolean isScriptPhaseBroadcast() { return scriptPhaseBroadcast; }
+        public void setScriptPhaseBroadcast(boolean scriptPhaseBroadcast) { this.scriptPhaseBroadcast = scriptPhaseBroadcast; }
     }
 }

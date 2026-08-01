@@ -42,6 +42,24 @@ public class HearingSystem {
         return results;
     }
 
+    /**
+     * 声学听众计数（演讲广播的判定单事实源，正式版 merged 与方案B split 共用）：
+     * 以 speaker 为声源跑 {@link #computeAudibility}（体积×听觉范围×距离衰减×对方听觉范围），
+     * 统计能听到（{@code canHear()}，距离 ≤ 有效听觉范围）的听众数。
+     * 有听众（≥1）→ 区域演讲；无听众 → 按兜底配置决定是否升级全局公告。
+     *
+     * <p>这是「判定集中回管线层」的落点：SimulationService（merged）与
+     * SpeechStrategy（split）都只调本方法，不各自实现距离判定，避免双份漂移。
+     */
+    public int countHearingListeners(AgentState speaker, Collection<AgentState> allStates) {
+        if (speaker == null || allStates == null || allStates.isEmpty()) return 0;
+        int n = 0;
+        for (HearingResult h : computeAudibility(allStates)) {
+            if (h.speakerName().equals(speaker.getAgentName()) && h.canHear()) n++;
+        }
+        return n;
+    }
+
     public Set<String> findAudiblePeers(AgentState self, Collection<AgentState> allAgents) {
         Set<String> audible = new LinkedHashSet<>();
         double volume = computeVolume(self);

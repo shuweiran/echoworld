@@ -1,6 +1,7 @@
 package com.roleplay.engine.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.roleplay.engine.broadcast.SseBroadcaster;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -38,7 +39,7 @@ import java.util.concurrent.TimeUnit;
  */
 @RestController
 @RequestMapping("/api/events")
-public class SSEController {
+public class SSEController implements SseBroadcaster {
 
     private static final Logger log = LoggerFactory.getLogger(SSEController.class);
     private static final long HEARTBEAT_INTERVAL_MS = 15_000;
@@ -202,6 +203,31 @@ public class SSEController {
     /** track_closed → {id, label} */
     public void broadcastTrackClosed(String id, String label) {
         broadcast("track_closed", Map.of("id", id, "label", label));
+    }
+
+    // ── Script (剧本杀) typed broadcast helpers (GAP-8) ──
+
+    /** script_phase → {session_id, phase} — 阶段机每次流转推送（SETUP/INVESTIGATION/DISCUSSION/VOTE/REVEAL/ENDED） */
+    public void broadcastScriptPhase(String sessionId, String phase) {
+        broadcast("script_phase", Map.of(
+            "session_id", sessionId == null ? "" : sessionId,
+            "phase", phase == null ? "" : phase));
+    }
+
+    /** script_status → {session_id, phase, name, background, roles, players, round, locations, …}（脱敏：不带 your_secret） */
+    public void broadcastScriptStatus(String sessionId, Map<String, Object> status) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (status != null) payload.putAll(status);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcast("script_status", payload);
+    }
+
+    /** script_reveal → {session_id, votes, most_voted, vote_count, murderer, correct, result, truth, approval} */
+    public void broadcastScriptReveal(String sessionId, Map<String, Object> reveal) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (reveal != null) payload.putAll(reveal);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcast("script_reveal", payload);
     }
 
     public int getConnectionCount() {

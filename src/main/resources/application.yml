@@ -53,6 +53,29 @@ roleplay:
       # 审批门（D7）：剧本杀揭晓 / 狼人杀投票结算挂起等待 DM 审批；true=手动审批（超时自动驳回回滚），false=自动通过
       enabled: true
       timeout-seconds: 60
+    ap:
+      # 行动点（C2）：剧本杀玩家初始 AP 基础值（角色 ap_bonus 叠加；搜证消耗，行动力限制，蓝图 P2）
+      base: 3
+    dm:
+      # 主持人面板 key（C4）：空=放开（与审批门同开放模式）；非空时 DM 端点需请求头 X-DM-Key 匹配，否则 403
+      key: ""
+  broadcast:
+    # 演讲与广播合并地基：公告管线节流参数（AnnouncementService 读取）
+    window-ms: 1000       # 滑动窗口长度
+    max-per-window: 5     # 每窗口每 channel 最多条数（超出丢弃，防刷屏）
+    max-pending: 20       # 优先级队列深度上限
+    recent-ring-size: 100 # 断线补发环形缓冲大小
+    # 演讲广播模式（正式版合并方案，默认 merged）：
+    #   merged=正式版——方案A 管线（回调→SimulationService 判定→统一管线）+ HearingSystem 声学判定
+    #         （computeAudibility/canHear 距离衰减，判定单事实源），无听众按 fallback-to-global 兜底；
+    #   auto=方案A 旧行为（wouldOthersListen 硬编码判定，无听众恒全局公告）——回退对比；
+    #   split=方案B 旧行为（SpeechStrategy 内联区域广播）——回退对比；
+    #   可经 POST /api/announcements/mode 运行时切换，三路径互斥不重复推送
+    speech-mode: merged
+    # 无听众兜底（merged 生效）：true=无听众自动升级全局公告（信息不哑火，默认）；false=不升级，仅区域演讲
+    fallback-to-global: true
+    # 剧本杀阶段切换 SYSTEM 广播总开关（五处阶段切换→全局横幅通道，进正式版；默认 true=启用）
+    script-phase-broadcast: true
   frontend:
     dev-mode: false
     dev-port: 5173

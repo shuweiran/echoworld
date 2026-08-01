@@ -29,6 +29,8 @@ public class GameEvent {
     public static final String TYPE_COMBAT_START = "COMBAT_START";
     public static final String TYPE_PLAYER_ACTION = "PLAYER_ACTION";
     public static final String TYPE_WORLD_CHANGED = "WORLD_CHANGED";
+    /** 公告/广播（演讲与广播合并地基）：AnnouncementService flush 时发布，订阅方可做进程内响应。 */
+    public static final String TYPE_ANNOUNCEMENT = "ANNOUNCEMENT";
 
     private final String id;
     private final String type;
