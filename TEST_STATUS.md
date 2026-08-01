@@ -14,9 +14,11 @@
 | Failures / Errors | **0 / 0** |
 | 最后全量执行 | 2026-08-01 18:47（Phaser 阶段2：MapValidatorTest 18 + BspMapGeneratorTest 7 + ScriptMapServiceTest 10 + ScriptMapPersistenceTest 2 = 37 用例，254/0，含 P-0801-D maxTokens 3 用例） |
 | 环境 | H2 mem + mock LLM（application-test.yml） |
-| 真机验证 | **merged 正式版 7 项 PASS**（2026-08-01 13:05，台账 #47）；**P1 剧本生成 maxTokens 修复 4/4 完整生成 PASS**（2026-08-01 18:45，台账 #57：真实 LLM 生成完整 schema v1 剧本 4/4 次，不再走 defaultScript 兜底；讨论自动进 VOTE 且发言多样） |
+| 真机验证 | **merged 正式版 7 项 PASS**（2026-08-01 13:05，台账 #47）；**P1 剧本生成 maxTokens 修复 4/4 完整生成 PASS**（2026-08-01 18:45，台账 #57：真实 LLM 生成完整 schema v1 剧本 4/4 次，不再走 defaultScript 兜底；讨论自动进 VOTE 且发言多样）；**Phaser 阶段2 已通过未衡终审（2026-08-01 20:4x，三阶段全闭环，8000 重启生效 PID 25760，见 v15）** |
 
-> v14 更新：基线从 217 → **254 tests / 34 类**（**Phaser 阶段2 LLM 地图生成接入**：MapValidatorTest 18 用例——契约 v1 校验（尺寸/层一致性/热点越界/出生点越界/碰撞值 0-1/房间边界/走廊连通等）/ BspMapGeneratorTest 7 用例——BSP 递归二分生成（房间数/走廊连通 BFS 全可达/种子可复现/降级输出契约 v1）/ ScriptMapServiceTest 10 用例——LLM 生成路径（正常/空输出兜底 BSP/宽容解析/缓存命中 regenerate 强制重生成/校验失败降级/快照落库恢复）/ ScriptMapPersistenceTest 2 用例——mapData 随对局快照持久化+重启恢复；详见 Round 14；**前端部分：文件已落地（mapData.ts/PhaserScriptMapView.tsx/ScriptMapScene.ts/client.ts scriptMap）但 ScenePage 接线未完成 + build 失败 23 处 TS 错误，未同步 static，见台账 #56**
+> v14 更新：基线从 217 → **254 tests / 34 类**（**Phaser 阶段2 LLM 地图生成接入**：MapValidatorTest 18 用例——契约 v1 校验（尺寸/层一致性/热点越界/出生点越界/碰撞值 0-1/房间边界/走廊连通等）/ BspMapGeneratorTest 7 用例——BSP 递归二分生成（房间数/走廊连通 BFS 全可达/种子可复现/降级输出契约 v1）/ ScriptMapServiceTest 10 用例——LLM 生成路径（正常/空输出兜底 BSP/宽容解析/缓存命中 regenerate 强制重生成/校验失败降级/快照落库恢复）/ ScriptMapPersistenceTest 2 用例——mapData 随对局快照持久化+重启恢复；详见 Round 14；**前端部分：文件已落地（mapData.ts/PhaserScriptMapView.tsx/ScriptMapScene.ts/client.ts scriptMap）但 ScenePage 接线未完成 + build 失败 23 处 TS 错误，未同步 static，见台账 #56**（该前端缺口已由台账 #58/#59 修复，见 v15）
+
+> v15 更新（2026-08-01 20:4x，状态同步注记，基线不变 **254/0**）：**Phaser 阶段2 已通过未衡终审，三阶段全闭环**——前端缺口已闭合：台账 #58（ScriptMapScene.ts 20 处 TS 修复 + ScenePage 剧本杀 Tab「生成地图」接线 + npm run build 63 modules 通过，index-Ccc-CMzG.js 1,814,610 B 已同步 static）+ #59 独立复核（SHA256 dist↔static 三方一致 + 冒烟 stage2 16/16 + 阶段1 回归 10/10）；**8000 实例已随新打包重启生效（PID 25760）**；终审遗留 P2（非阻塞）：①BSP 降级 seed 硬编码 DEFAULT_BSP_SEED=20260801（未 @Value 注入，建议配置化）②地图不在对局 toMap 的 your_secret 同级暴露（实现选择，非缺陷）
 
 > v13 更新：基线从 214 → **217 tests / 30 类**（P1 缺陷修复：ScriptServiceMaxTokensTest 3 用例——mock 返回 2000+ token 完整剧本 JSON（5 角色×长 intro/secret + 5 线索 + secrets + background + truth）→ generateScript 解析成功且 roles/secrets/clues/killer_id/truth 字段齐全、长字段不截断；verify generateScript 必须以 maxTokens=4000 调用 callJson（600 旧值回归即失败）；LLM 空输出仍走 defaultScript 兜底符合 schema A1-3 不回归）；详见 Round 13
 
@@ -83,6 +85,7 @@
 ---
 
 ## 📝 执行历史（追加式）
+
 ### 2026-08-01 18:36-18:50 — Phaser 阶段2 LLM 地图生成接入（Round 14，254 tests；台账 #56）
 - **命令**：mvn test（全量，surefire 跑批 18:47 汇总 34 类）
 - **结果**：254 tests / **0 failures** / **0 errors** / 34 类 BUILD SUCCESS（217 基线 + 4 类 37 用例）
@@ -90,6 +93,22 @@
 - **回归**：既有 217 基线零破坏（含 P-0801-D maxTokens 3 用例、SpeechGateTest 24 用例、LONG-01 10 万字全绿）；surefire 逐类核验 34 个 txt 报告 0 失败 0 错误
 - **验证细节**：后端路径完整——ScriptController POST /api/script/map（L74-88）→ ScriptGameService.generateMap（L475-520，mapData 字段+快照持久化 L1631/1690）→ ScriptMapService（LLM 生成+宽容解析+MapValidator 校验+BspMapGenerator 降级兜底）；前端文件已落地（mapData.ts/PhaserScriptMapView.tsx/ScriptMapScene.ts/client.ts scriptMap）但 **ScenePage 接线未完成（仅状态声明 L43-45）+ npm run build 失败 23 处 TS 错误 → static 未同步**（详见台账 #56，待 coder 修复后重跑构建）
 - **git**：未 commit（统一 gate，未获授权）
+### 2026-08-01 18:58-19:40 — Phaser 阶段2 前端补接线+构建+冒烟（前端自测，非 JUnit；基线 254/0 不动；台账 #58）
+- **范围**：前端 Only，后端 Java 零改动——①`ScriptMapScene.ts` 20 处 TS 错误修复（Tileset|null 传参 null 收窄、collLayer possibly null 收窄、player 类型 GameObject Image → Physics.Arcade.Image、arcade body 非空守卫、keyboard 插件可空守卫、未使用变量 2 处删除/使用）；②`ScenePage.tsx` 阶段2 接线（「🗺️ 生成地图」按钮 → api.scriptMap({session_id, theme}) → setScriptMap/setScriptMapMeta → PhaserScriptMapView 渲染 + 热点搜证回调接剧本杀搜证流程，6 个未使用 state 全部用起来）；③`tools/` 补 `phaser_map_smoke.html` + `self_test_stage2.py`（worker 台账 #56 报告磁盘缺失）
+- **命令与结果**：
+  - ① `npm run build`（tsc -b && vite build）**通过**：63 modules，产物 `dist/assets/index-Ccc-CMzG.js`（1,814,610 B）+ `index-B4JvPABx.css`（与上批次同 hash）；修复前 20 处 TS 错误清零
+  - ② static 同步：`dist/assets/index-Ccc-CMzG.js` → `src/main/resources/static/assets/`，`static/index.html` script 引用更新（index-B2ueyU_u.js → index-Ccc-CMzG.js）；bundle grep 确认阶段2 内容（/api/script/map、生成地图、对局地图、重新生成、剧本杀地图（Phaser 渲染）、clue_location、spawn_points、map_version、BSP（降级、热点、搜证中、已搜证过）均在产物）+ 阶段1 内容（/api/simulation/state、2D 模拟（Phaser 内嵌）、原版窗口（回退））回归保留
+  - ③ `python tools/self_test_stage2.py http://127.0.0.1:5199`（vite dev --host 127.0.0.1；Edge headless + --no-proxy-server 绕过本机 HTTP_PROXY 回环 502）→ **纯渲染冒烟 16/16 ALL PASS**：phaser-version 3.90.0 / normalizeMap 宽容解析（缺 map_version/tile_size → 1/32）/ game-create / map-stats（zones=2 spawns=2 rooms=1 10×8）/ tilemap+player（Arcade.Image setVelocity 修复验证）/ collider 注册（Phaser 3.90 ProcessQueue pending→active 需等帧）/ player body+circle / setCollideWorldBounds 生效（body.collideWorldBounds=true）/ WASD 按住 A → velocity.x=-150 / onSearch 回调命中 zone / markZoneSearched 热点变绿 / 重复搜证拦截 / 瓦片双层 / destroy 收敛+重建
+  - ④ 阶段1 回归：`python tools/self_test_stage1.py http://127.0.0.1:5199` → **10/10 ALL PASS**（SimulationScene 零改动不受影响）
+- **验证细节**：Phaser 3.90 ProcessQueue 的 collider 先入 `_pending`、world.step 后才转 `_active`（冒烟等帧后断言）；headless virtual-time 下 RAF 不驱动场景 update/destroy（手动驱动验证 WASD 逻辑与 runDestroy 收敛，阶段 1 同语义）；vite dev 需 `--host 127.0.0.1`（默认绑 ::1 时 127.0.0.1 拒连）；Edge headless 需 `--no-proxy-server`（本机 HTTP_PROXY=127.0.0.1:7897 对回环 502）
+- **Java 测试基线**：未触碰，保持 254/0（34 类）不动（无 mvn 重跑，纯前端测试）
+- **git**：未 commit（统一 gate，未获授权）；并行登记 P-0801-E
+
+### 2026-08-01 19:13-19:30 — Phaser 阶段2 前端构建独立复核（P-0801-F，台账 #59）
+- **独立复核**（非新测试，验证 P-0801-E 声称）：① `npm run build` 重跑通过（tsc -b 0 错误 + vite build 63 modules 16.07s，产物 index-Ccc-CMzG.js 1,814,610 B 与 static 一致）；② dist↔static SHA256 字节比对三方一致（JS/CSS/index.html）；③ bundle grep 阶段2 字符串全命中（/api/script/map、生成地图、重新生成、对局地图、clue_location、spawn_points、map_version、BSP、scriptMap、markZoneSearched、已搜证）+ 阶段1 回归字符串；④ 冒烟复跑 `self_test_stage2.py` 16/16 + `self_test_stage1.py` 10/10 ALL PASS（vite dev --host 127.0.0.1:5199 + Edge headless --no-proxy-server）；⑤ ScenePage.tsx 接线与 ScriptMapScene.ts 修复抽查确认；后端 Java 零改动（git diff src/main/java 为空）
+- **Java 测试基线**：不动，保持 254/0（34 类）
+- **git**：未 commit（统一 gate，未获授权）；并行登记 P-0801-F
+
 
 ### 2026-08-01 18:39–18:45 — P1 缺陷修复：LLM 剧本生成 JSON 截断（Round 13，217 tests）
 - **命令**：mvn test（全量；新测试类先行单跑 3/0 通过后全量复跑）

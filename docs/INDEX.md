@@ -1,7 +1,7 @@
 # 📖 文档地图 INDEX.md — Roleplay-Java 唯一文档入口
 
 > **AI 接手第一步：读本文件**，按场景定位要读的文档。本索引是**活文档**，新增/废弃文档必须同步更新本表（见文末维护规则）。
-> 最后更新：2026-08-01 13:20（并行作业登记制度并入）
+> 最后更新：2026-08-01 20:4x（Phaser 迁移三阶段闭环状态同步）
 
 ---
 
@@ -10,7 +10,7 @@
 1. **`RouterService.java` 达 45.6KB，是全工程最大的文件**——疑似"上帝类"，读它时花点耐心；相关逻辑已被 `DECISION_LOG.md` D-003（不重构 Router）和 SessionRegistry 分担
 2. **`README.md` 有 23.2KB，偏长**——快速上手直接读 `PROJECT_CONTEXT.md`（5 秒）而不是 README
 3. **终端 cat 中文会乱码**（PowerShell GBK 显示问题）——文件本身是 UTF-8，读文件用工具/编辑器
-4. **建议阅读顺序**：`PROJECT_CONTEXT.md`（5 秒）→ `DECISION_LOG.md` → 按需读 `docs/问题清单-20260731.md`；想看具体模块（剧本杀/狼人杀）再深入对应包，**不需要通读 116 个源文件**
+4. **建议阅读顺序**：`PROJECT_CONTEXT.md`（5 秒）→ `DECISION_LOG.md` → 按需读 `docs/问题清单-20260731.md`；想看具体模块（剧本杀/狼人杀）再深入对应包，**不需要通读 121 个源文件**
 5. **并行作业登记**：改任何文件前先看 `docs/并行作业登记.md`——并行批次占用检查（标记 `P-MMDD-N` 只保留当天），防并行 agent 互不认识互相删除
 
 ---
@@ -19,11 +19,11 @@
 
 | 顺序 | 文件 | 用途 | 状态 |
 |---|---|---|---|
-| 1 | `README.md`（根目录） | 项目全貌：亮点/架构/API/启动 | ✅ 活（08-01 13:05 重写，190 tests） |
-| 2 | `PROJECT_CONTEXT.md`（根目录） | 5 秒速览：阶段/已完成/未完成/最大问题 | ✅ 活（08-01 13:05） |
+| 1 | `README.md`（根目录） | 项目全貌：亮点/架构/API/启动 | ✅ 活（08-01 20:4x 更新，254 tests） |
+| 2 | `PROJECT_CONTEXT.md`（根目录） | 5 秒速览：阶段/已完成/未完成/最大问题 | ✅ 活（08-01 20:4x） |
 | 3 | `DECISION_LOG.md`（根目录） | **为什么这么设计**（D-001~D-021） | ✅ 活（08-01 13:05） |
 | 4 | `AGENTS.md`（根目录） | 协作规则/硬性约束/文档维护协议 | ✅ 活 |
-| 5 | `TEST_STATUS.md`（根目录） | 测试基线/历史/缺口 | ✅ 活（08-01 13:05，190 tests） |
+| 5 | `TEST_STATUS.md`（根目录） | 测试基线/历史/缺口 | ✅ 活（08-01 20:4x，254 tests） |
 
 ---
 
@@ -36,7 +36,7 @@
 | **写/改测试** | `docs/测试方案-全功能覆盖-v2.md` | `TEST_STATUS.md`（现有基线） |
 | **改 Track/2D 模拟** | `docs/融合架构判断-完整版.md` + `docs/现状分析-2D对话与铁轨系统.md` | `DECISION_LOG.md`（Phase 1-4 决策） |
 | **改任何文件前** | `docs/并行作业登记.md`（并行占用检查） | `AGENTS.md` 硬性约束 8 |
-| **做 2D 渲染 / Phaser 迁移** | `docs/Phaser迁移计划.md` | `DECISION_LOG.md`（D-020）、`docs/地图JSON契约-v1.md`（阶段 0 产出，已定稿） |
+| **做 2D 渲染 / Phaser 迁移** | `docs/Phaser迁移计划.md`（三阶段全闭环） | `DECISION_LOG.md`（D-020）、`docs/地图JSON契约-v1.md`（阶段 0 产出，已定稿）、阶段 2 后端 `src/main/java/com/roleplay/engine/simulation/map/` + `service/ScriptMapService.java`、前端 `roleplay-v4/frontend/src/phaser/`（mapData.ts / ScriptMapScene.ts / PhaserScriptMapView.tsx） |
 | **查历史修改** | `docs/修改记录.md`（台账，谁改了什么+核查状态） | git log |
 | **接手新会话** | 第一节「接手必读」5 件 | 本文件 |
 | **考古旧方案** | `docs/archive/`（已废弃，仅参考） | — |
@@ -48,15 +48,15 @@
 ### 根目录（活文档，7 件）
 | 文件 | 类型 | 最后更新 | 说明 |
 |---|---|---|---|
-| README.md | 项目说明 | 08-01 13:05 | 亮点/架构/API/启动 |
-| PROJECT_CONTEXT.md | 速览 | 08-01 13:05 | 阶段/完成/未完成/文件索引 |
+| README.md | 项目说明 | 08-01 20:4x | 亮点/架构/API/启动 |
+| PROJECT_CONTEXT.md | 速览 | 08-01 20:4x | 阶段/完成/未完成/文件索引 |
 | DECISION_LOG.md | 决策史 | 08-01 13:05 | D-001~D-021 |
-| TEST_STATUS.md | 测试台账 | 08-01 13:05 | 190 tests 基线/历史 + 真机验证 |
+| TEST_STATUS.md | 测试台账 | 08-01 20:4x | 254 tests 基线/历史 + 真机验证 |
 | AGENTS.md | 协作规则 | 07-31 16:51 | 约束/维护协议 |
 | CLAUDE.md | Claude Code 入口 | 07-31 16:52 | 指向上述文件 |
 | .aiignore | AI 忽略清单 | 07-31 16:57 | target/日志/DB/缓存 |
 
-### docs/（活文档，9 件）
+### docs/（活文档，10 件）
 | 文件 | 类型 | 最后更新 | 说明 |
 |---|---|---|---|
 | 问题清单-20260731.md | 缺陷登记 | 07-31 21:33 | A-G 全量 + H 文档对照 |
@@ -67,7 +67,7 @@
 | 现状分析-2D对话与铁轨系统.md | 架构分析 | 07-31 12:44 | Phase 1 前现状 |
 | 融合架构判断-完整版.md | 架构判断 | 07-31 13:13 | 调研+Demo 实证 |
 | 修改记录.md | 修改台账 | 07-31 21:39 | 谁改了什么/核查 |
-| Phaser迁移计划.md | 迁移计划 | 08-01 13:40 | Phaser 3.90 渐进迁移（D-020，阶段 0 已完成待审查——验证 demo 于 `static/simulation/phaser_validate/`，台账 #49） |
+| Phaser迁移计划.md | 迁移计划 | 08-01 20:4x | Phaser 3.90 渐进迁移（D-020，**三阶段全部完成并通过未衡终审，全链路闭环**；验证 demo 于 `static/simulation/phaser_validate/`，台账 #49/#55/#56/#58/#59） |
 | 地图JSON契约-v1.md | 契约定稿 | 08-01 13:20 | LLM 生成地图 JSON schema v1（阶段 0 产出；2026-08-01 未衡审核通过后由 `-draft.md` 更名定稿，字段表冻结） |
 
 ### docs/archive/（已废弃，3 件，仅考古）

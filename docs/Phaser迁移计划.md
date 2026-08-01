@@ -1,7 +1,7 @@
 # Phaser 迁移计划 — 接入 Phaser 3.90 作为 2D 渲染层（渐进式迁移）
 
-> **状态**：🟢 已决策（DECISION_LOG.md **D-020**，2026-08-01）；**阶段 0 验证 demo 已完成（2026-08-01 台账 #49，http/file:// 双模式自测全绿），待未衡审查验收**——审查通过后进入阶段 1
-> **一句话**：用 Phaser 3.90（锁 v3 稳定线）渐进式替换自研 Canvas 渲染，后端零改动，先验证后替换再接入 AI 内容。
+> **状态**：🟢 已决策（DECISION_LOG.md **D-020**，2026-08-01）；**三阶段全部完成（阶段 0/1/2，2026-08-01）并通过未衡终审，全链路闭环**——阶段 0 验证 demo（台账 #49）→ 阶段 1 ScenePage 渲染层替换（台账 #55）→ 阶段 2 LLM 生成地图接入（台账 #56/#58/#59），**8000 实例已重启生效（PID 25760）**
+> **一句话**：用 Phaser 3.90（锁 v3 稳定线）渐进式替换自研 Canvas 渲染，后端零改动，先验证后替换再接入 AI 内容——现已三阶段闭环。
 
 ---
 
@@ -43,21 +43,21 @@
 
 **退出条件**：任一功能点验证失败且无替代方案 → 回滚保持自研渲染（见 §3），本计划终止。
 
-### 阶段 1：ScenePage 渲染层换 Phaser（数据流不变）
+### 阶段 1：ScenePage 渲染层换 Phaser（数据流不变）（✅ 已完成 2026-08-01，台账 #55）
 
 **范围**：`roleplay-v4/frontend` 的 ScenePage 2D 渲染层由自研 Canvas 换为 Phaser（React 内嵌 Phaser Game 实例，Ref 挂载），**数据流与状态流不变**——后端 SSE/REST 推送的状态仍是唯一数据源，Track 数据管线（SpatialTrackResolver→TrackStrategy→MovementConstraint）的产出直接作为渲染输入。
 
 **交付物**：
-- ScenePage 渲染层改造（Phaser Scene 承载 2D 模拟视图，替换手绘 Canvas 绘制循环）
-- 瓦片地图 / BSP 分区 / Zone 热点 / 角色精灵动画在 ScenePage 实装
-- 前后端契约零变更确认（对照 `docs/测试方案-全功能覆盖-v2.md` 与既有端点）
+- ScenePage 渲染层改造（Phaser Scene 承载 2D 模拟视图，替换手绘 Canvas 绘制循环）——✅ 已完成（新增「2D 模拟（Phaser 内嵌）」入口 + PhaserSimulationView 内嵌渲染，「原版窗口（回退）」保留，数据流与原 simulation.html 完全相同）
+- 瓦片地图 / BSP 分区 / Zone 热点 / 角色精灵动画在 ScenePage 实装——⚠️ 部分完成/后移：阶段 1 完成渲染层替换与数据流验证；瓦片/BSP/热点实装随阶段 2 地图视图（PhaserScriptMapView/ScriptMapScene）落地
+- 前后端契约零变更确认（对照 `docs/测试方案-全功能覆盖-v2.md` 与既有端点）——✅ 已完成（git diff 仅前端 phaser/ + ScenePage.tsx + tools/，Java 零改动）
 
 **验收标准**：
-- 2D 模拟功能与改造前行为一致（角色移动/聚集/听觉带/避让等 Track 约束可视化不回归）
-- 无后端改动、无数据流契约改动（git diff 仅前端 + static 产物）
-- 既有 176 tests 基线全绿（后端零触碰，回归面为前端）
+- 2D 模拟功能与改造前行为一致（角色移动/聚集/听觉带/避让等 Track 约束可视化不回归）——✅（台账 #55：纯渲染冒烟 10/10 + Edge headless 真实后端集成冒烟 9/9 ALL PASS）
+- 无后端改动、无数据流契约改动（git diff 仅前端 + static 产物）——✅（git diff src/main/java 为空）
+- 既有 176 tests 基线全绿（后端零触碰，回归面为前端）——✅（后端零触碰；后续全量 214→254/0 均含阶段 1 改动零回归，前端改动不参与 mvn）
 
-### 阶段 2：LLM 生成地图 JSON 接入 + 热点绑定 + schema 版本化
+### 阶段 2：LLM 生成地图 JSON 接入 + 热点绑定 + schema 版本化（✅ 已完成 2026-08-01，台账 #56/#58/#59）
 
 **范围**：
 - LLM 生成地图 JSON（阶段 0 契约草案定稿 → schema 版本化，对齐剧本 schema v1 的版本纪律：JSON 内嵌版本、宽容解析归一）
@@ -65,14 +65,18 @@
 - 地图 schema 落库/读取路径（若需持久化，遵循「不扩展表结构、JSON 内嵌版本」纪律，见 D-013/D-014）
 
 **交付物**：
-- 地图 JSON schema 契约文档（版本化）
-- LLM 生成地图接入（生成路径统一 + 宽容解析 + 兜底，对齐 D-014 双生成器统一模式）
-- 搜证热点绑定前端实装
+- 地图 JSON schema 契约文档（版本化）——✅ 已由阶段 0 产出并定稿 `docs/地图JSON契约-v1.md`（map_version 内嵌版本 + 字段表 + 宽容解析规则 + 校验器）
+- LLM 生成地图接入（生成路径统一 + 宽容解析 + 兜底，对齐 D-014 双生成器统一模式）——✅ 后端 `POST /api/script/map`（ScriptController）+ `simulation/map/` 包（MapContract/MapValidator/BspMapGenerator）+ `service/ScriptMapService.java`：LLM 生成 → 契约 v1 宽容解析 → MapValidator 7 项校验 → 失败降级 BSP；缓存命中/regenerate 强制重生成；map_data 随对局快照落库
+- 搜证热点绑定前端实装——✅ `roleplay-v4/frontend/src/phaser/`（mapData.ts/ScriptMapScene.ts/PhaserScriptMapView.tsx）+ ScenePage 剧本杀 Tab「生成地图」入口；`zones.clue_location` ↔ `clues.location` 联动，热点搜证走既有 POST /api/script/search，成功 markZoneSearched 变绿
 
 **验收标准**：
-- LLM 生成地图 → 前端 Phaser 渲染全链路闭环
-- 搜证线索在热点上可交互（搜证结果/AP 扣减/线索转交不受影响）
-- schema 版本化测试覆盖（旧格式归一/新格式透传/兜底）
+- LLM 生成地图 → 前端 Phaser 渲染全链路闭环——✅ 后端全量 254/0（4 类 37 用例，台账 #56）+ 前端 npm run build 63 modules 通过（index-Ccc-CMzG.js 已同步 static）+ 冒烟 self_test_stage2.py 16/16 + 阶段1 回归 self_test_stage1.py 10/10（台账 #58/#59 独立复核）；8000 实例重启后生效（PID 25760）
+- 搜证线索在热点上可交互（搜证结果/AP 扣减/线索转交不受影响）——✅ ScriptMapScene 热点 onSearch → POST /api/script/search（既有 AP 扣减/线索转交逻辑零改动），markZoneSearched 变绿 + 重复搜证拦截（冒烟覆盖）
+- schema 版本化测试覆盖（旧格式归一/新格式透传/兜底）——✅ MapValidatorTest 18 用例（尺寸/层一致性/热点出生点越界/碰撞值/房间/走廊/宽容解析归一）+ ScriptMapServiceTest 10（旧格式归一/新格式透传/兜底符合契约）
+
+**终审遗留 P2（非阻塞，2026-08-01 未衡终审）**：
+- ① BSP 降级 seed 硬编码 `DEFAULT_BSP_SEED=20260801`（ScriptMapService 常量，注释已指向 `roleplay.game.map.bsp-seed` 但未 @Value 注入 / yml 键未落地，建议后续配置化，对齐 D-004「阈值勿 hardcode」纪律）
+- ② 地图不在对局 `toMap` 的 `your_secret` 同级暴露（地图经生成响应 + 快照 map_data 获取，前端已消费；实现选择，非缺陷）
 
 ---
 

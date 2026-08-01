@@ -4,14 +4,14 @@
   <img src="https://img.shields.io/badge/Maven-3.9-%23C71A36?logo=apachemaven" alt="Maven"/>
   <img src="https://img.shields.io/badge/Virtual%20Threads-Parallel-%2300BFFF" alt="Virtual Threads"/>
   <img src="https://img.shields.io/badge/H2-Database-%23007396" alt="H2 Database"/>
-  <img src="https://img.shields.io/badge/tests-190%20%E2%9C%93-%2328A745" alt="190 tests"/>
+  <img src="https://img.shields.io/badge/tests-254%20%E2%9C%93-%2328A745" alt="254 tests"/>
 </p>
 
 <h1 align="center">🎭 Roleplay Engine — Java</h1>
 
 <p align="center">
   <b>多 Agent 角色扮演对话引擎</b>：2D 空间模拟 × 铁轨系统（Track System）× 狼人杀 / 剧本杀双游戏<br/>
-  当前规模：main 116 个源文件 / 约 16,500 行 · 18 个 Controller / ~113 个 HTTP 端点 · test 28 个测试类 / 190 用例
+  当前规模：main 121 个源文件 / 约 18,000 行 · 18 个 Controller / ~114 个 HTTP 端点 · test 34 个测试类 / 254 用例
 </p>
 
 ---
@@ -134,8 +134,9 @@ roleplay:
 | **2D 空间模拟** | 6 场景（公园/城市/咖啡馆/森林/教室/海滩）、Agent 移动/目标/情绪/听觉范围配置、世界快照 SSE 流、双导演 + 轨道 → 运动约束（质心聚集/听觉带/避让） |
 | **演讲+广播合并地基** | 统一消息管线（2026-08-01，DECISION_LOG D-015；**merged 正式版 D-021 / 台账 #46**）：AI 演讲 = 带空间范围+听众模型的广播（area），公告 = 全局广播（global），共享 BroadcastMessage + AnnouncementService（优先级队列 SYSTEM>EVENT>PLAYER>NPC + 滑动窗口节流 + 同 key 合并×N + 队列上限 + **断线补发环形缓冲**）；**正式版 `speech-mode` 默认 merged**——走方案A 管线架构（ConversationManager 回调 → SimulationService → AnnouncementService.enqueueAutoSpeech），听众判定为**声学判定单事实源 `HearingSystem.countHearingListeners`**（computeAudibility/canHear 距离衰减；split 内联判定委托同一声学方法，杜绝双份漂移）；「无听众→全局公告」可配置兜底 `fallback-to-global`（默认 true / false=仅区域演讲）；**剧本杀阶段 SYSTEM 广播无条件进正式版**（五处阶段切换发 SYSTEM/system 公告，总开关 `script-phase-broadcast` 默认 true）；玩家 `POST /api/announcements` 发公告、`POST /api/simulation/speech` 演示 AI 自动判定、`GET/POST /api/announcements/mode` 运行时切换 merged/auto/split（互斥，auto/split 保留回退对比）；SSE `announcement` 事件 → 前端中央横幅（打字机）+ 侧边公告栏，ScenePage 触发面板（⭐ 正式版 chip）；**真机验证 7 项 PASS（台账 #47）**|
 | **2D 视觉系统 Demo** | 独立页面 `src/main/resources/static/simulation/vision/vision_demo.html`（file:// 双击即开；工程内访问 `/simulation/vision/vision_demo.html`）：障碍物视线遮挡（射线投射 + 墙缝可透视）、迷雾（缩视野/实体变淡）、草丛掩体（AI 看不见、玩家看得见的不对称视觉）、AI 视野锥与感知行为（可见→追击/听到→搜寻/否则闲逛）；核心算法 `vision_core.js`（同目录）可 node 直接单测（`node src/main/resources/static/simulation/vision/vision_core.test.js`） |
+| **Phaser 2D 渲染层（渐进迁移，D-020）** | 阶段 0 验证 demo（`static/simulation/phaser_validate/`：瓦片+碰撞 / BSP 分区 / Zone 热点 / Aseprite 动画 / 契约草案，台账 #49）→ 阶段 1 ScenePage 内嵌 Phaser 渲染（`phaser/SimulationScene.ts` + `PhaserSimulationView.tsx`，数据流不变，「原版窗口」回退保留，台账 #55）→ 阶段 2 LLM 生成地图接入（`POST /api/script/map`：LLM 生成 → 契约 v1 → MapValidator 7 项校验 → BSP 降级；ScenePage 剧本杀 Tab「生成地图」+ 热点搜证联动 `zones.clue_location` ↔ `clues.location`，mapData.ts/ScriptMapScene.ts/PhaserScriptMapView.tsx）；**三阶段全闭环，已通过未衡终审（2026-08-01），8000 重启生效（PID 25760，index-Ccc-CMzG.js）** |
 | **狼人杀** | 默认 9 人局（3 狼 + 3 民 + 预言家 + 女巫 + 猎人），状态机 NIGHT → DAY_DISCUSS → DAY_VOTE → JUDGMENT → ENDED；玩家视角脱敏 |
-| **剧本杀** | LLM 生成剧本（Schema v1：metadata/roles[]/clues[]/killer_id/secrets，双生成器统一，见 docs/剧本-schema-v1.md）+ 秘密发放（每角色只见自己秘密）→ 搜证（私有/公开线索，AP 行动点消耗，线索可转交）→ 讨论（对话引擎驱动：持秘密角色 WEAK 摘要隐藏秘密、未持 MERGED 全文，结束自动进投票）→ 投票 → 揭晓（D7 审批门）；状态机 SETUP → INVESTIGATION → DISCUSSION → VOTE → REVEAL → ENDED；**剧本杀 SSE 推送**（script_phase / script_status / script_reveal 事件，2026-08-01 批次 B GAP-8）；断线重连（roleKey 顶号 + 对局快照恢复，`POST /api/script/resume`）+ **主持人（DM）面板**（全量仪表盘 `GET /api/script/dm/status` + 手动推进 `POST /api/script/advance`，对齐 Chronos DM 控制台范式，2026-08-01 批次 C4） |
+| **剧本杀** | LLM 生成剧本（Schema v1：metadata/roles[]/clues[]/killer_id/secrets，双生成器统一，见 docs/剧本-schema-v1.md）+ 秘密发放（每角色只见自己秘密）→ 搜证（私有/公开线索，AP 行动点消耗，线索可转交）→ 讨论（对话引擎驱动：持秘密角色 WEAK 摘要隐藏秘密、未持 MERGED 全文，结束自动进投票）→ 投票 → 揭晓（D7 审批门）+ **AI 生成对局地图**（LLM 即时生成 → 契约 v1 校验 → BSP 降级 → Phaser 渲染 + 热点搜证联动，2026-08-01 阶段 2）；状态机 SETUP → INVESTIGATION → DISCUSSION → VOTE → REVEAL → ENDED；**剧本杀 SSE 推送**（script_phase / script_status / script_reveal 事件，2026-08-01 批次 B GAP-8）；断线重连（roleKey 顶号 + 对局快照恢复，`POST /api/script/resume`）+ **主持人（DM）面板**（全量仪表盘 `GET /api/script/dm/status` + 手动推进 `POST /api/script/advance`，对齐 Chronos DM 控制台范式，2026-08-01 批次 C4） |
 | **中断系统** | `/api/stop`、`/api/simulation/stop` 可真正中断进行中的 LLM 生成（HARD 硬中断 / SOFT 协作保存 / STATE_INVALID 状态失效） |
 | **审批门** | 待审回合批准 / 驳回回滚 / 状态查询（含耗时）；自动、手动、超时自动驳回三模式（`roleplay.game.approval.enabled` / `timeout-seconds` 可配置，2026-07-31 修复 D27） |
 | **语音** | TTS（Edge TTS / CosyVoice / Qwen-TTS）、语音输入转写 `POST /api/voice/transcribe`（2026-07-31 修复 D9）；TTS 事件依赖 SSE 推送（D8 修复后 SSE 已接线） |
@@ -218,6 +219,7 @@ roleplay:
 | 端点 | 方法 | 说明 |
 |---|---|---|
 | `/api/script/generate`、`/api/script/init` | POST | 生成剧本 / 生成并开局（2026-07-31 修复 D4+D5：前端链路 + 秘密发放；C3：可选 room_code 绑定） |
+| `/api/script/map` | POST | **AI 生成对局地图**（阶段 2，2026-08-01）：LLM 生成契约 v1 JSON → MapValidator 7 项校验 → 失败降级 BSP；body：session_id/theme/seed/regenerate；响应 {map,generator,validation,fallback,cached}；地图随对局快照落库 map_data |
 | `/api/script/search` | POST | 搜证（私有/公开线索分级；C2：AP 行动点消耗，不足整次拒绝） |
 | `/api/script/transfer_clue` | POST | 线索转交（C2：持有者归属校验 + transferable 门） |
 | `/api/script/start_discussion`、`/api/script/start_voting` | POST | 进入讨论（接对话引擎）/ 投票阶段 |
@@ -329,6 +331,13 @@ POST /api/send → RouterService.runRound()
 
 Tick 策略：移动 10FPS / 社交 5s / 事件立即。轨道变化会发布 `TrackChangeEvent`，中断管理器自动取消不属于新轨道的任务。
 
+### Phaser 2D 渲染层（渐进迁移，2026-08-01 三阶段闭环，D-020）
+
+- **阶段 0 验证**：`static/simulation/phaser_validate/` 独立验证页（瓦片渲染+碰撞 / BSP 分区 / Zone 热点 / Aseprite 动画 / 地图 JSON 契约草案）5 功能点全部跑通（台账 #49）；契约文档定稿 `docs/地图JSON契约-v1.md`
+- **阶段 1 换渲染层**：ScenePage 新增「2D 模拟（Phaser 内嵌）」入口（`phaser/SimulationScene.ts` + `PhaserSimulationView.tsx`，Ref 挂载 + destroy/重建/HMR 保护），消费与原 simulation.html 完全相同的 /api/simulation/* REST+SSE 端点（数据流不变），「原版窗口（回退）」保留（台账 #55）
+- **阶段 2 接 AI 内容**：后端 `POST /api/script/map`——LLM 生成地图 JSON → 契约 v1 宽容解析 → `MapValidator` 7 项校验 → 失败降级 `BspMapGenerator`（`simulation/map/` 包 + `service/ScriptMapService.java`，map_data 随对局快照落库）；前端 ScenePage 剧本杀 Tab「生成地图」→ `PhaserScriptMapView`（瓦片+碰撞+热点+出生点 WASD 漫游），**搜证热点联动** `zones.clue_location` ↔ `clues.location`——热点搜证走既有 `POST /api/script/search`（AP 扣减/线索转交逻辑零改动），成功 markZoneSearched 变绿；构建 index-Ccc-CMzG.js 已同步 static，**8000 重启生效（PID 25760）**；全量 254/0（台账 #56/#58/#59，已通过未衡终审）
+- **P2 遗留（非阻塞，终审）**：①BSP 降级 seed 硬编码 DEFAULT_BSP_SEED=20260801（注释指向 roleplay.game.map.bsp-seed 但未 @Value 注入，建议配置化）；②地图不在 toMap 的 your_secret 同级暴露（实现选择）
+
 ### 中断系统（2026-07-31 落地，对应需求第八条）
 
 - **三种停止类型**：`HARD`（立即中断虚拟线程）/ `SOFT`（协作式，保存未完成部分输出）/ `STATE_INVALID`（意图失效 → 任务标记 INTERRUPTED）
@@ -367,7 +376,7 @@ enqueue → flush(100ms) → WorldEventBus 进程内分发（TYPE_ANNOUNCEMENT�
 
 ## 🧪 测试
 
-- **JUnit 基线（2026-08-01 merged 正式版全量，台账 #46）**：28 个测试类 / 190 用例全绿 / 0 failures / BUILD SUCCESS（183 基线 + MergedSpeechModeTest 7 用例：声学判定单事实源近/远、merged 半径内可听→area 演讲、无听众+fallback=true→global 公告、fallback=false→不升级仅区域、剧本杀阶段 SYSTEM 广播 merged 默认触发 + script-phase-broadcast 总开关静默、merged 防双发回归）
+- **JUnit 基线（2026-08-01 Phaser 阶段2 全量，台账 #56 / TEST_STATUS v14）**：**34 个测试类 / 254 用例全绿** / 0 failures / BUILD SUCCESS（217 基线 + 阶段2 地图 4 类 37 用例：MapValidatorTest 18 契约 v1 校验 / BspMapGeneratorTest 7 BSP 降级 / ScriptMapServiceTest 10 LLM 生成+宽容解析+兜底 / ScriptMapPersistenceTest 2 快照落库；merged 正式版 190 基线（台账 #46）零破坏；详见 TEST_STATUS v14/v15）
 - **merged 正式版真机验证 7 项 PASS（2026-08-01 13:05，台账 #47）**：模式读取=merged 默认 / 玩家广播入队（coalesce_key 正确）/ AI 演讲无听众→fallback 升级全局公告 / 断线补发 recent 环形缓冲 3→5 条 / merged→split→merged 往返切换 / 剧本杀【搜证阶段】【讨论阶段】SYSTEM 公告 / SSE announcement 两条完整推送 + script_phase/script_status 并存
 - **LONG-01 超长文本**（10 万字 / 500 轮）：3 次复跑全 PASS，P95 6-7ms，无 OOM
 - **E2E 冒烟**：`scripts/smoke/smoke_basic.py`（S1-S8 覆盖初始化/状态/角色/场景/历史等；S3 对话用例随 G1 解除已可通过）+ `observe_track.py`（秘密任务轨道观察）
