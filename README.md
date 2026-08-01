@@ -4,21 +4,21 @@
   <img src="https://img.shields.io/badge/Maven-3.9-%23C71A36?logo=apachemaven" alt="Maven"/>
   <img src="https://img.shields.io/badge/Virtual%20Threads-Parallel-%2300BFFF" alt="Virtual Threads"/>
   <img src="https://img.shields.io/badge/H2-Database-%23007396" alt="H2 Database"/>
-  <img src="https://img.shields.io/badge/tests-93%20%E2%9C%93-%2328A745" alt="93 tests"/>
+  <img src="https://img.shields.io/badge/tests-190%20%E2%9C%93-%2328A745" alt="190 tests"/>
 </p>
 
 <h1 align="center">🎭 Roleplay Engine — Java</h1>
 
 <p align="center">
   <b>多 Agent 角色扮演对话引擎</b>：2D 空间模拟 × 铁轨系统（Track System）× 狼人杀 / 剧本杀双游戏<br/>
-  当前规模：main 97 个源文件 / 约 11,353 行 · 17 个 Controller / ~110 个 HTTP 端点 · test 15 个测试类 / 93 用例
+  当前规模：main 116 个源文件 / 约 16,500 行 · 18 个 Controller / ~113 个 HTTP 端点 · test 28 个测试类 / 190 用例
 </p>
 
 ---
 
 > ## 🤖 AI 接入指引（AI 助手 / 编码工具必读）
 >
-> 开工前按顺序阅读：**① `PROJECT_CONTEXT.md`**（项目速览）→ **② `DECISION_LOG.md`**（架构决策史，改码前必查）→ **③ `AGENTS.md` / `CLAUDE.md`**（协作规则与硬性约束）→ 按任务需要追加 **`docs/问题清单-20260731.md`**（缺陷 D1-D24 与状态）/ `TEST_STATUS.md` / `docs/测试方案-全功能覆盖-v2.md`。
+> 开工前按顺序阅读：**① `PROJECT_CONTEXT.md`**（项目速览）→ **② `DECISION_LOG.md`**（架构决策史，改码前必查）→ **③ `AGENTS.md` / `CLAUDE.md`**（协作规则与硬性约束）→ 按任务需要追加 **`docs/问题清单-20260731.md`**（缺陷 D1-D27 与状态）/ `TEST_STATUS.md` / `docs/测试方案-全功能覆盖-v2.md`。
 >
 > ⚠️ **硬性约束**：8000 端口有运行中后端，只准 `mvn compile/test`，**禁止 `spring-boot:run`**；**禁止 git commit**（需主人授权）；对 `D:\roleplay-java` 的任何文件修改必须登记 `docs/修改记录.md`。
 
@@ -33,7 +33,7 @@ Java 实现的多 Agent 角色扮演引擎：AI 角色在 **2D 空间**中移动
 - **🚄 铁轨系统**：MERGED（共享上下文）/ WEAK（同步但静默）/ ISOLATED（完全隔离）三模式，LLM Arbiter 每轮动态决策轨道分配；demo 实测信息泄露率 100% → 0%（WEAK 隔离），prompt token ↓14%
 - **🗺️ 2D 空间模拟**：200×200 网格、A* 寻路、听觉范围、情绪状态、4 种对话策略 + 双导演（World / Track Director）编排
 - **🐺 狼人杀**：完整规则引擎（昼夜循环 / 角色技能 / 胜负判定 / 人类玩家混入 / 视角脱敏）
-- **📜 剧本杀**：LLM 生成剧本 → 秘密发放 → 搜证 → 讨论 → 投票 → 揭晓
+- **📜 剧本杀**：LLM 生成剧本（Schema v1）→ 秘密发放 → 搜证 → 讨论 → 投票 → 揭晓
 - **⚡ 中断系统**：三种停止类型（HARD / SOFT / STATE_INVALID）+ 任务状态机 + 事件总线（2026-07-31 落地）
 - **✅ 审批门**：Auto-approve / Manual review / Timeout auto-reject
 - **🔌 扩展**：MCP（Stdio 客户端）、网页搜索（Brave）、语音（Edge TTS / CosyVoice / Qwen-TTS + Whisper 识别）、私聊
@@ -94,17 +94,17 @@ npm run build                # 构建产物同步到 src/main/resources/static/
 
 ### 配置
 
-**LLM API Key**（当前 `application.yml` 缺 api-key → 所有 LLM 调用 401，见 G1）：
+**LLM API Key**（2026-07-31 修复 D25、解除 G1：启动时自动读取用户环境变量，无需写死 yml，也无需运行时注入）：
 
 ```yaml
 roleplay:
   llm:
-    api-key: "sk-xxx"                # ← 当前缺失，需配置
+    api-key: "${ROLEPLAY_LLM_API_KEY:}"   # 环境变量注入，启动即绑定（D25）
     api-base: "https://api.deepseek.com"
     model: "deepseek-v4-flash"
 ```
 
-或运行时设置（重启后丢失）：`POST /api/config/apikey`，body `{"api_key":"sk-xxx"}`（⚠️ api_base / model 字段当前被忽略，见 D20）。
+环境变量：`ROLEPLAY_LLM_API_KEY`（用户级已配置；D25 修复后启动自动读取，`GET /api/config/apikey` 返回 configured=True）。运行时仍可覆盖：`POST /api/config/apikey`，body `{"api_key":"sk-xxx"}`（重启后由环境变量恢复）。
 
 **管理员密钥**（`/api/auth/admin/*` 端点鉴权，2026-07-31 D19 修复引入）：
 
@@ -112,7 +112,16 @@ roleplay:
 |---|---|---|
 | `ROLEPLAY_ADMIN_KEY` | `admin-secret-change-me` | 调用 admin 端点须带请求头 `X-Admin-Key: <值>`，否则 403 |
 
-**其他配置**：语言（`/api/config/language`）、模型推荐列表（`/api/config/models`）、语音（`/api/config/voice`，⚠️ POST 为空操作，见 D20）。
+**其他配置**：语言（`/api/config/language`）、模型推荐列表（`/api/config/models`）、语音（`/api/config/voice`，2026-07-31 修复 D20：POST 生效并回读真实配置）。
+
+**广播配置**（`roleplay.broadcast.*`，演讲+广播合并地基 merged 正式版，2026-08-01 台账 #46）：
+
+| 键 | 默认值 | 说明 |
+|---|---|---|
+| `roleplay.broadcast.speech-mode` | `merged` | 演讲→广播形态判定：`merged`（正式版：HearingSystem 声学判定 + 可配置兜底）/ `auto`（方案A 旧行为：ModeClassifier.wouldOthersListen）/ `split`（方案B 旧行为：SpeechStrategy 内联区域广播）；可经 `POST /api/announcements/mode` 运行时切换，三值互斥 |
+| `roleplay.broadcast.fallback-to-global` | `true` | 无听众时是否自动升级为全局公告（false=仅区域演讲不升级） |
+| `roleplay.broadcast.script-phase-broadcast` | `true` | 剧本杀五处阶段切换是否发 SYSTEM 级广播公告（false=关闭） |
+| `roleplay.broadcast.recent-ring-size` | `100` | 断线补发环形缓冲容量（`GET /api/announcements/recent` 可读范围） |
 
 ---
 
@@ -123,18 +132,20 @@ roleplay:
 | **自由对话 / 角色扮演** | 任意角色组合 + 场景，Arbiter 动态轨道调度；聊天命令 `/mode` `/goal` `/protagonist` `/restrict` `/stop` `/end` `/status`；私聊（请求/接受/拒绝）；自动 N 轮、回合回滚（上限 50 快照） |
 | **铁轨系统** | 三轨道模式动态切换；角色可提交轨道变更申请（断链自动批准 / 增强 LLM 双阶段评估）；Arbiter 输入脱敏（防信息泄露旁路） |
 | **2D 空间模拟** | 6 场景（公园/城市/咖啡馆/森林/教室/海滩）、Agent 移动/目标/情绪/听觉范围配置、世界快照 SSE 流、双导演 + 轨道 → 运动约束（质心聚集/听觉带/避让） |
+| **演讲+广播合并地基** | 统一消息管线（2026-08-01，DECISION_LOG D-015；**merged 正式版 D-021 / 台账 #46**）：AI 演讲 = 带空间范围+听众模型的广播（area），公告 = 全局广播（global），共享 BroadcastMessage + AnnouncementService（优先级队列 SYSTEM>EVENT>PLAYER>NPC + 滑动窗口节流 + 同 key 合并×N + 队列上限 + **断线补发环形缓冲**）；**正式版 `speech-mode` 默认 merged**——走方案A 管线架构（ConversationManager 回调 → SimulationService → AnnouncementService.enqueueAutoSpeech），听众判定为**声学判定单事实源 `HearingSystem.countHearingListeners`**（computeAudibility/canHear 距离衰减；split 内联判定委托同一声学方法，杜绝双份漂移）；「无听众→全局公告」可配置兜底 `fallback-to-global`（默认 true / false=仅区域演讲）；**剧本杀阶段 SYSTEM 广播无条件进正式版**（五处阶段切换发 SYSTEM/system 公告，总开关 `script-phase-broadcast` 默认 true）；玩家 `POST /api/announcements` 发公告、`POST /api/simulation/speech` 演示 AI 自动判定、`GET/POST /api/announcements/mode` 运行时切换 merged/auto/split（互斥，auto/split 保留回退对比）；SSE `announcement` 事件 → 前端中央横幅（打字机）+ 侧边公告栏，ScenePage 触发面板（⭐ 正式版 chip）；**真机验证 7 项 PASS（台账 #47）**|
+| **2D 视觉系统 Demo** | 独立页面 `src/main/resources/static/simulation/vision/vision_demo.html`（file:// 双击即开；工程内访问 `/simulation/vision/vision_demo.html`）：障碍物视线遮挡（射线投射 + 墙缝可透视）、迷雾（缩视野/实体变淡）、草丛掩体（AI 看不见、玩家看得见的不对称视觉）、AI 视野锥与感知行为（可见→追击/听到→搜寻/否则闲逛）；核心算法 `vision_core.js`（同目录）可 node 直接单测（`node src/main/resources/static/simulation/vision/vision_core.test.js`） |
 | **狼人杀** | 默认 9 人局（3 狼 + 3 民 + 预言家 + 女巫 + 猎人），状态机 NIGHT → DAY_DISCUSS → DAY_VOTE → JUDGMENT → ENDED；玩家视角脱敏 |
-| **剧本杀** | LLM 生成剧本 + 秘密发放（每角色只见自己秘密）→ 搜证（私有/公开线索）→ 讨论 → 投票 → 揭晓；状态机 SETUP → INVESTIGATION → DISCUSSION → VOTE → REVEAL → ENDED |
+| **剧本杀** | LLM 生成剧本（Schema v1：metadata/roles[]/clues[]/killer_id/secrets，双生成器统一，见 docs/剧本-schema-v1.md）+ 秘密发放（每角色只见自己秘密）→ 搜证（私有/公开线索，AP 行动点消耗，线索可转交）→ 讨论（对话引擎驱动：持秘密角色 WEAK 摘要隐藏秘密、未持 MERGED 全文，结束自动进投票）→ 投票 → 揭晓（D7 审批门）；状态机 SETUP → INVESTIGATION → DISCUSSION → VOTE → REVEAL → ENDED；**剧本杀 SSE 推送**（script_phase / script_status / script_reveal 事件，2026-08-01 批次 B GAP-8）；断线重连（roleKey 顶号 + 对局快照恢复，`POST /api/script/resume`）+ **主持人（DM）面板**（全量仪表盘 `GET /api/script/dm/status` + 手动推进 `POST /api/script/advance`，对齐 Chronos DM 控制台范式，2026-08-01 批次 C4） |
 | **中断系统** | `/api/stop`、`/api/simulation/stop` 可真正中断进行中的 LLM 生成（HARD 硬中断 / SOFT 协作保存 / STATE_INVALID 状态失效） |
-| **审批门** | 待审回合批准 / 驳回回滚 / 状态查询（含耗时）；自动、手动、超时自动驳回三模式 |
-| **语音** | TTS（Edge TTS / CosyVoice / Qwen-TTS）、语音输入转写 `POST /api/voice/transcribe`（2026-07-31 修复 D9）；⚠️ TTS 事件依赖 SSE 推送，当前主对话 SSE 为死代码（D8） |
-| **SSE / 事件流** | `/api/events` 心跳 15s / 超时 300s；⚠️ 前端监听的 30 个事件（agent_output / round_complete 等）后端从不广播（D8），主对话依赖 HTTP 返回体渲染 |
+| **审批门** | 待审回合批准 / 驳回回滚 / 状态查询（含耗时）；自动、手动、超时自动驳回三模式（`roleplay.game.approval.enabled` / `timeout-seconds` 可配置，2026-07-31 修复 D27） |
+| **语音** | TTS（Edge TTS / CosyVoice / Qwen-TTS）、语音输入转写 `POST /api/voice/transcribe`（2026-07-31 修复 D9）；TTS 事件依赖 SSE 推送（D8 修复后 SSE 已接线） |
+| **SSE / 事件流** | `/api/events` 心跳 15s / 超时 300s；2026-07-31 修复 D8：16 类事件（agent_output / round_complete 等）真实广播并对齐前端监听；**剧本杀 script_phase / script_status / script_reveal 事件（2026-08-01 批次 B GAP-8）** + **广播 announcement 事件（演讲+广播合并地基，#47 真机验证推送正常）**；HTTP 返回体仍为主渲染通道 |
 | **前端（React SPA）** | 登录（邀请码）/ 首页（模式选择+设置）/ 场景设置页（角色场景管理 + 狼人杀 tab + 剧本杀 tab + 2D 复选框）/ 聊天页（四类消息、导演面板、历史抽屉、狼人杀/剧本杀面板、语音输入、自动连播、2s 轮询 state）/ 2D 独立页 `simulation.html`（画布渲染 + SSE 实时刷新，支持从主应用带参打开） |
 | **其他** | 网页搜索（Brave + 正文抓取）、MCP 工具调用（Stdio）、邀请码认证、多人房间、角色/场景 AI 生成与 CRUD、SPA 兜底路由 |
 
 ---
 
-## 🔌 API 概览（~110 端点，按模块）
+## 🔌 API 概览（~113 端点，按模块）
 
 ### 会话与对话 `/api`
 | 端点 | 方法 | 说明 |
@@ -149,7 +160,7 @@ roleplay:
 ### 回合 `/api/round`
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/round/start` | POST | 开始回合（⚠️ turns 参数不生效，恒 1 轮，见 D13） |
+| `/api/round/start` | POST | 开始回合（turns 参数生效，按 turns 跑 N 轮，2026-07-31 修复 D13） |
 | `/api/round/rollback` | POST | 回滚到指定回合（上限 50 快照） |
 | `/api/round/status` | GET | 运行状态 |
 
@@ -171,16 +182,16 @@ roleplay:
 ### 历史 `/api/history`
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/history`、`/api/history/sessions` | GET | 历史会话列表 |
+| `/api/history`、`/api/history/sessions` | GET | 历史会话列表（2026-07-31 修复 N1：{messages,total,round_logs} 契约对齐前端） |
 | `/api/history/sessions/{id}` | GET | 会话消息详情 |
 | `/api/history/load/{id}` | POST | 加载会话（2026-07-31 修复 D12：真实写回单例 router） |
 
 ### 配置 `/api/config`
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/config/apikey` | GET / POST | 读写 API Key（脱敏显示；⚠️ 忽略 api_base/model 字段，见 D20） |
+| `/api/config/apikey` | GET / POST | 读写 API Key（脱敏显示；api_base/model 运行时生效，2026-07-31 修复 D20） |
 | `/api/config/language`、`/api/config/models` | GET/POST · GET | 语言（zh/en）/ 推荐模型列表 |
-| `/api/config/voice` | GET / POST | 语音配置（⚠️ POST 为空操作，见 D20） |
+| `/api/config/voice` | GET / POST | 语音配置（2026-07-31 修复 D20：POST 生效并回读真实配置） |
 
 ### 认证 `/api/auth`
 | 端点 | 方法 | 说明 |
@@ -191,9 +202,9 @@ roleplay:
 ### 多人房间 `/api/rooms`
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/rooms` | POST | 创建房间（⚠️ 返回无 room 包装，前端取不到，见 F-CTR-02） |
+| `/api/rooms` | POST | 创建房间（返回 {room} 包装，2026-07-31 修复 F-CTR-02） |
 | `/api/rooms/{code}` | GET | 房间信息 |
-| `/api/rooms/{code}/join` `/leave` `/assign` | POST | 加入 / 离开 / 分配角色（⚠️ assign 字段与前端不匹配，见 F-CTR-03） |
+| `/api/rooms/{code}/join` `/leave` `/assign` | POST | 加入 / 离开 / 分配角色（2026-07-31 修复 F-CTR-03：读 characters 字段并存 room.assignments） |
 
 ### 狼人杀 `/api/werewolf`
 | 端点 | 方法 | 说明 |
@@ -206,10 +217,17 @@ roleplay:
 ### 剧本杀 `/api/script`
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/script/generate`、`/api/script/init` | POST | 生成剧本 / 生成并开局（2026-07-31 修复 D4+D5：前端链路 + 秘密发放） |
-| `/api/script/search` | POST | 搜证（私有/公开线索分级） |
-| `/api/script/start_discussion`、`/api/script/start_voting` | POST | 进入讨论 / 投票阶段 |
-| `/api/script/vote`、`/api/script/resolve`、`/api/script/status` | POST/POST/GET | 投票 / 揭晓（⚠️ truth.contains 判定，见 D6）/ 状态 |
+| `/api/script/generate`、`/api/script/init` | POST | 生成剧本 / 生成并开局（2026-07-31 修复 D4+D5：前端链路 + 秘密发放；C3：可选 room_code 绑定） |
+| `/api/script/search` | POST | 搜证（私有/公开线索分级；C2：AP 行动点消耗，不足整次拒绝） |
+| `/api/script/transfer_clue` | POST | 线索转交（C2：持有者归属校验 + transferable 门） |
+| `/api/script/start_discussion`、`/api/script/start_voting` | POST | 进入讨论（接对话引擎）/ 投票阶段 |
+| `/api/script/vote`、`/api/script/resolve` | POST | 投票 / 揭晓（2026-07-31 修复 D6：精确判定 + 平票重投；D7 审批门） |
+| `/api/script/status` | GET | 状态（C3：支持 player_key 认证，纯 key 反查玩家） |
+| `/api/script/finish` | POST | 结束对局 → ENDED（GAP-4b，落库对局结果） |
+| `/api/script/resume` | POST | 断线重连恢复（C3：game_id / room_code / player_key 定位，内存命中或快照重建，ENDED 返回终态） |
+| `/api/script/keys` | GET | DM 分发 roleKey 全员令牌一览（C3） |
+| `/api/script/dm/status` | GET | **DM 全量仪表盘**（C4：所有玩家角色/秘密/AP/线索/投票/roleKey + 对局元数据；X-DM-Key 可选越权） |
+| `/api/script/advance` | POST | **DM 手动推进**（C4：INVESTIGATION→DISCUSSION→VOTE→REVEAL→ENDED；VOTE 步经审批门） |
 
 ### 轨道申请 `/api/track`
 | 端点 | 方法 | 说明 |
@@ -227,7 +245,7 @@ roleplay:
 ### SSE `/api/events`
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/events` | GET | SSE 事件流（心跳 15s；⚠️ broadcast 无调用方，主对话事件为死代码，见 D8） |
+| `/api/events` | GET | SSE 事件流（心跳 15s；2026-07-31 修复 D8：16 类事件真实广播） |
 
 ### 语音 `/api/voice`
 | 端点 | 方法 | 说明 |
@@ -260,12 +278,22 @@ roleplay:
 | `/api/simulation/scene/{name}`、`/scenes` | POST · GET | 切换场景（6 个）/ 场景列表 |
 | `/api/simulation/conversation-status`、`/conversations` | GET | 对话组状态 / 最近对话 |
 | `/api/simulation/track/goal`、`/track/secret`、`/track/state` | POST/POST/GET | World Director 目标 / 秘密任务（强制 ISOLATED）/ 轨道状态汇总 |
+| `/api/simulation/speech` | POST | **AI 自动演讲/广播**（演讲+广播合并地基）：自动选 NPC+默认文案，形态由系统自动判定（ModeClassifier.wouldOthersListen：有听众→演讲 area+半径 / 无听众→全局公告），可显式传 speaker/text |
+
+### 公告/广播 `/api/announcements`（2026-08-01 新增，演讲+广播合并地基，见 DECISION_LOG D-015 / D-019 / D-021）
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/api/announcements` | POST | 玩家发广播（默认 PLAYER 级 global 公告；body 可显式 level=SYSTEM\|EVENT\|PLAYER\|NPC、channel=global\|area\|system、mode=speech\|announcement、speaker） |
+| `/api/announcements/recent?since=` | GET | 断线补发：最近公告（环形缓冲 100 条，默认 `recent-ring-size`） |
+| `/api/announcements/mode` | GET / POST | 广播模式运行时切换：GET 返回当前模式；POST body `{"mode":"merged"}` 切换 merged（正式版默认）/ auto（方案A 回调判定）/ split（方案B 内联区域广播），三值互斥（台账 #44/#46） |
+
+> 统一消息管线：enqueue → flush(100ms) → WorldEventBus 进程内分发（TYPE_ANNOUNCEMENT）+ SSE `announcement` 事件 → 前端中央横幅（打字机）/ 侧边公告栏；断线补发走 REST（`GET /api/announcements/recent`）；节流/形态参数 `roleplay.broadcast.*` 可配（见上方配置表）
 
 ### 中断 `/api/interrupt`（2026-07-31 新增，对应 D1）
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/interrupt` | POST | 按任务类型中断（⚠️ 无参数时默认按 GENERATION 过滤，见 D21） |
-| `/api/interrupt/tasks`、`/tasks/{id}` | GET | 任务列表 / 详情（⚠️ LLM 失败被记为 CANCELLED，与主动中断难区分，见 D22） |
+| `/api/interrupt` | POST | 按任务类型中断（无 type 缺省返回全部，2026-07-31 修复 D21） |
+| `/api/interrupt/tasks`、`/tasks/{id}` | GET | 任务列表 / 详情（2026-07-31 修复 D22：新增 FAILED 终态，可与主动中断区分） |
 
 ---
 
@@ -280,7 +308,7 @@ POST /api/send → RouterService.runRound()
   → AgentExecutor 并行执行（Virtual Threads；每 Agent 独立上下文 + 中断 token）
   → Arbiter 整合（合并叙事 + narrator + 更新轨道）
   → 压缩 + MemoryStore 摘要链 → HTTP 返回体回前端
-  （SSE 广播环节当前为死代码，见 D8）
+  （SSE 广播环节 2026-07-31 修复 D8 后已接线）
 ```
 
 ### RouterService 单例会话语义
@@ -308,6 +336,16 @@ Tick 策略：移动 10FPS / 社交 5s / 事件立即。轨道变化会发布 `T
 - **事件驱动**：WorldEventBus + GameEvent + TrackChangeEvent，订阅者自动响应
 - **接线**：`/api/stop`、`/api/simulation/stop` 现在能真正中断进行中的 LLM 生成（token 检查点 + future.cancel）
 
+### 广播管线（演讲+广播合并地基，merged 正式版）
+
+```
+enqueue → flush(100ms) → WorldEventBus 进程内分发（TYPE_ANNOUNCEMENT）+ SSE announcement 事件 → 前端中央横幅（打字机）/ 侧边公告栏
+```
+
+- **统一入队**：AI 演讲产出（PUBLIC_SPEAKING）经 ConversationManager 回调 → SimulationService 判定（merged：`HearingSystem.countHearingListeners` 声学判定单事实源；无听众且 `fallback-to-global=true` → 升级全局公告）→ `AnnouncementService.enqueueAutoSpeech`；玩家公告 `POST /api/announcements` 直接入队；剧本杀五处阶段切换经 `broadcastSystemAnnouncement` 发 SYSTEM 级公告（`script-phase-broadcast` 总开关，与 script_phase SSE 会话面板通道并存）
+- **队列语义**：PriorityQueue SYSTEM>EVENT>PLAYER>NPC + 滑动窗口节流 + 同 key 合并×N + 队列上限 + **断线补发环形缓冲**（默认 100 条，`GET /api/announcements/recent?since=` REST 补拉）
+- **分发与切换**：100ms flush → WorldEventBus 进程内 TYPE_ANNOUNCEMENT + SSE `announcement` 事件 → 前端横幅/公告栏；`GET/POST /api/announcements/mode` 运行时切换 merged/auto/split（互斥，demo 保留回退对比）
+
 ### 记忆：压缩链
 
 短期窗口（`short-term-rounds: 20`）+ 摘要链（每 `summary-interval: 10` 轮压缩，角色指纹 + 结构化摘要），控制长对话 token 成本；无检索打分（D10，与 Stanford memory stream 有差距）。
@@ -321,23 +359,25 @@ Tick 策略：移动 10FPS / 社交 5s / 事件立即。轨道变化会发布 `T
 - ✅ **已落库**：
   - 角色 / 场景：内存镜像 + H2 双写，启动时从库加载（2026-07-31 修复 D14，重启不再丢失）
   - 2D 世界快照：每 50 tick + stop 时保存；模拟对话写入 conversation_logs
-- ⚠️ **仍为内存态（重启即丢）**：历史会话（savedSessions）、多人房间、邀请码与 token、剧本 / 狼人杀对局状态、运行时 API Key
+  - 剧本：initGame 落剧本（type=script）+ confirmEnded 落对局结果（type=result，含玩家/凶手/票型/真相/讨论摘要）+ 状态变更点全量快照（type=snapshot，`POST /api/script/resume` 断线恢复）（2026-08-01 批次 B GAP-4b/4c + 批次 C3）
+- ⚠️ **仍为内存态（重启即丢）**：历史会话（savedSessions）、多人房间、邀请码与 token、狼人杀对局状态、运行时 API Key
 - `data/characters|scenes|sessions/` 为 JSON 备份占位目录（当前未使用）
 
 ---
 
 ## 🧪 测试
 
-- **JUnit 基线（2026-07-31）**：15 个测试类 / 93 用例全绿（ApprovalService 11、RouterServiceHooks 11、McpService 10、TrackDirectorService 10、MovementConstraint 11、TrackStrategy 7、WorldDirectorService 7、InteractionDetector 7、SpatialTrackResolver 6、SimulationOrchestrator 4、LongTextStability 1，以及 CompressorChain / DatabaseService / TrackDirectorSecretOverride / InteractionDetectorBoundary 新增类）
+- **JUnit 基线（2026-08-01 merged 正式版全量，台账 #46）**：28 个测试类 / 190 用例全绿 / 0 failures / BUILD SUCCESS（183 基线 + MergedSpeechModeTest 7 用例：声学判定单事实源近/远、merged 半径内可听→area 演讲、无听众+fallback=true→global 公告、fallback=false→不升级仅区域、剧本杀阶段 SYSTEM 广播 merged 默认触发 + script-phase-broadcast 总开关静默、merged 防双发回归）
+- **merged 正式版真机验证 7 项 PASS（2026-08-01 13:05，台账 #47）**：模式读取=merged 默认 / 玩家广播入队（coalesce_key 正确）/ AI 演讲无听众→fallback 升级全局公告 / 断线补发 recent 环形缓冲 3→5 条 / merged→split→merged 往返切换 / 剧本杀【搜证阶段】【讨论阶段】SYSTEM 公告 / SSE announcement 两条完整推送 + script_phase/script_status 并存
 - **LONG-01 超长文本**（10 万字 / 500 轮）：3 次复跑全 PASS，P95 6-7ms，无 OOM
-- **E2E 冒烟**：`scripts/smoke/smoke_basic.py`（S1-S8 覆盖初始化/状态/角色/场景/历史等；S3 对话用例因 LLM 401 恒失败）+ `observe_track.py`（秘密任务轨道观察）
+- **E2E 冒烟**：`scripts/smoke/smoke_basic.py`（S1-S8 覆盖初始化/状态/角色/场景/历史等；S3 对话用例随 G1 解除已可通过）+ `observe_track.py`（秘密任务轨道观察）
 - **隔离策略**：`application-test.yml` 使用 RANDOM_PORT + H2 内存库 + mock LLM（localhost:9999），不触碰现网
-- **已知覆盖缺口**：Controller 层 0 个 @SpringBootTest 集成测试（SessionController / SimulationController / HistoryController / AuthController / 剧本杀 / 狼人杀状态机均无测试）；stress 脚本未落地（D15）
-- **环境阻塞 G1**：现网实例 `configured: False`，真实 LLM 用例（E2E S3、剧本杀/狼人杀真局）需先配置 api-key 方可运行，当前如实记录为环境阻塞
+- **已知覆盖缺口**：Controller 层 0 个 @SpringBootTest 集成测试（SessionController / SimulationController / HistoryController / AuthController / 剧本杀 / 狼人杀状态机均无测试）；stress 脚本已落地（D15 修复，台账 #22）但尚未真跑验证
+- **G1 环境阻塞（已解除 2026-07-31 21:35）**：API key 配置于用户环境变量 `ROLEPLAY_LLM_API_KEY`，D25 修复后启动自动读取（configured=True），不再需要运行时注入；真实对话/多会话/turns/SSE 真机验证全 PASS（18:50），真实对话 14.3s 验证（21:35）
 
 ---
 
-## ⚠️ 已知问题（问题清单 D1-D24，2026-07-31 快照）
+## ⚠️ 已知问题（问题清单 D1-D27，2026-07-31 快照）
 
 ### ✅ 已修复（2026-07-31）
 
@@ -346,39 +386,39 @@ Tick 策略：移动 10FPS / 社交 5s / 事件立即。轨道变化会发布 `T
 | D1 | 中断系统缺失（需求第八条 P0） | 完整落地：11 个新类 + 三停止类型 + 事件总线 + `/api/interrupt`（台账 #18） |
 | D4 | 剧本杀前端链路（占位符"敬请期待"） | ScenePage 真实交互 + ChatPage 剧本杀面板 + client.ts 封装（#16） |
 | D5 | 剧本杀 secrets 发放缺失 | 生成 → 按角色注入上下文，每角色只见自己秘密（#16） |
+| D6 | 剧本杀揭晓判定粗糙 | resolveVote 重写：票面精确归一统计 + 凶手三级精确解析 + 平票清票重投（#25） |
+| D7 | 审批门未接入剧本杀/狼人杀 | 揭晓/投票结算挂 ApprovalService 审批门 + 新增 GET /api/approval/pending（#25） |
+| D8 | SSE 主对话事件流死代码 | SSEController 重写 + RouterService 14 节点广播接线，16 类事件对齐前端监听（#24；SSE 真机验证 PASS 18:50） |
 | D9 | Whisper 无端点，`/api/voice/transcribe` 404 | 新增转写端点（multipart audio）（#13） |
+| D10 | MemoryStore 无检索打分 | MemoryRetrieval：recency/relevance/importance 复合打分 + top-K 检索 API（#21） |
+| D11 | 多会话不隔离 | SessionRegistry 按 session_id 独立 RouterService 实例，消息/摘要/轮次全隔离（#26；多会话真机验证 PASS） |
 | D12 | 历史加载假成功 | 真实写回单例 router + 恢复 mode/agents（#15） |
+| D13 | `/api/round/start` turns 参数无效 | RouterService.runTurns 按 turns 执行 N 轮 + stop_reason 返回（#26；turns 真机验证 PASS） |
 | D14 | 角色/场景不落库（重启即丢） | Controller 内存镜像 + H2 双写（#17） |
+| D15 | stress 测试脚本未落地 | scripts/stress + common 落地 4 个压测脚本（#22） |
 | D16 | LONG-01 无产出 | 根因定位 + 3 次复跑全 PASS |
+| D17/G1 | LLM 401（环境阻塞） | G1 解除：key 配置于用户环境变量 ROLEPLAY_LLM_API_KEY，D25 后启动自动读取（configured=True），不再需运行时注入；真实对话/多会话/turns/SSE 真机验证全 PASS（#28） |
 | D19 | admin 端点无鉴权 | X-Admin-Key 校验（ROLEPLAY_ADMIN_KEY 环境变量）（#14） |
+| D20 | ConfigController 空操作 | setApiKey 全字段保存 + LLMClient 运行时读取 apiBase/model；setVoiceConfig → VoiceConfig 单一事实源（#23） |
+| D21 | 中断任务列表默认过滤 | 无 type 缺省返回全部；非法 type 视为不过滤；显式 null 防护（#23） |
+| D22 | LLM 失败误报"生成已中断" | 新增 FAILED 终态 + TASK_FAILED 事件，保留失败根因可与主动中断区分（#23） |
+| D23 | /api/auth/me 无头返回 400 | required=false + 手动判空，缺失头返回 401（#20） |
+| D24 | AgentExecutor 日志占位符错误 | SLF4J `{}` 占位符 + Math.round（#20） |
+| D25 | AppConfig 无配置绑定注解 | @ConfigurationProperties(prefix=roleplay) + 补 25 setter，启动即读 ROLEPLAY_LLM_API_KEY（configured=True），真实对话 14.3s 验证（#28） |
+| D26 | fallback-model/timeout-seconds 层级错位 | 键迁移 roleplay.monitor.*（方案 A 仅动 yml，主/test 同步）（#29） |
+| D27 | game.approval.* 配置未接线 | AppConfig 新增 GameConfig/ApprovalConfig + ApprovalService 双轨构造注入，enabled/timeout 配置生效（#30） |
+| N1 | 历史列表契约偏离 | GET /api/history 改 {messages,total,round_logs} 契约 + 列表/详情字段补齐前端（#24） |
+| F-CTR-02/03 | 房间接口契约断点 | 创建/查询返回 {room} 包装 + assign 读 characters 字段并存 room.assignments（#20） |
 | A1 | 测试文件静默修改（流程违规） | 台账拆分登记 #1/#1b + 注释加固 + 复跑验证 |
 
-### 🟠 待修复（P1）
+### 🟡 待修复（P2）
+
+> P1 项已于 2026-07-31 全部修复（见上方 ✅ 已修复表）。
 
 | # | 问题 | 说明 |
-|---|---|---|
-| D6 | 剧本杀揭晓判定粗糙 | `truth.contains(mostVoted)` 字符串包含，无平票重投 |
-| D7 | 审批门未接入剧本杀/狼人杀 | ApprovalService 存在但游戏管线未调用 |
-| D8 | SSE 主对话事件流死代码 | broadcast* 无调用方；前端 30 事件监听静默，依赖 HTTP 返回体 |
-| D11 | 多会话不隔离 | `/api/send` 用单例 router |
-| D13 | `/api/round/start` turns 参数无效 | 恒跑 1 轮，"三轮"按钮名不副实 |
-| D17/G1 | LLM 401（环境阻塞） | application.yml 缺 api-key，运行时注入重启丢失 |
-| D20 | ConfigController 空操作 | setVoiceConfig no-op；apikey 忽略 api_base/model |
-| D21 | 中断任务列表默认过滤 | 无 type 参数时恒空（默认按 GENERATION 过滤） |
-| D22 | LLM 失败误报"生成已中断" | 任务失败映射为 CANCELLED，与主动中断难区分 |
-| N1 | 历史列表契约偏离 | 前端期望 messages 字段，后端返回 sessions 结构 |
-
-### 🟡 待修复（P2）/ 契约断点
-
-| # | 问题 |
-|---|---|
-| D2/D3 | GroupAnchor 群体锚点降级为 MovementConstraint；ContextVisibility 由 visibleAgents 等效承担 |
-| D10 | MemoryStore 无检索打分（recency/relevance/importance） |
-| D15 | stress 测试脚本未落地（scripts/stress 空） |
-| D18 | InteractionDetector 阈值 40 hardcode 未配置化 |
-| D23 | GET /api/auth/me 无 Authorization 头返回 400 而非 401 |
-| D24 | AgentExecutor 日志占位符 Python 风格 `{:.0f}`，SLF4J 输出字面量 |
-| F-CTR-02/03 | 房间接口无 room 包装；assign 字段与前端不匹配 |
+|---|---|------|
+| D2/D3 | GroupAnchor 群体锚点降级为 MovementConstraint；ContextVisibility 由 visibleAgents 等效承担 | 功能等效替代，待产品决策 |
+| D18 | InteractionDetector 阈值 40 hardcode 未配置化 | 边界测试已覆盖（35 不触发/40 触发），运行时不可调参 |
 
 ---
 
