@@ -56,6 +56,9 @@ public class ScriptGameService {
     /** C1: 统一剧本生成路径（唯一生成器，Schema v1 输出，见 docs/剧本-schema-v1.md）。 */
     private final ScriptService scriptService;
 
+    /** 阶段 2: 统一地图生成路径（LLM 生成 → 校验 → BSP 降级，见 docs/地图JSON契约-v1.md）。 */
+    private final ScriptMapService mapService;
+
     /** GAP-4c: 剧本落库（可空——测试直接构造时不传，saveScript 调用有 null 守卫）。 */
     private final DatabaseService databaseService;
     /** GAP-8: script SSE 推送（可空——测试直接构造时不传，broadcast 调用有 null 守卫）。 */
@@ -169,6 +172,11 @@ public class ScriptGameService {
         /** 讨论组已建且轮次进行中（A3-1/A3-3 验收）。 */
         volatile boolean discussionActive = false;
 
+        // 阶段 2: 对局地图（LLM/BSP 生成，契约 v1；快照持久化，重启可恢复）
+        Map<String, Object> mapData;
+        /** 阶段 2: 地图生成溯源（generator/validation/fallback 原因）。 */
+        List<String> mapFallbackReasons = new ArrayList<>();
+
         public Map<String, Object> toMap(String playerName) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("phase", phase.name().toLowerCase());
@@ -207,6 +215,10 @@ public class ScriptGameService {
                 m.put("role_key", playerKeys.getOrDefault(playerName, ""));
             }
             m.put("locations", new ArrayList<>(locations));
+            // 阶段 2: 对局地图（已生成时附加；契约 v1，前端 Phaser 渲染）
+            if (mapData != null) {
+                m.put("map", mapData);
+            }
             if (!discussionTranscript.isEmpty()) {
                 m.put("discussion", new ArrayList<>(discussionTranscript));
             }
@@ -283,6 +295,7 @@ public class ScriptGameService {
         this.announcementService = announcementService;
         this.worldDirector = new WorldDirectorService(llmClient);
         this.scriptService = new ScriptService(llmClient);
+        this.mapService = new ScriptMapService(llmClient);
     }
 
     /** Phase 1: Generate script and assign roles. */
@@ -445,6 +458,60 @@ public class ScriptGameService {
         result.put("ap", game.playerAp.get(player));
         result.put("ap_cost", cost);
         return result;
+    }
+
+    /**
+     * 阶段 2: 生成对局地图（LLM 统一路径 → 校验 → BSP 降级，docs/地图JSON契约-v1.md）。
+     *
+     * <p>地图与对局绑定（ScriptGame.mapData），快照落库（重启可恢复）；已生成过且未显式
+     * 请求重新生成（body 带 regenerate=true）时直接返回缓存地图，不重复调 LLM。
+     * 返回：{map, generator, validation{ok,errors,warnings}, fallback[], cached}。
+     *
+     * @param sessionId 对局 id（必传；缺省由 controller 兜底当前对局）
+     * @param theme     主题覆盖（可空——用剧本名）
+     * @param seed      BSP 降级种子（0=默认）
+     * @param regenerate 强制重新生成（默认 false）
+     */
+    public Map<String, Object> generateMap(String sessionId, String theme, long seed, boolean regenerate) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (game.mapData != null && !regenerate) {
+            return mapResponse(game, Map.of("cached", true, "fallback", new ArrayList<>(game.mapFallbackReasons)));
+        }
+        String effTheme = (theme == null || theme.isBlank()) ? game.name : theme;
+        // 线索地点（去重）：clues[].location —— zones[].clue_location 对齐目标（契约 §5）
+        List<String> clueLocations = game.clues.stream()
+            .map(c -> String.valueOf(c.getOrDefault("location", "")))
+            .filter(s -> !s.isBlank())
+            .distinct()
+            .collect(Collectors.toList());
+        ScriptMapService.MapResult result = mapService.generateMap(effTheme, game.locations, clueLocations, seed);
+        game.mapData = result.map();
+        game.mapFallbackReasons = new ArrayList<>(result.fallbackReasons());
+        // 状态变更 → 快照落库（地图可恢复）
+        saveSnapshot(game);
+        log.info("Script game {} map generated: generator={}, validation.ok={}, fallback={}",
+            sessionId, result.map().get("generator") instanceof Map<?, ?> g ? g.get("kind") : "?",
+            result.validation().ok(), result.fallbackReasons());
+        return mapResponse(game, Map.of("cached", false, "fallback", new ArrayList<>(game.mapFallbackReasons)));
+    }
+
+    /** 阶段 2: 获取已生成的对局地图（未生成返回空 map 与 error）。 */
+    public Map<String, Object> getMap(String sessionId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (game.mapData == null) return Map.of("error", "地图尚未生成");
+        return mapResponse(game, Map.of("cached", true));
+    }
+
+    /** 组装地图响应（map + 溯源 + 校验信息）。 */
+    private Map<String, Object> mapResponse(ScriptGame game, Map<String, Object> extra) {
+        Map<String, Object> resp = new LinkedHashMap<>(extra);
+        resp.put("map", game.mapData);
+        Object gen = game.mapData == null ? null : game.mapData.get("generator");
+        resp.put("generator", gen == null ? Map.of("kind", "unknown") : gen);
+        resp.put("session_id", game.sessionId);
+        return resp;
     }
 
     /**
@@ -1560,6 +1627,9 @@ public class ScriptGameService {
         content.put("correct_verdict", game.correctVerdict);
         content.put("discussion_transcript", new ArrayList<>(game.discussionTranscript));
         content.put("discussion_contexts", new LinkedHashMap<>(game.discussionContexts));
+        // 阶段 2: 对局地图（LLM/BSP 生成，契约 v1；旧快照无此键 → 恢复时置 null）
+        content.put("map_data", game.mapData);
+        content.put("map_fallback_reasons", new ArrayList<>(game.mapFallbackReasons));
         databaseService.saveScript("对局快照:" + game.sessionId, content);
     }
 
@@ -1616,6 +1686,17 @@ public class ScriptGameService {
             }
         }
         game.discussionContexts.putAll(strMap(c.get("discussion_contexts")));
+        // 阶段 2: 地图快照恢复（旧快照无 map_data → null，前端提示尚未生成）
+        Object md = c.get("map_data");
+        if (md instanceof Map<?, ?> mm) {
+            game.mapData = mapOf(mm);
+        }
+        Object mfr = c.get("map_fallback_reasons");
+        if (mfr instanceof List<?> list) {
+            for (Object o : list) {
+                if (o != null) game.mapFallbackReasons.add(str(o));
+            }
+        }
 
         games.put(sessionId, game);
         log.info("Script game {} restored from snapshot (phase={}, players={}, round={})",

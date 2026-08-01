@@ -67,6 +67,28 @@ public class ScriptController {
     }
 
     /**
+     * 阶段 2: 生成/获取对局地图（LLM 统一路径 → 校验 → BSP 降级，docs/地图JSON契约-v1.md）。
+     * body: session_id（可选，缺省用当前对局）/ theme（可选主题覆盖）/ seed（BSP 降级种子）/ regenerate（强制重生成）。
+     * 返回 {map, generator, validation{ok,errors,warnings}, fallback[], cached}。
+     */
+    @PostMapping("/map")
+    public ResponseEntity<Map<String, Object>> map(@RequestBody Map<String, String> body) {
+        String sessionId = body.getOrDefault("session_id", currentSessionId);
+        if (sessionId == null || sessionId.isBlank()) {
+            return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        }
+        String theme = body.getOrDefault("theme", "");
+        long seed = 0;
+        try {
+            seed = Long.parseLong(body.getOrDefault("seed", "0"));
+        } catch (NumberFormatException ignored) {
+            // 非法 seed → 用默认
+        }
+        boolean regenerate = Boolean.parseBoolean(body.getOrDefault("regenerate", "false"));
+        return ResponseEntity.ok(scriptGameService.generateMap(sessionId, theme, seed, regenerate));
+    }
+
+    /**
      * C3: 断线重连恢复 —— body: game_id 或 room_code + player_key。
      * 内存对局存在直接返回该玩家视图；不存在则从持久化快照重建（重启后可用）；ENDED 返回终态。
      */
