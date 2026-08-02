@@ -112,12 +112,13 @@ public class ScriptGameService {
     /** GAP-3: 讨论组 ID 前缀。 */
     private static final String DISCUSSION_GROUP_PREFIX = "script_discussion_";
 
-    /** GAP-3: 讨论目标管理（角色想做什么，WorldDirectorService.setGoal 注入）。 */
-    private final WorldDirectorService worldDirector;
-    /** GAP-3: 讨论世界（轻量 SimulationWorld，仅作 Agent 容器，不起 tick）。懒创建。 */
-    private SimulationWorld discussionWorld;
-    /** GAP-3: 讨论对话引擎。独立实例（不复用 2D 模拟的 Spring 单例，避免重 init 互相覆盖）。懒创建。 */
-    private ConversationManager discussionConversation;
+    // P-0802-J: 讨论引擎 per-game（按对局/会话隔离，多局并发互不覆盖；替代原 service 实例级共享）
+    // D-012 已知限制「讨论引擎为 service 实例级共享（多局并发讨论会互覆世界）」的剧本杀侧落地：
+    // 每局独立 SimulationWorld + ConversationManager + WorldDirectorService，互不覆盖/互不串状态
+    // （对齐狼人杀侧 P-0802-I 三 Map 模式：discussionWorlds/discussionConversations/discussionDirectors）。
+    private final Map<String, SimulationWorld> discussionWorlds = new ConcurrentHashMap<>();
+    private final Map<String, ConversationManager> discussionConversations = new ConcurrentHashMap<>();
+    private final Map<String, WorldDirectorService> discussionDirectors = new ConcurrentHashMap<>();
     /** GAP-3: 讨论轮次执行线程池（虚拟线程，讨论结束自动进 VOTE）。 */
     private final ExecutorService discussionExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
@@ -293,7 +294,6 @@ public class ScriptGameService {
         this.databaseService = databaseService;
         this.sse = sse;
         this.announcementService = announcementService;
-        this.worldDirector = new WorldDirectorService(llmClient);
         this.scriptService = new ScriptService(llmClient);
         this.mapService = new ScriptMapService(llmClient);
     }
@@ -877,7 +877,11 @@ public class ScriptGameService {
      * A3-1）→ 后台驱动轮次 → 结束自动进 VOTE（A3-3）。
      */
     private void runDiscussionEngine(ScriptGame game) {
-        ensureDiscussionEngine();
+        // P-0802-J: per-game 实例（世界/引擎/导演均按对局隔离，多局并发互不覆盖）
+        ensureDiscussionEngine(game.sessionId);
+        SimulationWorld world = discussionWorlds.get(game.sessionId);
+        ConversationManager cm = discussionConversations.get(game.sessionId);
+        WorldDirectorService director = discussionDirectors.get(game.sessionId);
         if (game.players.size() < 2) {
             // 单人局无讨论对象，直接进投票
             game.phase = Phase.VOTE;
@@ -885,8 +889,8 @@ public class ScriptGameService {
             return;
         }
 
-        discussionWorld.clearAgents();
-        discussionWorld.setWorldNarration((game.background == null || game.background.isBlank())
+        world.clearAgents();
+        world.setWorldNarration((game.background == null || game.background.isBlank())
                 ? "你们正在针对这起案件进行讨论。"
                 : game.background + "。你们正在针对这起案件进行讨论。");
 
@@ -896,22 +900,22 @@ public class ScriptGameService {
             Agent agent = new Agent(buildDiscussionPersona(game, player, role), "npc", llmClient);
             double x = 100 + Math.random() * 800;
             double y = 100 + Math.random() * 400;
-            discussionWorld.registerAgent(agent, x, y, 220, 60);
-            AgentState st = discussionWorld.getState(player);
+            world.registerAgent(agent, x, y, 220, 60);
+            AgentState st = world.getState(player);
             if (st != null) st.setEmotion(Emotion.NEUTRAL);
         }
 
         // 2) 目标驱动：按角色秘密注入（A3-4）
         for (String player : game.players) {
             boolean hasSecret = !game.getSecretFor(player).isBlank();
-            worldDirector.setGoal(player, hasSecret ? GOAL_HIDE_SECRET : GOAL_FIND_TRUTH);
+            director.setGoal(player, hasSecret ? GOAL_HIDE_SECRET : GOAL_FIND_TRUTH);
         }
 
         // 3) 轨道分配：持秘密 → WEAK（只给摘要不给明文），未持 → MERGED（全文）
         List<AgentState> members = new ArrayList<>();
         Map<String, TrackAssignment> tracks = new LinkedHashMap<>();
         for (String player : game.players) {
-            AgentState st = discussionWorld.getState(player);
+            AgentState st = world.getState(player);
             if (st == null) continue;
             members.add(st);
             List<String> others = game.players.stream().filter(p -> !p.equals(player)).toList();
@@ -923,7 +927,7 @@ public class ScriptGameService {
         }
 
         // 4) 建组（同步，A3-1 可立即断言）→ 后台驱动轮次（批次 D：SpeechGate 发言门控）→ 结束自动进 VOTE（A3-3）
-        ConversationGroup group = discussionConversation.createScriptDiscussionGroup(
+        ConversationGroup group = cm.createScriptDiscussionGroup(
                 DISCUSSION_GROUP_PREFIX + game.sessionId, members, tracks);
         game.discussionActive = true;
         // 批次 D: 门控实例（阈值可配，对齐 D-004；默认值=demo 实测安全区间）
@@ -935,7 +939,7 @@ public class ScriptGameService {
                 java.util.function.BiFunction<ConversationGroup, Integer, ConversationManager.RoundGateDecision> gate =
                         buildRoundGate(game, speechGate, scannedTurns);
                 ConversationManager.ScriptDiscussionResult result =
-                        discussionConversation.runScriptDiscussionRounds(group, discussionMaxRounds, gate);
+                        cm.runScriptDiscussionRounds(group, discussionMaxRounds, gate);
                 game.discussionTranscript.addAll(result.transcript());
                 game.discussionContexts.putAll(result.lastContexts());
                 // 批次 D: 排空讨论结束后到达的人类发言（仍入讨论记录，保证不丢）
@@ -968,8 +972,11 @@ public class ScriptGameService {
     private java.util.function.BiFunction<ConversationGroup, Integer, ConversationManager.RoundGateDecision>
             buildRoundGate(ScriptGame game, SpeechGate speechGate, int[] scannedTurns) {
         return (group, roundIdx) -> {
+            // P-0802-J: per-game 实例（讨论引擎已按 sessionId 隔离，门控/导演/世界均取本局）
+            WorldDirectorService director = discussionDirectors.get(game.sessionId);
+            SimulationWorld world = discussionWorlds.get(game.sessionId);
             // 0) 临时应激目标每轮衰减（被质疑→辩解 pri100，N 轮后回落主动机）
-            worldDirector.decayTemporaryGoals();
+            director.decayTemporaryGoals();
 
             // 1) 排空人类发言事件 → 直接注入对话流（人类发言权豁免，不过门控）
             List<Map<String, Object>> events = new ArrayList<>();
@@ -1001,7 +1008,7 @@ public class ScriptGameService {
                                 ? SpeechGate.TriggerType.QUESTION : SpeechGate.TriggerType.MENTION;
                         triggers.add(new SpeechGate.SpeechTrigger(tt, member));
                         // 被质疑 → 辩解临时目标瞬时拉满（Bates：情绪→目标再评价；priority-decay-rounds 轮衰减）
-                        worldDirector.pushTemporaryGoal(member, GOAL_DEFEND, 100, priorityDecayRounds);
+                        director.pushTemporaryGoal(member, GOAL_DEFEND, 100, priorityDecayRounds);
                     }
                 }
             }
@@ -1010,7 +1017,7 @@ public class ScriptGameService {
             for (Map<String, Object> e : events) {
                 if (Boolean.TRUE.equals(e.get("clue"))) {
                     for (String member : game.players) {
-                        if (worldDirector.getGoalPriority(member) >= 50) {
+                        if (director.getGoalPriority(member) >= 50) {
                             triggers.add(new SpeechGate.SpeechTrigger(SpeechGate.TriggerType.HUMAN_CLUE, member));
                         }
                     }
@@ -1019,7 +1026,7 @@ public class ScriptGameService {
 
             // 4) 情绪超阈值 → 必发言（ANGRY/SAD/CONFUSED/SURPRISED，对齐 demo emotion_threshold）
             for (String member : game.players) {
-                AgentState st = discussionWorld.getState(member);
+                AgentState st = world.getState(member);
                 if (st != null && (st.getEmotion() == Emotion.ANGRY || st.getEmotion() == Emotion.SAD
                         || st.getEmotion() == Emotion.CONFUSED || st.getEmotion() == Emotion.SURPRISED)) {
                     triggers.add(new SpeechGate.SpeechTrigger(SpeechGate.TriggerType.EMOTION, member));
@@ -1045,7 +1052,7 @@ public class ScriptGameService {
                         if (m == null || !m.contains(SpeechGate.SILENCE_MARKER)) { allSilent = false; break; }
                     }
                     if (allSilent) {
-                        iceBreaker = pickIceBreaker(game);
+                        iceBreaker = pickIceBreaker(game, director);
                     }
                 }
             }
@@ -1056,7 +1063,7 @@ public class ScriptGameService {
             for (String member : game.players) {
                 if (skip.contains(member)) continue; // 人类已发言 → AI 不代声（人类发言权豁免）
                 double talk = game.playerTalkativeness.getOrDefault(member, ScriptSchemaV1.DEFAULT_TALKATIVENESS);
-                int pri = worldDirector.getGoalPriority(member);
+                int pri = director.getGoalPriority(member);
                 SpeechGate.GateDecision d = speechGate.decide(member, talk, pri, triggers,
                         member.equals(iceBreaker), humanSpokeThisRound);
                 speakMap.put(member, d.speak());
@@ -1066,15 +1073,15 @@ public class ScriptGameService {
     }
 
     /** 冷场破冰者：按动机选择——查明真相（侦探位）优先，其次最高动机优先级、最健谈者兜底。 */
-    private String pickIceBreaker(ScriptGame game) {
+    private String pickIceBreaker(ScriptGame game, WorldDirectorService director) {
         for (String member : game.players) {
-            if (GOAL_FIND_TRUTH.equals(worldDirector.getGoal(member))) return member;
+            if (GOAL_FIND_TRUTH.equals(director.getGoal(member))) return member;
         }
         String best = null;
         int bestPri = -1;
         double bestTalk = -1;
         for (String member : game.players) {
-            int pri = worldDirector.getGoalPriority(member);
+            int pri = director.getGoalPriority(member);
             double talk = game.playerTalkativeness.getOrDefault(member, ScriptSchemaV1.DEFAULT_TALKATIVENESS);
             if (pri > bestPri || (pri == bestPri && talk > bestTalk)) {
                 bestPri = pri;
@@ -1135,15 +1142,36 @@ public class ScriptGameService {
         return r;
     }
 
-    /** 懒创建讨论引擎（独立实例，不与 2D 模拟共享，避免重 init 互相覆盖）。 */
-    private void ensureDiscussionEngine() {
-        if (discussionConversation == null) {
-            discussionWorld = new SimulationWorld();
-            discussionConversation = new ConversationManager();
-            discussionConversation.init(discussionWorld, llmClient,
-                    name -> discussionWorld.getAgent(name),
-                    () -> discussionWorld.getWorldNarration());
-        }
+    /**
+     * P-0802-J: per-game 懒创建讨论引擎 —— 每局独立 ConversationManager + SimulationWorld + WorldDirectorService
+     * （替代原 service 实例级共享，多局并发互不覆盖/互不串状态；对齐狼人杀侧 P-0802-I 同款实现）。
+     */
+    private ConversationManager ensureDiscussionEngine(String sessionId) {
+        return discussionConversations.computeIfAbsent(sessionId, k -> {
+            SimulationWorld world = new SimulationWorld();
+            ConversationManager cm = new ConversationManager();
+            cm.init(world, llmClient,
+                    name -> world.getAgent(name),
+                    () -> world.getWorldNarration());
+            discussionWorlds.put(k, world);
+            discussionDirectors.put(k, new WorldDirectorService(llmClient));
+            return cm;
+        });
+    }
+
+    /** 测试钩子（同包）：指定对局的讨论引擎实例（断言 per-game 隔离用）。 */
+    ConversationManager getDiscussionConversation(String sessionId) {
+        return discussionConversations.get(sessionId);
+    }
+
+    /** 测试钩子（同包）：指定对局的讨论世界实例（断言 per-game 隔离用）。 */
+    SimulationWorld getDiscussionWorld(String sessionId) {
+        return discussionWorlds.get(sessionId);
+    }
+
+    /** 测试钩子（同包）：指定对局的讨论目标管理器（断言 per-game 隔离用）。 */
+    WorldDirectorService getDiscussionDirector(String sessionId) {
+        return discussionDirectors.get(sessionId);
     }
 
     /**
@@ -1172,7 +1200,10 @@ public class ScriptGameService {
     /** GAP-3: 查询角色讨论目标（A3-4 验收：持秘密角色返回注入目标）。 */
     public String getDiscussionGoal(String sessionId, String player) {
         if (player == null) return "";
-        String goal = worldDirector.getGoal(player);
+        // P-0802-J: 目标管理器按对局隔离（未开过讨论的对局 director 为 null → 空串）
+        WorldDirectorService director = discussionDirectors.get(sessionId);
+        if (director == null) return "";
+        String goal = director.getGoal(player);
         return goal == null ? "" : goal;
     }
 

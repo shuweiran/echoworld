@@ -43,9 +43,11 @@ roleplay:
     summary-interval: 10
   round:
     parallel-agents: true
-    # C-2 一般模式串行调度开关：false=保持并行（默认，零破坏）；true=同轮按序生成、
+    # C-2 一般模式串行调度开关（P-0802-G 已开启）：false=保持并行（零破坏）；true=同轮按序生成、
     # 每个角色输出完成立即入史，后发言者上下文包含前面角色本轮已完成的发言
-    serial: false
+    # （主人 2026-08-02 反馈“前端还是并联输出”→ 确认根因即本开关默认 false，现按需求开启串行；
+    #  如需切回并行只改回 false 并重启服务即可）
+    serial: true
     agent-max-tokens: 300
     arbiter-max-tokens: 150
   mode:
@@ -80,10 +82,12 @@ roleplay:
       #   auto-play=init 后整局自动推进（真人行动后自动结算流转；false=纯手工 admin 驱动旧行为）
       #   auto-approve-ms=autoPlay 下投票结算审批门自动批准延迟（0=不自动批，等 DM 手动批准；对齐 D7）
       #   witch-poison-probability=AI 女巫后续夜使用毒药概率（0-1）
+      #   witch-save-probability=AI 女巫获知被刀者后首夜使用解药的概率（G1-2，0-1；1.0=经典首夜必救）
       ai-night-actions: true
       auto-play: true
       auto-approve-ms: 3000
       witch-poison-probability: 0.5
+      witch-save-probability: 1.0
   auth:
     # 邀请码功能显式开关（P-0801-G）：false=关闭（默认，不影响现有游戏功能，
     # /api/auth/verify 返回 403「邀请码功能未启用」）；true=启用（校验邀请码发 token）。

@@ -11,7 +11,7 @@ import java.util.Set;
  * 狼人杀 AI 行动器（P-0802-F，调研报告 G0-2）—— 纯规则零 LLM（对齐 D-002）：
  * <ul>
  *   <li>夜间：狼人共刀（首个行动的 AI 狼决定目标，其余跟随同一目标）、预言家查验随机存活、
- *       女巫首夜救狼刀目标（被刀者尚存活且非自己）/ 后续夜按概率毒随机存活（不毒自己）</li>
+ *       女巫获知被刀者后决策（首夜按 saveProbability 决定救/不救、后续夜按概率毒随机，不毒自己）</li>
  *   <li>猎人反杀：被淘汰的 AI 猎人随机带走一名存活玩家</li>
  *   <li>白天投票：AI 村民随机投非己、AI 狼人共投同一非狼目标（狼队协同）</li>
  * </ul>
@@ -32,12 +32,23 @@ public class WerewolfAiPlanner {
     }
 
     /**
-     * 夜间 AI 行动编排：狼刀 → 预言家验 → 女巫救/毒（顺序固定，保证女巫首夜能看到狼刀目标）。
-     * 仅决策 AI 角色（不在 {@code humans} 中的存活玩家）；人类角色的行动等待其通过 night_action 提交。
+     * 夜间 AI 行动编排：狼刀 →（女巫获知被刀者）→ 预言家验 → 女巫救/毒决策。
+     * 顺序固定：狼刀先行动，随后置 {@code witchInformed=true}（女巫获知被刀者身份，G1-2 机制），
+     * 女巫在获知后再决策救/不救/毒。仅决策 AI 角色（不在 {@code humans} 中的存活玩家）；
+     * 人类角色的行动等待其通过 night_action 提交。
      *
      * @return 已执行行动的描述消息列表（供日志/调试）
      */
     public List<String> planNight(WerewolfService.GameState g, Set<String> humans, double poisonProbability) {
+        return planNight(g, humans, poisonProbability, 1.0);
+    }
+
+    /**
+     * 带女巫首夜救概率的完整入口（G1-2）：{@code saveProbability} 为女巫获知被刀者后
+     * 首夜使用解药的决策概率（1.0=经典首夜必救；0.0=必不救保留解药），对齐 D-004 阈值可配纪律。
+     */
+    public List<String> planNight(WerewolfService.GameState g, Set<String> humans, double poisonProbability,
+                                  double saveProbability) {
         List<String> msgs = new ArrayList<>();
 
         // 1) 狼人共刀：首个行动的 AI 狼决定目标（排除狼队友），其余狼自动跟随（不重复决策）
@@ -49,6 +60,8 @@ public class WerewolfAiPlanner {
                 if (!target.isEmpty()) {
                     g.wolfTarget = target;
                     g.nightDecisions.add("kill");
+                    // G1-2：狼刀决策完成 → 女巫获知被刀者身份（解药/毒药决策的前提）
+                    g.witchInformed = true;
                     msgs.add("狼人 " + p + " 选择击杀 " + target);
                 }
                 break;
@@ -71,19 +84,32 @@ public class WerewolfAiPlanner {
             }
         }
 
-        // 3) 女巫解药：首夜救狼刀目标（经典规则女巫获知被刀者；若被刀者为自己则自救）；
-        //    后续夜保留解药不使用（决策完成即放行，不一定消耗）。
-        if (!g.nightDecisions.contains("save")) {
+        // 3) 女巫解药（G1-2：先获知狼刀目标 witchInformed，再决策救/不救）：
+        //    首夜且解药未用且被刀者存活 → 按 saveProbability 决定救（消耗解药）/ 不救（保留解药，记 nosave 决策）；
+        //    后续夜/被刀者已亡 → 保留解药，记 nosave 决策放行夜间完成判定。
+        if (!g.nightDecisions.contains("save") && !g.nightDecisions.contains("nosave")) {
             for (String p : g.alive) {
                 if (humans.contains(p)) continue;
                 if (g.roles.get(p) != WerewolfService.Role.WITCH) continue;
-                if (g.round == 1 && !g.witchUsedAntidote
-                        && !g.wolfTarget.isEmpty() && g.alive.contains(g.wolfTarget)) {
-                    g.witchSaveTarget = g.wolfTarget;
-                    g.witchUsedAntidote = true;
-                    msgs.add("女巫 " + p + " 使用解药救 " + g.wolfTarget);
+                boolean victimAlive = !g.wolfTarget.isEmpty() && g.alive.contains(g.wolfTarget);
+                if (g.round == 1 && !g.witchUsedAntidote && victimAlive && g.witchInformed) {
+                    if (random.nextDouble() < saveProbability) {
+                        g.witchSaveTarget = g.wolfTarget;
+                        g.witchUsedAntidote = true;
+                        g.nightDecisions.add("save");
+                        msgs.add("女巫 " + p + " 获知被刀者 " + g.wolfTarget + "，使用解药救起");
+                    } else {
+                        g.witchDeclinedSave = true;
+                        g.nightDecisions.add("nosave");
+                        msgs.add("女巫 " + p + " 获知被刀者 " + g.wolfTarget + "，选择不使用解药");
+                    }
+                } else {
+                    g.witchDeclinedSave = true;
+                    g.nightDecisions.add("nosave");
+                    if (g.round >= 2 && g.wolfTarget.isEmpty()) {
+                        msgs.add("女巫 " + p + " 保留解药不使用");
+                    }
                 }
-                g.nightDecisions.add("save");
                 break;
             }
         }

@@ -11,6 +11,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import java.io.IOException;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -46,6 +47,8 @@ public class SSEController implements SseBroadcaster {
     private static final long SSE_TIMEOUT_MS = 300_000; // 5 min
 
     private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
+    /** P-0802-I：emitter → 会话过滤（stream 带 ?session_id= 时注册；null = 不过滤，收全部全局广播）。 */
+    private final ConcurrentHashMap<SseEmitter, String> emitterSessions = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "sse-heartbeat");
         t.setDaemon(true);
@@ -60,15 +63,31 @@ public class SSEController implements SseBroadcaster {
 
     /**
      * SSE event stream — the frontend's long-lived connection for real-time updates.
+     *
+     * <p>P-0802-I：可选 {@code session_id} 查询参数 —— 带会话标识的连接只接收该对局的
+     * {@link #broadcastToSession} 定向事件（同时仍接收全部全局广播，如 agent_output/announcement）；
+     * 不带时与旧版一致（全局广播全覆盖）。多客户端/多对局并发互不串扰。
      */
     @GetMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream() {
+    public SseEmitter stream(@RequestParam(name = "session_id", required = false) String sessionId) {
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         emitters.add(emitter);
+        if (sessionId != null && !sessionId.isBlank()) {
+            emitterSessions.put(emitter, sessionId.trim());
+        }
 
-        emitter.onCompletion(() -> emitters.remove(emitter));
-        emitter.onTimeout(() -> emitters.remove(emitter));
-        emitter.onError(e -> emitters.remove(emitter));
+        emitter.onCompletion(() -> {
+            emitters.remove(emitter);
+            emitterSessions.remove(emitter);
+        });
+        emitter.onTimeout(() -> {
+            emitters.remove(emitter);
+            emitterSessions.remove(emitter);
+        });
+        emitter.onError(e -> {
+            emitters.remove(emitter);
+            emitterSessions.remove(emitter);
+        });
 
         return emitter;
     }
@@ -90,23 +109,58 @@ public class SSEController implements SseBroadcaster {
      * {@code data} is serialized to a JSON string (Jackson handles escaping).
      */
     public void broadcast(String eventType, Object data) {
-        String json;
-        try {
-            json = mapper.writeValueAsString(data);
-        } catch (Exception e) {
-            log.warn("SSE serialization failed for event {}: {}", eventType, e.getMessage());
+        String json = serialize(eventType, data);
+        if (json == null) return;
+        for (SseEmitter emitter : emitters) {
+            send(emitter, eventType, json);
+        }
+    }
+
+    /**
+     * P-0802-I：按会话定向推送 —— 仅投递给注册了该 {@code sessionId} 的连接（带 ?session_id= 建立的流）。
+     * 无匹配连接时静默丢弃（事件本就是该对局专属，无人收听不广播）；sessionId 为空回退全局广播。
+     */
+    public void broadcastToSession(String sessionId, String eventType, Object data) {
+        if (sessionId == null || sessionId.isBlank()) {
+            broadcast(eventType, data);
             return;
         }
-        for (SseEmitter emitter : emitters) {
-            try {
-                emitter.send(SseEmitter.event()
-                    .name(eventType)
-                    .data(json, MediaType.APPLICATION_JSON));
-            } catch (Exception e) {
-                // 已超时/完成的 emitter send 抛 IllegalStateException（ResponseBodyEmitter has already
-                // completed），宽捕获：移除死连接，避免中断整个广播循环（否则后续 emitter 收不到事件）
-                emitters.remove(emitter);
+        String json = serialize(eventType, data);
+        if (json == null) return;
+        boolean delivered = false;
+        for (Map.Entry<SseEmitter, String> e : emitterSessions.entrySet()) {
+            if (sessionId.equals(e.getValue())) {
+                if (send(e.getKey(), eventType, json)) delivered = true;
             }
+        }
+        if (!delivered) {
+            log.debug("SSE targeted event {} for session {} dropped: no matching emitter", eventType, sessionId);
+        }
+    }
+
+    /** 序列化载荷；失败返回 null（调用方跳过发送）。 */
+    private String serialize(String eventType, Object data) {
+        try {
+            return mapper.writeValueAsString(data);
+        } catch (Exception e) {
+            log.warn("SSE serialization failed for event {}: {}", eventType, e.getMessage());
+            return null;
+        }
+    }
+
+    /** 发送单个事件到单个 emitter；死连接移除并返回 false。 */
+    private boolean send(SseEmitter emitter, String eventType, String json) {
+        try {
+            emitter.send(SseEmitter.event()
+                .name(eventType)
+                .data(json, MediaType.APPLICATION_JSON));
+            return true;
+        } catch (Exception e) {
+            // 已超时/完成的 emitter send 抛 IllegalStateException（ResponseBodyEmitter has already
+            // completed），宽捕获：移除死连接，避免中断整个广播循环（否则后续 emitter 收不到事件）
+            emitters.remove(emitter);
+            emitterSessions.remove(emitter);
+            return false;
         }
     }
 
@@ -206,10 +260,13 @@ public class SSEController implements SseBroadcaster {
     }
 
     // ── Script (剧本杀) typed broadcast helpers (GAP-8) ──
+    // P-0802-J：三个 helper 全部改走 broadcastToSession 会话定向（对齐 werewolf_* P-0802-I）——
+    // script_* 事件只送达注册了该对局 session_id 的 SSE 连接，多局并发互不串扰（D-013 已知限制修复）；
+    // sessionId 为空时 broadcastToSession 回退全局广播（向后兼容），全局广播（announcement/agent_output）不受影响。
 
     /** script_phase → {session_id, phase} — 阶段机每次流转推送（SETUP/INVESTIGATION/DISCUSSION/VOTE/REVEAL/ENDED） */
     public void broadcastScriptPhase(String sessionId, String phase) {
-        broadcast("script_phase", Map.of(
+        broadcastToSession(sessionId, "script_phase", Map.of(
             "session_id", sessionId == null ? "" : sessionId,
             "phase", phase == null ? "" : phase));
     }
@@ -219,7 +276,7 @@ public class SSEController implements SseBroadcaster {
         Map<String, Object> payload = new java.util.LinkedHashMap<>();
         if (status != null) payload.putAll(status);
         payload.put("session_id", sessionId == null ? "" : sessionId);
-        broadcast("script_status", payload);
+        broadcastToSession(sessionId, "script_status", payload);
     }
 
     /** script_reveal → {session_id, votes, most_voted, vote_count, murderer, correct, result, truth, approval} */
@@ -227,10 +284,20 @@ public class SSEController implements SseBroadcaster {
         Map<String, Object> payload = new java.util.LinkedHashMap<>();
         if (reveal != null) payload.putAll(reveal);
         payload.put("session_id", sessionId == null ? "" : sessionId);
-        broadcast("script_reveal", payload);
+        broadcastToSession(sessionId, "script_reveal", payload);
     }
 
     public int getConnectionCount() {
         return emitters.size();
+    }
+
+    /** P-0802-I：指定会话的连接数（测试/观测用）。 */
+    public int getConnectionCount(String sessionId) {
+        if (sessionId == null) return 0;
+        int n = 0;
+        for (String sid : emitterSessions.values()) {
+            if (sessionId.equals(sid)) n++;
+        }
+        return n;
     }
 }

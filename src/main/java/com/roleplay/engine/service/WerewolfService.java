@@ -5,6 +5,7 @@ import com.roleplay.engine.approval.ApprovalService;
 import com.roleplay.engine.broadcast.SseBroadcaster;
 import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.core.Track;
+import com.roleplay.engine.db.service.DatabaseService;
 import com.roleplay.engine.llm.LLMClient;
 import com.roleplay.engine.simulation.AgentState;
 import com.roleplay.engine.simulation.Emotion;
@@ -75,9 +76,17 @@ public class WerewolfService {
         String lastNightSaved = "";
         boolean hunterCanShoot = true;
 
+        // P-0802-I (G1-2)：女巫获知被刀者机制 —— 狼刀决策完成后 witchInformed=true（女巫获知狼刀目标），
+        // 获知后才允许救/毒决策；witchDeclinedSave=女巫明确选择不使用解药（不救）；witchInfoSent=已推送获知事件。
+        volatile boolean witchInformed = false;
+        boolean witchDeclinedSave = false;
+        boolean witchInfoSent = false;
+
         // Voting
         final Map<String, String> votes = new LinkedHashMap<>(); // voter → target
         final List<Map<String, Object>> eliminated = new ArrayList<>();
+        // P-0802-J: 角色令牌 —— player → roleKey（每玩家唯一；断线重连/顶号认证，对齐剧本杀 C3 roleKey 体系）
+        final Map<String, String> playerKeys = new LinkedHashMap<>();
 
         // P-0802-F：当夜已完成行动决策（kill/check/save/poison，resetNight 清空，每夜重新决策）
         final Set<String> nightDecisions = new HashSet<>();
@@ -108,9 +117,15 @@ public class WerewolfService {
                 });
                 // G1-3 修复：visible 原构造后从未 put 进返回 map（狼人互认 API 层缺失）
                 m.put("visible", visible);
+                // P-0802-J: 角色令牌 —— 仅向本人暴露自己的 roleKey（重连认证/防冒充凭证；广播/匿名视图不含）
+                m.put("role_key", playerKeys.getOrDefault(playerName, ""));
                 if (roles.get(playerName) == Role.SEER && !seerResult.isEmpty()) {
                     m.put("seer_result", seerResult);
                     m.put("seer_target", seerTarget);
+                }
+                // P-0802-I (G1-2)：女巫视角暴露获知的被刀者（仅女巫本人可见；SSE 丢失/重连轮询兜底）
+                if (roles.get(playerName) == Role.WITCH && witchInformed && !wolfTarget.isEmpty()) {
+                    m.put("witch_victim", wolfTarget);
                 }
             }
             if (!discussionTranscript.isEmpty()) {
@@ -132,6 +147,8 @@ public class WerewolfService {
     // P-0802-F：可空注入（测试直构路径为 null，全部 null 守卫）
     private LLMClient llmClient;
     private SseBroadcaster sse;
+    // P-0802-I：可空注入（测试直构路径为 null，快照落库 null 守卫）
+    private DatabaseService databaseService;
 
     /** D7: 狼人杀审批门总开关 —— true=投票结算挂起等待 DM 审批（超时自动驳回回滚），false=自动通过。 */
     @Value("${roleplay.game.approval.enabled:true}")
@@ -157,6 +174,10 @@ public class WerewolfService {
     @Value("${roleplay.game.werewolf.witch-poison-probability:0.5}")
     private double witchPoisonProbability = 0.5;
 
+    /** P-0802-I (G1-2)：AI 女巫获知被刀者后首夜使用解药的概率（0-1；1.0=经典首夜必救）。 */
+    @Value("${roleplay.game.werewolf.witch-save-probability:1.0}")
+    private double witchSaveProbability = 1.0;
+
     // ── 白天讨论引擎（复用 D-012/D-022 资产：独立 ConversationManager + TrackStrategy + SpeechGate）──
     @Value("${roleplay.game.discussion.max-rounds:2}")
     private int discussionMaxRounds = 2;
@@ -167,9 +188,12 @@ public class WerewolfService {
     @Value("${roleplay.game.discussion.cold-break:true}")
     private boolean discussionColdBreak = true;
 
-    private SimulationWorld discussionWorld;
-    private ConversationManager discussionConversation;
-    private final WorldDirectorService worldDirector = new WorldDirectorService();
+    // ── P-0802-I：讨论引擎 per-game（按对局/会话隔离，多局并发不互扰；替代原 service 实例级共享）──
+    // D-012 已知限制「讨论引擎为 service 实例级共享（同时只开一局讨论）」的阶段 1 修复：
+    // 每局独立 SimulationWorld + ConversationManager + WorldDirectorService，互不覆盖/互不串状态。
+    private final Map<String, SimulationWorld> discussionWorlds = new ConcurrentHashMap<>();
+    private final Map<String, ConversationManager> discussionConversations = new ConcurrentHashMap<>();
+    private final Map<String, WorldDirectorService> discussionDirectors = new ConcurrentHashMap<>();
 
     /** 游戏推进串行化（单线程）：自动结算/讨论收尾不并发，防状态竞争。 */
     private final ExecutorService gameExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -181,17 +205,27 @@ public class WerewolfService {
     private final ExecutorService discussionExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public WerewolfService(ApprovalService approvalService) {
-        this(approvalService, null, null);
+        this(approvalService, null, null, null);
     }
 
-    /** Spring 注入路径（P-0802-F）：LLMClient（白天讨论引擎）+ SseBroadcaster（werewolf_* SSE 推送）。 */
-    @Autowired
+    /** 测试/旧调用路径：三参（无落库）。 */
     public WerewolfService(ApprovalService approvalService,
                            LLMClient llmClient,
                            SseBroadcaster sse) {
+        this(approvalService, llmClient, sse, null);
+    }
+
+    /** Spring 注入路径（P-0802-F：LLMClient（白天讨论引擎）+ SseBroadcaster（werewolf_* SSE 推送）；
+     *  P-0802-I：+ DatabaseService（对局快照落库/断线重连恢复））。 */
+    @Autowired
+    public WerewolfService(ApprovalService approvalService,
+                           LLMClient llmClient,
+                           SseBroadcaster sse,
+                           DatabaseService databaseService) {
         this.approvalService = approvalService;
         this.llmClient = llmClient;
         this.sse = sse;
+        this.databaseService = databaseService;
     }
 
     public GameState getGame(String sessionId) {
@@ -256,6 +290,11 @@ public class WerewolfService {
         this.witchPoisonProbability = p;
     }
 
+    /** 测试用：覆盖 AI 女巫首夜解药决策概率（G1-2）。 */
+    void setWitchSaveProbability(double p) {
+        this.witchSaveProbability = p;
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  Initialization
     // ═══════════════════════════════════════════════════════════
@@ -286,7 +325,13 @@ public class WerewolfService {
         g.round = 1;
         g.winner = "";
         resetNight(g);
+        // P-0802-J: 每玩家生成唯一 roleKey（对齐剧本杀 C3：开房生成每角色 roleKey；断线重连/顶号认证一体）
+        for (String p : g.alive) {
+            g.playerKeys.put(p, UUID.randomUUID().toString());
+        }
         games.put(sessionId, g);
+        // P-0802-I：开局落快照（断线重连恢复的基础）
+        saveSnapshot(sessionId, g);
 
         log.info("Werewolf game {}: {} players, roles={}", sessionId, players.size(), g.roles);
         return g.toMap(players.isEmpty() ? "" : players.get(0));
@@ -324,6 +369,8 @@ public class WerewolfService {
         if (g == null) return;
         if (g.autoPlay && aiNightActions) {
             runAiNightActions(sessionId);
+            // P-0802-I (G1-2)：狼刀决策完成后向女巫定向推送获知事件（人类女巫先获知再决策）
+            notifyWitchVictim(sessionId, g);
             advanceIfNightComplete(sessionId);
         }
     }
@@ -332,11 +379,32 @@ public class WerewolfService {
     public List<String> runAiNightActions(String sessionId) {
         GameState g = games.get(sessionId);
         if (g == null || g.phase != Phase.NIGHT || !aiNightActions) return List.of();
-        List<String> msgs = planner.planNight(g, getHumanPlayers(sessionId), witchPoisonProbability);
+        // P-0802-I (G1-2)：AI 女巫先获知被刀者（witchInformed），再按 witchSaveProbability 决策救/不救
+        List<String> msgs = planner.planNight(g, getHumanPlayers(sessionId),
+                witchPoisonProbability, witchSaveProbability);
         if (!msgs.isEmpty()) {
             log.info("Werewolf game {} AI night actions: {}", sessionId, msgs);
         }
+        // P-0802-I (G1-2)：AI 狼刀完成后同样推送获知事件（若本局女巫为人类，供其先获知再决策）
+        notifyWitchVictim(sessionId, g);
         return msgs;
+    }
+
+    /**
+     * P-0802-I (G1-2)：女巫获知被刀者推送 —— 狼刀目标确定且女巫存活且未推送过时，
+     * 定向推送 werewolf_witch_info（victim=狼刀目标，供人类女巫先获知再决定救/不救/毒）。
+     */
+    private void notifyWitchVictim(String sessionId, GameState g) {
+        if (g == null || !g.witchInformed || g.witchInfoSent) return;
+        boolean witchAlive = g.alive.stream().anyMatch(p -> g.roles.get(p) == Role.WITCH);
+        if (!witchAlive) return;
+        g.witchInfoSent = true;
+        sse(sessionId, "werewolf_witch_info", Map.of(
+                "session_id", sessionId,
+                "victim", g.wolfTarget,
+                "phase", "night",
+                "round", g.round,
+                "hint", "🌙 女巫获知：昨夜被刀者是 " + g.wolfTarget + "（请决定是否使用解药）"));
     }
 
     /** 当夜全员行动是否完毕（AI 已决策 + 人类已提交；无对应角色/药水已用完视为完成）。 */
@@ -353,8 +421,12 @@ public class WerewolfService {
         boolean noWitch = g.alive.stream().noneMatch(p -> g.roles.get(p) == Role.WITCH);
         boolean wolfDone = noWolf || g.nightDecisions.contains("kill");
         boolean seerDone = noSeer || g.nightDecisions.contains("check");
-        boolean witchSaveDone = noWitch || g.witchUsedAntidote || g.nightDecisions.contains("save");
-        boolean witchPoisonDone = noWitch || g.witchUsedPoison || g.nightDecisions.contains("poison");
+        // P-0802-I (G1-2)：解药决策 = 已救（save）或明确不救（nosave，保留解药），二者皆放行；
+        // 毒药决策 = 已毒（poison）或明确不用毒（nopoison，保留毒药），二者皆放行
+        boolean witchSaveDone = noWitch || g.witchUsedAntidote
+                || g.nightDecisions.contains("save") || g.nightDecisions.contains("nosave");
+        boolean witchPoisonDone = noWitch || g.witchUsedPoison
+                || g.nightDecisions.contains("poison") || g.nightDecisions.contains("nopoison");
         return wolfDone && seerDone && witchSaveDone && witchPoisonDone;
     }
 
@@ -400,6 +472,9 @@ public class WerewolfService {
                 if (role == Role.WEREWOLF && g.alive.contains(target) && !target.equals(player)) {
                     g.wolfTarget = target;
                     g.nightDecisions.add("kill");
+                    // P-0802-I (G1-2)：狼刀决策完成 → 女巫获知被刀者身份 + 定向推送（人类女巫先获知再决策）
+                    g.witchInformed = true;
+                    notifyWitchVictim(sessionId, g);
                     yield "狼人已选择目标：" + target;
                 }
                 yield "你不能执行此行动";
@@ -414,13 +489,33 @@ public class WerewolfService {
                 yield "你不能执行此行动";
             }
             case "save" -> {
-                if (role == Role.WITCH && !g.witchUsedAntidote && g.alive.contains(target)) {
+                if (role == Role.WITCH && !g.witchUsedAntidote) {
+                    if (!g.witchInformed) {
+                        yield "女巫尚未获知被刀者信息（等待狼人行动）";
+                    }
+                    if (g.wolfTarget.isEmpty() || !g.alive.contains(g.wolfTarget)) {
+                        yield "当前没有可救的被刀者";
+                    }
+                    if (!g.wolfTarget.equals(target)) {
+                        yield "你只能救被刀者：" + g.wolfTarget;
+                    }
                     g.witchSaveTarget = target;
                     g.witchUsedAntidote = true;
                     g.nightDecisions.add("save");
-                    yield "女巫使用了解药，目标：" + target;
+                    yield "女巫使用了解药，救起被刀者：" + target;
                 }
                 yield "女巫无法使用解药（已使用或无此目标）";
+            }
+            // P-0802-I (G1-2)：女巫明确选择不使用解药（保留解药，决策完成放行夜间）
+            case "nosave" -> {
+                if (role == Role.WITCH) {
+                    if (g.witchUsedAntidote) yield "女巫已使用解药，无需选择";
+                    if (!g.witchInformed) yield "女巫尚未获知被刀者信息（等待狼人行动）";
+                    g.witchDeclinedSave = true;
+                    g.nightDecisions.add("nosave");
+                    yield "女巫选择不使用解药（保留解药）";
+                }
+                yield "你不能执行此行动";
             }
             case "poison" -> {
                 if (role == Role.WITCH && !g.witchUsedPoison && g.alive.contains(target)) {
@@ -430,6 +525,15 @@ public class WerewolfService {
                     yield "女巫使用了毒药，目标：" + target;
                 }
                 yield "女巫无法使用毒药（已使用或无此目标）";
+            }
+            // P-0802-I (G1-2)：女巫明确选择不使用毒药（保留毒药，决策完成放行夜间）
+            case "nopoison" -> {
+                if (role == Role.WITCH) {
+                    if (g.witchUsedPoison) yield "女巫已使用毒药，无需选择";
+                    g.nightDecisions.add("nopoison");
+                    yield "女巫选择不使用毒药（保留毒药）";
+                }
+                yield "你不能执行此行动";
             }
             default -> "未知行动";
         };
@@ -500,6 +604,8 @@ public class WerewolfService {
         result.put("round", g.round);
         result.put("game_over", g.isGameOver());
         result.put("winner", g.winner);
+        // P-0802-I：夜间结算结果落快照（重连恢复白天讨论起点）
+        saveSnapshot(sessionId, g);
         return result;
     }
 
@@ -541,10 +647,12 @@ public class WerewolfService {
         if (!g.alive.contains(voter)) return "已死亡玩家不能投票";
         if (voter.equals(target)) return "不能投自己";
         g.votes.put(voter, target);
-        // P-0802-F：投票进度推送
-        sse("werewolf_vote_update", Map.of(
+        // P-0802-F：投票进度推送（P-0802-I：定向推送）
+        sse(sessionId, "werewolf_vote_update", Map.of(
                 "session_id", sessionId, "phase", g.phase.name().toLowerCase(),
                 "round", g.round, "votes_count", g.votes.size()));
+        // P-0802-I：票面落快照（重连恢复投票进度）
+        saveSnapshot(sessionId, g);
         // P-0802-F：全员投完自动结算（autoPlay 模式）
         if (g.autoPlay) {
             maybeAdvanceVote(sessionId);
@@ -584,7 +692,7 @@ public class WerewolfService {
         GameState g = games.get(sessionId);
         if (g == null) return;
         // P-0802-F：审批门挂起提示（前端据此显示批准/驳回按钮，D7 语义保留）
-        sse("werewolf_vote_update", Map.of(
+        sse(sessionId, "werewolf_vote_update", Map.of(
                 "session_id", sessionId, "approval", "pending",
                 "phase", "day_vote", "round", g.round));
         discussionExecutor.submit(() -> {
@@ -684,6 +792,8 @@ public class WerewolfService {
         result.put("round", g.round);
         result.put("game_over", g.isGameOver());
         result.put("winner", g.winner);
+        // P-0802-I：投票结算结果落快照（重连恢复新夜晚起点）
+        saveSnapshot(sessionId, g);
         return result;
     }
 
@@ -763,8 +873,10 @@ public class WerewolfService {
         if (g != null && g.phase == Phase.DAY_DISCUSS) {
             g.phase = Phase.DAY_VOTE;
             g.votes.clear();
-            sse("werewolf_phase", Map.of("session_id", sessionId, "phase", "day_vote", "round", g.round));
+            sse(sessionId, "werewolf_phase", Map.of("session_id", sessionId, "phase", "day_vote", "round", g.round));
             broadcastPlayers(sessionId);
+            // P-0802-I：阶段流转落快照（重连恢复投票中状态）
+            saveSnapshot(sessionId, g);
         }
     }
 
@@ -779,7 +891,7 @@ public class WerewolfService {
     public void startDayDiscussion(String sessionId) {
         GameState g = games.get(sessionId);
         if (g == null || g.phase != Phase.DAY_DISCUSS || g.discussionActive) return;
-        sse("werewolf_phase", Map.of("session_id", sessionId, "phase", "day_discuss", "round", g.round));
+        sse(sessionId, "werewolf_phase", Map.of("session_id", sessionId, "phase", "day_discuss", "round", g.round));
         if (llmClient == null || g.alive.size() < 2) {
             log.info("Werewolf game {}: no LLM/alive<2, skip discussion → voting", sessionId);
             gameExecutor.submit(() -> finishDayDiscussion(sessionId));
@@ -827,42 +939,56 @@ public class WerewolfService {
         return Map.of("ok", true, "player", player, "message", text);
     }
 
-    /** 懒创建讨论引擎（独立实例，不与 2D 模拟/剧本杀共享，避免重 init 互相覆盖，对齐 D-012）。 */
-    private void ensureDiscussionEngine() {
-        if (discussionConversation == null) {
-            discussionWorld = new SimulationWorld();
-            discussionConversation = new ConversationManager();
-            discussionConversation.init(discussionWorld, llmClient,
-                    name -> discussionWorld.getAgent(name),
-                    () -> discussionWorld.getWorldNarration());
-        }
+    /**
+     * P-0802-I：per-game 懒创建讨论引擎 —— 每局独立 ConversationManager + SimulationWorld + WorldDirectorService
+     * （替代原 service 实例级共享，多局并发互不覆盖/互不串状态；对齐 D-012 设计但隔离维度从实例级升级为对局级）。
+     */
+    private ConversationManager ensureDiscussionEngine(String sessionId) {
+        return discussionConversations.computeIfAbsent(sessionId, k -> {
+            SimulationWorld world = new SimulationWorld();
+            ConversationManager cm = new ConversationManager();
+            cm.init(world, llmClient,
+                    name -> world.getAgent(name),
+                    () -> world.getWorldNarration());
+            discussionWorlds.put(k, world);
+            discussionDirectors.put(k, new WorldDirectorService());
+            return cm;
+        });
+    }
+
+    /** 测试钩子（同包）：指定对局的讨论引擎实例（断言 per-game 隔离用）。 */
+    ConversationManager getDiscussionConversation(String sessionId) {
+        return discussionConversations.get(sessionId);
     }
 
     /** 讨论引擎编排：注册角色（身份卡不含他人秘密）→ 目标注入 → 全员 MERGED 轨道 → 建组 → 门控驱动轮次。 */
     private void runDiscussionEngine(GameState g, String sessionId) {
-        ensureDiscussionEngine();
-        discussionWorld.clearAgents();
-        discussionWorld.setWorldNarration("你们正在狼人杀白天讨论阶段，通过发言找出狼人。");
+        // P-0802-I：改用 per-game 实例（世界/引擎/导演均按对局隔离）
+        ConversationManager cm = ensureDiscussionEngine(sessionId);
+        SimulationWorld world = discussionWorlds.get(sessionId);
+        WorldDirectorService director = discussionDirectors.get(sessionId);
+        world.clearAgents();
+        world.setWorldNarration("你们正在狼人杀白天讨论阶段，通过发言找出狼人。");
 
         for (String p : g.alive) {
             Agent agent = new Agent(buildWerewolfDiscussionPersona(g, p), "npc", llmClient);
             double x = 100 + Math.random() * 800;
             double y = 100 + Math.random() * 400;
-            discussionWorld.registerAgent(agent, x, y, 220, 60);
-            AgentState st = discussionWorld.getState(p);
+            world.registerAgent(agent, x, y, 220, 60);
+            AgentState st = world.getState(p);
             if (st != null) st.setEmotion(Emotion.NEUTRAL);
         }
 
         // 目标注入（狼人隐藏身份 / 好人找出狼人）
         for (String p : g.alive) {
             boolean wolf = g.roles.get(p) == Role.WEREWOLF;
-            worldDirector.setGoal(p, wolf ? GOAL_WOLF_HIDE : GOAL_VILLAGER_FIND);
+            director.setGoal(p, wolf ? GOAL_WOLF_HIDE : GOAL_VILLAGER_FIND);
         }
 
         List<AgentState> members = new ArrayList<>();
         Map<String, TrackAssignment> tracks = new LinkedHashMap<>();
         for (String p : g.alive) {
-            AgentState st = discussionWorld.getState(p);
+            AgentState st = world.getState(p);
             if (st == null) continue;
             members.add(st);
             List<String> others = g.alive.stream().filter(q -> !q.equals(p)).toList();
@@ -870,20 +996,20 @@ public class WerewolfService {
                     "公开讨论（MERGED）：狼人身份不进上下文，靠发言博弈"));
         }
 
-        ConversationGroup group = discussionConversation.createScriptDiscussionGroup(
+        ConversationGroup group = cm.createScriptDiscussionGroup(
                 "ww-disc-" + sessionId, members, tracks);
         SpeechGate speechGate = new SpeechGate(discussionSilenceFloor, discussionWaitBias, discussionColdBreak);
         int[] scannedTurns = {0};
         BiFunction<ConversationGroup, Integer, ConversationManager.RoundGateDecision> gate =
                 buildWerewolfGate(g, speechGate, scannedTurns);
         ConversationManager.ScriptDiscussionResult result =
-                discussionConversation.runScriptDiscussionRounds(group, discussionMaxRounds, gate);
+                cm.runScriptDiscussionRounds(group, discussionMaxRounds, gate);
         g.discussionTranscript.addAll(result.transcript());
         for (Map<String, String> turn : result.transcript()) {
             String speaker = turn.getOrDefault("speaker", "");
             String msg = turn.getOrDefault("message", "");
             if (msg.isBlank()) continue;
-            sse("werewolf_speech", Map.of("session_id", sessionId, "speaker", speaker, "message", msg));
+            sse(sessionId, "werewolf_speech", Map.of("session_id", sessionId, "speaker", speaker, "message", msg));
         }
         log.info("Werewolf game {} day discussion done: {} turns", sessionId, result.transcript().size());
     }
@@ -1010,6 +1136,10 @@ public class WerewolfService {
         g.lastNightVictim = "";
         g.lastNightSaved = "";
         g.nightDecisions.clear();
+        // P-0802-I (G1-2)：每夜重置女巫获知状态（新夜重新获知/重新决策/重新推送）
+        g.witchInformed = false;
+        g.witchDeclinedSave = false;
+        g.witchInfoSent = false;
     }
 
     /** Hunter retaliates — picks a target to shoot after death. */
@@ -1030,11 +1160,13 @@ public class WerewolfService {
             g.winner = winner;
             g.phase = Phase.ENDED;
         }
-        sse("werewolf_player_eliminated", Map.of("session_id", sessionId, "name", target, "role", ""));
+        sse(sessionId, "werewolf_player_eliminated", Map.of("session_id", sessionId, "name", target, "role", ""));
         broadcastPlayers(sessionId);
         if (g.phase == Phase.ENDED) {
             broadcastGameOver(sessionId);
         }
+        // P-0802-I：开枪结果落快照
+        saveSnapshot(sessionId, g);
         return "猎人 " + player + " 开枪击杀了 " + target;
     }
 
@@ -1046,7 +1178,11 @@ public class WerewolfService {
 
     public void endGame(String sessionId) {
         GameState g = games.get(sessionId);
-        if (g != null) g.phase = Phase.ENDED;
+        if (g != null) {
+            g.phase = Phase.ENDED;
+            // P-0802-I：终态落快照（重连可恢复终态结果）
+            saveSnapshot(sessionId, g);
+        }
     }
 
     public boolean isPlayerAlive(String sessionId, String player) {
@@ -1056,12 +1192,13 @@ public class WerewolfService {
 
     // ═══════════════════════════════════════════════════════════
     //  P-0802-F：werewolf_* SSE 推送（复用 SSEController.broadcast 既有管线，null 守卫）
+    //  P-0802-I：改为按会话定向推送（broadcastToSession）—— 多客户端/多对局并发互不串扰（D-013 已知限制修复）
     // ═══════════════════════════════════════════════════════════
 
-    private void sse(String event, Map<String, Object> payload) {
+    private void sse(String sessionId, String event, Map<String, Object> payload) {
         if (sse != null) {
             try {
-                sse.broadcast(event, payload);
+                sse.broadcastToSession(sessionId, event, payload);
             } catch (Exception e) {
                 log.warn("Werewolf SSE {} failed: {}", event, e.getMessage());
             }
@@ -1076,10 +1213,10 @@ public class WerewolfService {
         if (humanPlayer != null && !humanPlayer.isEmpty()) {
             Role r = g.roles.get(humanPlayer);
             if (r != null) {
-                sse("werewolf_my_role", Map.of("session_id", sessionId, "role", r.name().toLowerCase()));
+                sse(sessionId, "werewolf_my_role", Map.of("session_id", sessionId, "role", r.name().toLowerCase()));
             }
         }
-        sse("werewolf_phase", Map.of("session_id", sessionId, "phase", g.phase.name().toLowerCase(), "round", g.round));
+        sse(sessionId, "werewolf_phase", Map.of("session_id", sessionId, "phase", g.phase.name().toLowerCase(), "round", g.round));
     }
 
     /** 玩家列表推送（全局广播，不含角色身份——角色按玩家视角经 status API 获取，防信息泄露）。 */
@@ -1096,25 +1233,25 @@ public class WerewolfService {
             p.put("roleRevealed", false);
             players.add(p);
         }
-        sse("werewolf_player_update", Map.of("session_id", sessionId, "players", players));
+        sse(sessionId, "werewolf_player_update", Map.of("session_id", sessionId, "players", players));
     }
 
     /** 夜间结算推送：结果 + 出局公告 + 女巫提示。 */
     private void broadcastNightResult(String sessionId, GameState g, Map<String, Object> result) {
         Map<String, Object> payload = new LinkedHashMap<>(result);
         payload.put("session_id", sessionId);
-        sse("werewolf_night_result", payload);
+        sse(sessionId, "werewolf_night_result", payload);
         @SuppressWarnings("unchecked")
         List<String> died = (List<String>) result.getOrDefault("died", List.of());
         for (String d : died) {
             Role r = g.roles.get(d);
-            sse("werewolf_player_eliminated", Map.of(
+            sse(sessionId, "werewolf_player_eliminated", Map.of(
                     "session_id", sessionId, "name", d,
                     "role", r == null ? "" : r.name().toLowerCase()));
         }
         if (!died.isEmpty()) {
             String victimText = String.join("、", died);
-            sse("werewolf_witch_info", Map.of(
+            sse(sessionId, "werewolf_witch_info", Map.of(
                     "session_id", sessionId, "victim", victimText,
                     "hint", "昨夜死亡：" + victimText));
         }
@@ -1125,11 +1262,11 @@ public class WerewolfService {
     private void broadcastVoteResult(String sessionId, GameState g, Map<String, Object> result) {
         Map<String, Object> payload = new LinkedHashMap<>(result);
         payload.put("session_id", sessionId);
-        sse("werewolf_vote_update", payload);
+        sse(sessionId, "werewolf_vote_update", payload);
         String exiled = String.valueOf(result.getOrDefault("exiled", ""));
         if (!exiled.isEmpty() && !"null".equals(exiled)) {
             Role r = g.roles.get(exiled);
-            sse("werewolf_player_eliminated", Map.of(
+            sse(sessionId, "werewolf_player_eliminated", Map.of(
                     "session_id", sessionId, "name", exiled,
                     "role", r == null ? "" : r.name().toLowerCase()));
             broadcastPlayers(sessionId);
@@ -1144,7 +1281,7 @@ public class WerewolfService {
         String message = "night".equals(phaseKey)
                 ? "请真人玩家完成夜间行动（狼刀/查验/救毒）"
                 : "请真人玩家投票";
-        sse("werewolf_wait_human", Map.of(
+        sse(sessionId, "werewolf_wait_human", Map.of(
                 "session_id", sessionId, "phase", phase,
                 "round", g.round, "message", message));
     }
@@ -1154,7 +1291,7 @@ public class WerewolfService {
         GameState g = games.get(sessionId);
         if (g == null) return;
         String message = "werewolf".equals(g.winner) ? "🐺 狼人阵营获胜！" : "🕊️ 好人阵营获胜！";
-        sse("werewolf_game_over", Map.of(
+        sse(sessionId, "werewolf_game_over", Map.of(
                 "session_id", sessionId, "winner", g.winner,
                 "phase", "ended", "message", message));
         broadcastPlayers(sessionId);
@@ -1168,5 +1305,267 @@ public class WerewolfService {
         m.put("session_id", sessionId);
         m.put("waiting_human", !isNightComplete(sessionId) || g.votes.size() < g.alive.size());
         return m;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  P-0802-I：对局快照落库 / 断线重连恢复（对齐 D-017 C3 剧本杀先例）
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * 对局快照落库 —— 全量状态写 ScriptEntity（type=snapshot，name 前缀「对局快照:ww:<sessionId>」，
+     * 复用 DatabaseService.getLatestScriptSnapshot("ww:" + sessionId) 读取，零新表/零 DatabaseService 改动）。
+     * databaseService 为 null（直接构造的测试）时跳过。
+     */
+    private void saveSnapshot(String sessionId, GameState g) {
+        if (databaseService == null || g == null) return;
+        try {
+            Map<String, Object> content = new LinkedHashMap<>();
+            content.put("type", "snapshot");
+            content.put("session_id", sessionId);
+            content.put("saved_at", java.time.LocalDateTime.now().toString());
+            content.put("phase", g.phase.name());
+            content.put("round", g.round);
+            content.put("winner", g.winner);
+            Map<String, String> roles = new LinkedHashMap<>();
+            g.roles.forEach((n, r) -> roles.put(n, r.name()));
+            content.put("roles", roles);
+            content.put("alive", new ArrayList<>(g.alive));
+            content.put("wolf_target", g.wolfTarget);
+            content.put("seer_target", g.seerTarget);
+            content.put("seer_result", g.seerResult);
+            content.put("witch_save_target", g.witchSaveTarget);
+            content.put("witch_poison_target", g.witchPoisonTarget);
+            content.put("witch_used_antidote", g.witchUsedAntidote);
+            content.put("witch_used_poison", g.witchUsedPoison);
+            content.put("witch_informed", g.witchInformed);
+            content.put("witch_declined_save", g.witchDeclinedSave);
+            content.put("last_night_victim", g.lastNightVictim);
+            content.put("last_night_saved", g.lastNightSaved);
+            content.put("hunter_can_shoot", g.hunterCanShoot);
+            content.put("votes", new LinkedHashMap<>(g.votes));
+            content.put("eliminated", new ArrayList<>(g.eliminated));
+            content.put("night_decisions", new ArrayList<>(g.nightDecisions));
+            content.put("discussion_transcript", new ArrayList<>(g.discussionTranscript));
+            content.put("discussion_active", g.discussionActive);
+            content.put("auto_play", g.autoPlay);
+            content.put("humans", new ArrayList<>(getHumanPlayers(sessionId)));
+            // P-0802-J: roleKey 随快照持久化（重启恢复后 resume 仍可校验玩家身份）
+            content.put("player_keys", new LinkedHashMap<>(g.playerKeys));
+            databaseService.saveScript("对局快照:ww:" + sessionId, content);
+        } catch (Exception e) {
+            log.warn("Werewolf game {} snapshot save failed: {}", sessionId, e.getMessage());
+        }
+    }
+
+    /**
+     * P-0802-J: 玩家 roleKey 是否有效（匹配该玩家在本局的令牌）。
+     * 对齐剧本杀 C3：有 key 校验匹配（防冒充）；无对局/无玩家/空 key 均判无效。
+     */
+    public boolean isPlayerKeyValid(String sessionId, String player, String playerKey) {
+        if (sessionId == null || player == null || player.isBlank()
+                || playerKey == null || playerKey.isBlank()) return false;
+        GameState g = games.get(sessionId);
+        if (g == null) return false;
+        String expected = g.playerKeys.get(player);
+        return expected != null && expected.equals(playerKey);
+    }
+
+    /** P-0802-J: 某玩家的 roleKey（客户端存储/重连凭证；无对局/无玩家返回空串）。 */
+    public String getRoleKey(String sessionId, String player) {
+        GameState g = games.get(sessionId);
+        if (g == null || player == null) return "";
+        return g.playerKeys.getOrDefault(player, "");
+    }
+
+    /** P-0802-J: 由 roleKey 反查玩家（仅内存对局；重启后需先经 session_id 恢复再反查）。 */
+    public String findPlayerByKey(String sessionId, String playerKey) {
+        if (sessionId == null || playerKey == null || playerKey.isBlank()) return "";
+        GameState g = games.get(sessionId);
+        if (g == null) return "";
+        for (Map.Entry<String, String> e : g.playerKeys.entrySet()) {
+            if (playerKey.equals(e.getValue())) return e.getKey();
+        }
+        return "";
+    }
+
+    /** P-0802-J: 由 playerKey 反查其所属对局 sessionId（仅内存对局；重启后请用 session_id/room_code 定位）。 */
+    public String findSessionByPlayerKey(String playerKey) {
+        if (playerKey == null || playerKey.isBlank()) return "";
+        for (Map.Entry<String, GameState> e : games.entrySet()) {
+            if (e.getValue().playerKeys.containsValue(playerKey)) return e.getKey();
+        }
+        return "";
+    }
+
+    /** P-0802-J: 全员 roleKey 一览（DM/主持人分发令牌用；无对局返回空 map）。 */
+    public Map<String, String> getPlayerKeys(String sessionId) {
+        GameState g = games.get(sessionId);
+        return g == null ? Map.of() : new LinkedHashMap<>(g.playerKeys);
+    }
+
+    /**
+     * P-0802-J：断线重连恢复入口（roleKey 认证版）—— 内存对局存在直接返回该玩家视角；
+     * 不存在则从持久化快照重建（重启后可用）；已终局返回终态（terminal）。
+     *
+     * <p>防冒充（对齐剧本杀 C3 roleKey 体系）：resume 必须携带 player_key（本人 roleKey）——
+     * 仅传 key 时由 key 反查玩家；传了 player 名时校验 key 与其匹配。缺 key / key 不匹配
+     * → 拒绝恢复（错误信息含「身份校验失败」），杜绝「拿到 session_id 即可恢复任意角色」。
+     *
+     * @return 玩家视图（含 restored/resumed/session_id 附加键；终局含 terminal/winner）
+     */
+    public Map<String, Object> resumeGame(String sessionId, String player, String playerKey) {
+        if (sessionId == null || sessionId.isBlank()) return Map.of("error", "缺少对局标识");
+        GameState g = games.get(sessionId);
+        boolean restored = false;
+        if (g == null) {
+            g = restoreFromSnapshot(sessionId);
+            if (g == null) return Map.of("error", "对局不存在且无快照可恢复");
+            restored = true;
+        }
+        // 由 roleKey 反查玩家（重连场景客户端可能只持 key，不传玩家名）
+        String resolved = (player == null || player.isBlank()) ? findPlayerByKey(sessionId, playerKey) : player;
+        if (resolved == null || resolved.isBlank() || playerKey == null || playerKey.isBlank()
+                || !isPlayerKeyValid(sessionId, resolved, playerKey)) {
+            return Map.of("error", "身份校验失败：player_key 缺失或不匹配");
+        }
+        Map<String, Object> view = new LinkedHashMap<>(g.toMap(resolved));
+        view.put("session_id", sessionId);
+        view.put("restored", restored);
+        view.put("resumed", true);
+        view.put("player", resolved);
+        if (g.isGameOver()) {
+            view.put("terminal", true);
+            view.put("winner", g.winner);
+        }
+        log.info("Werewolf game {} resumed by player {} (restored={}, phase={})",
+                sessionId, resolved, restored, g.phase.name().toLowerCase());
+        return view;
+    }
+
+    /** 从持久化快照重建对局（重启后恢复）。无快照返回 null；重建后重新放入 games 缓存。 */
+    private GameState restoreFromSnapshot(String sessionId) {
+        if (databaseService == null) return null;
+        Optional<Map<String, Object>> snap = databaseService.getLatestScriptSnapshot("ww:" + sessionId);
+        if (snap.isEmpty()) return null;
+        Map<String, Object> c = snap.get();
+        if (!sessionId.equals(str(c.get("session_id")))) return null;
+
+        GameState g = new GameState();
+        Object rolesObj = c.get("roles");
+        if (rolesObj instanceof Map<?, ?> rm) {
+            for (Map.Entry<?, ?> e : rm.entrySet()) {
+                Role r = parseRole(str(e.getValue()));
+                if (r != null) g.roles.put(str(e.getKey()), r);
+            }
+        }
+        for (String p : strList(c.get("alive"))) {
+            if (!g.roles.containsKey(p)) g.roles.put(p, Role.VILLAGER);
+            g.alive.add(p);
+        }
+        g.phase = parsePhase(str(c.get("phase")));
+        g.round = intOf(c.get("round"), 1);
+        g.winner = str(c.get("winner"));
+        g.wolfTarget = str(c.get("wolf_target"));
+        g.seerTarget = str(c.get("seer_target"));
+        g.seerResult = str(c.get("seer_result"));
+        g.witchSaveTarget = str(c.get("witch_save_target"));
+        g.witchPoisonTarget = str(c.get("witch_poison_target"));
+        g.witchUsedAntidote = boolOf(c.get("witch_used_antidote"), false);
+        g.witchUsedPoison = boolOf(c.get("witch_used_poison"), false);
+        g.witchInformed = boolOf(c.get("witch_informed"), false);
+        g.witchDeclinedSave = boolOf(c.get("witch_declined_save"), false);
+        g.lastNightVictim = str(c.get("last_night_victim"));
+        g.lastNightSaved = str(c.get("last_night_saved"));
+        g.hunterCanShoot = boolOf(c.get("hunter_can_shoot"), true);
+        g.votes.putAll(strMap(c.get("votes")));
+        for (Object o : mapList(c.get("eliminated"))) {
+            if (o instanceof Map<?, ?> mm) {
+                Map<String, Object> e = new LinkedHashMap<>();
+                mm.forEach((k, v) -> e.put(str(k), v));
+                g.eliminated.add(e);
+            }
+        }
+        g.nightDecisions.addAll(strList(c.get("night_decisions")));
+        for (Object o : mapList(c.get("discussion_transcript"))) {
+            if (o instanceof Map<?, ?> mm) {
+                Map<String, String> turn = new LinkedHashMap<>();
+                mm.forEach((k, v) -> turn.put(str(k), str(v)));
+                g.discussionTranscript.add(turn);
+            }
+        }
+        g.discussionActive = boolOf(c.get("discussion_active"), false);
+        g.autoPlay = boolOf(c.get("auto_play"), true);
+        // P-0802-J: roleKey 快照恢复（旧快照无此键 → 空 map，resume 需重新发放前的 key 不可用）
+        g.playerKeys.putAll(strMap(c.get("player_keys")));
+        Set<String> humans = new HashSet<>(strList(c.get("humans")));
+        if (!humans.isEmpty()) humanPlayers.put(sessionId, humans);
+
+        games.put(sessionId, g);
+        log.info("Werewolf game {} restored from snapshot (phase={}, alive={}, round={})",
+                sessionId, g.phase.name(), g.alive.size(), g.round);
+        return g;
+    }
+
+    // ── P-0802-I：快照恢复的宽容转换辅助（Jackson 反序列化后类型为 Map/List/Number 等）──
+
+    private static Phase parsePhase(String s) {
+        if (s == null || s.isBlank()) return Phase.NIGHT;
+        try {
+            return Phase.valueOf(s);
+        } catch (IllegalArgumentException e) {
+            return Phase.NIGHT;
+        }
+    }
+
+    private static String str(Object o) {
+        return o == null ? "" : String.valueOf(o);
+    }
+
+    private static boolean boolOf(Object o, boolean dflt) {
+        if (o instanceof Boolean b) return b;
+        if (o instanceof String s) return Boolean.parseBoolean(s);
+        return dflt;
+    }
+
+    private static int intOf(Object o, int dflt) {
+        if (o instanceof Number n) return n.intValue();
+        if (o instanceof String s) {
+            try {
+                return Integer.parseInt(s.trim());
+            } catch (NumberFormatException ignored) { }
+        }
+        return dflt;
+    }
+
+    private static List<String> strList(Object o) {
+        List<String> out = new ArrayList<>();
+        if (o instanceof List<?> l) {
+            for (Object x : l) {
+                if (x != null) out.add(String.valueOf(x));
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, String> strMap(Object o) {
+        Map<String, String> out = new LinkedHashMap<>();
+        if (o instanceof Map<?, ?> m) {
+            for (Map.Entry<?, ?> e : m.entrySet()) {
+                if (e.getKey() != null && e.getValue() != null) out.put(String.valueOf(e.getKey()), String.valueOf(e.getValue()));
+            }
+        }
+        return out;
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> mapList(Object o) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        if (o instanceof List<?> l) {
+            for (Object x : l) {
+                if (x instanceof Map) out.add((Map<String, Object>) x);
+            }
+        }
+        return out;
     }
 }

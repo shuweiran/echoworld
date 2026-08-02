@@ -59,6 +59,7 @@ roleplay:
       auto-play: true
       auto-approve-ms: 3000
       witch-poison-probability: 0.5
+      witch-save-probability: 1.0
   auth:
     # 邀请码开关（P-0801-G）：测试置 true 验证启用路径（配置码 B3283A78 可验证通过）；
     # 与主 yml 同步键（invite-code 同值）
