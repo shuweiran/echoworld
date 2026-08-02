@@ -1,0 +1,293 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>轨道系统可视化 — 2D 游戏中用户无法进入他人聊天轨道（调研图集）</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f8fafc;
+    --fg: #172033;
+    --muted: #5b6475;
+    --line: #64748b;
+    --neutral: #e2e8f0;
+    --input: #bfdbfe;
+    --process: #c7d2fe;
+    --storage: #99f6e4;
+    --external: #fde68a;
+    --risk: #fecaca;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a;
+      --fg: #e5e7eb;
+      --muted: #a3adbd;
+      --line: #94a3b8;
+      --neutral: #334155;
+      --input: #1d4ed8;
+      --process: #4338ca;
+      --storage: #0f766e;
+      --external: #92400e;
+      --risk: #991b1b;
+    }
+  }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  main { max-width: 1040px; margin: 32px auto; padding: 0 20px; }
+  h1 { font-size: 22px; }
+  h2 { font-size: 17px; margin-top: 40px; }
+  p.desc { color: var(--muted); font-size: 13px; }
+  svg { width: 100%; height: auto; display: block; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+  figcaption { color: var(--muted); font-size: 12px; margin: 8px 0 24px; }
+  .title { font-size: 16px; font-weight: 650; fill: var(--fg); }
+  .label { font-size: 13px; font-weight: 600; fill: var(--fg); }
+  .small { font-size: 11px; fill: var(--muted); }
+  .node { stroke: var(--line); stroke-width: 1; }
+  .neutral { fill: var(--neutral); }
+  .input { fill: var(--input); }
+  .process { fill: var(--process); }
+  .storage { fill: var(--storage); }
+  .external { fill: var(--external); }
+  .risk { fill: var(--risk); }
+  .edge { stroke: var(--line); stroke-width: 1.5; fill: none; }
+  .cond { stroke: var(--line); stroke-width: 1; fill: none; stroke-dasharray: 5 4; }
+  .zone { fill: none; stroke: var(--line); stroke-width: 1; stroke-dasharray: 6 5; opacity: 0.8; }
+  .tbox { fill: var(--bg); stroke: none; }
+</style>
+<main>
+  <h1>🧭 轨道（Track）系统可视化 — 2D 游戏中用户无法进入他人聊天轨道</h1>
+  <p class="desc">依据《轨道系统用户加入调研-20260803.md》（源码级证据，文件:行号可查）绘制。三张图：①系统数据流 ②断点因果（为什么进不去）③改进方案对比。</p>
+
+  <!-- ============ 图 1：轨道系统数据流 ============ -->
+  <h2>图 1 · 轨道系统数据流（一条消息从发起到渲染）</h2>
+  <svg viewBox="0 0 1000 430" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="轨道系统数据流图">
+    <defs>
+      <marker id="arr1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--line)" />
+      </marker>
+    </defs>
+    <!-- edges (behind nodes) -->
+    <path class="edge" marker-end="url(#arr1)" d="M 60 90 H 125" />
+    <path class="edge" marker-end="url(#arr1)" d="M 225 90 H 290" />
+    <path class="edge" marker-end="url(#arr1)" d="M 390 90 H 455" />
+    <path class="edge" marker-end="url(#arr1)" d="M 555 90 H 620" />
+    <path class="edge" marker-end="url(#arr1)" d="M 720 90 H 785" />
+    <path class="edge" marker-end="url(#arr1)" d="M 885 90 H 950" />
+    <!-- branch: player msg -> DYAD -->
+    <path class="cond" marker-end="url(#arr1)" d="M 475 138 C 520 190 620 190 668 178" />
+    <path class="cond" marker-end="url(#arr1)" d="M 475 160 C 540 250 640 255 696 240" />
+    <!-- loop: every tick -->
+    <path class="cond" marker-end="url(#arr1)" d="M 390 160 C 250 200 120 200 80 140" />
+    <!-- zones -->
+    <rect class="zone" x="10" y="36" width="980" height="124" rx="8" />
+    <rect class="zone" x="12" y="212" width="976" height="180" rx="8" />
+    <!-- zone labels -->
+    <text class="small" x="24" y="56">世界主循环（每 tick）</text>
+    <text class="small" x="24" y="230">对话组生命周期（后台虚拟线程）</text>
+
+    <!-- row 1: message -> controllers -->
+    <g>
+      <rect class="node input" x="60" y="62" width="130" height="56" rx="8" />
+      <text class="label" x="125" y="84" text-anchor="middle">玩家 / NPC 发言</text>
+      <text class="small" x="125" y="102" text-anchor="middle">玩家：POST send/{name}</text>
+    </g>
+    <g>
+      <rect class="node process" x="225" y="62" width="165" height="56" rx="8" />
+      <text class="label" x="307" y="84" text-anchor="middle">SimulationController</text>
+      <text class="small" x="307" y="102" text-anchor="middle">sendUserMessage → currentMessage</text>
+    </g>
+    <g>
+      <rect class="node process" x="390" y="62" width="165" height="56" rx="8" />
+      <text class="label" x="472" y="82" text-anchor="middle">SimulationOrchestrator.tick</text>
+      <text class="small" x="472" y="98" text-anchor="middle">WorldDirector 目标</text>
+      <text class="small" x="472" y="112" text-anchor="middle">TrackDirector 轨道分配</text>
+    </g>
+    <g>
+      <rect class="node process" x="555" y="62" width="165" height="56" rx="8" />
+      <text class="label" x="637" y="82" text-anchor="middle">ConversationManager.tick</text>
+      <text class="small" x="637" y="98" text-anchor="middle">玩家消息 → DYAD</text>
+      <text class="small" x="637" y="112" text-anchor="middle">ModeClassifier 候选组</text>
+    </g>
+    <g>
+      <rect class="node storage" x="720" y="62" width="165" height="56" rx="8" />
+      <text class="label" x="802" y="84" text-anchor="middle">ConversationGroup</text>
+      <text class="small" x="802" y="102" text-anchor="middle">成员 + 轨道分配缓存</text>
+    </g>
+    <g>
+      <rect class="node process" x="885" y="62" width="100" height="56" rx="8" />
+      <text class="label" x="935" y="84" text-anchor="middle">TrackStrategy</text>
+      <text class="small" x="935" y="102" text-anchor="middle">构建上下文</text>
+    </g>
+
+    <!-- row 2: strategy detail / LLM / SSE -->
+    <g>
+      <rect class="node external" x="60" y="262" width="200" height="64" rx="8" />
+      <text class="label" x="160" y="286" text-anchor="middle">LLM 生成（流式 agent_token）</text>
+      <text class="small" x="160" y="304" text-anchor="middle">MERGED 全文 / WEAK 摘要</text>
+      <text class="small" x="160" y="318" text-anchor="middle">/ ISOLATED 独白</text>
+    </g>
+    <g>
+      <rect class="node neutral" x="320" y="262" width="220" height="64" rx="8" />
+      <text class="label" x="430" y="286" text-anchor="middle">processResults → 情绪/消息写回</text>
+      <text class="small" x="430" y="304" text-anchor="middle">world.addConversationEntry</text>
+    </g>
+    <g>
+      <rect class="node neutral" x="600" y="262" width="240" height="64" rx="8" />
+      <text class="label" x="720" y="286" text-anchor="middle">SSE world_snapshot / recent</text>
+      <text class="small" x="720" y="304" text-anchor="middle">GET /api/simulation/state</text>
+      <text class="small" x="720" y="318" text-anchor="middle">conversation-status（4s 轮询）</text>
+    </g>
+    <g>
+      <rect class="node input" x="880" y="262" width="110" height="64" rx="8" />
+      <text class="label" x="935" y="286" text-anchor="middle">前端 2D</text>
+      <text class="small" x="935" y="304" text-anchor="middle">气泡 / 群组框</text>
+      <text class="small" x="935" y="318" text-anchor="middle">右聊天面板</text>
+    </g>
+    <path class="edge" marker-end="url(#arr1)" d="M 160 326 V 350 H 935 V 326" />
+    <path class="edge" marker-end="url(#arr1)" d="M 935 118 V 190 H 430 V 262" />
+    <path class="edge" marker-end="url(#arr1)" d="M 260 294 H 320" />
+    <path class="edge" marker-end="url(#arr1)" d="M 540 294 H 600" />
+
+    <!-- DYAD branch label -->
+    <g>
+      <rect class="node risk" x="600" y="178" width="170" height="50" rx="8" />
+      <text class="label" x="685" y="198" text-anchor="middle">DYAD 组（仅玩家路径）</text>
+      <text class="small" x="685" y="216" text-anchor="middle">DyadStrategy 不消费轨道</text>
+    </g>
+    <g>
+      <rect class="node neutral" x="790" y="178" width="190" height="50" rx="8" />
+      <text class="label" x="885" y="198" text-anchor="middle">startGroup（NPC 候选）</text>
+      <text class="small" x="885" y="216" text-anchor="middle">GROUP_DISCUSSION / DEBATE</text>
+    </g>
+    <path class="edge" marker-end="url(#arr1)" d="M 770 203 H 790" />
+
+    <!-- track assignment condition -->
+    <g>
+      <rect class="node storage" x="60" y="150" width="300" height="46" rx="8" />
+      <text class="label" x="210" y="169" text-anchor="middle">轨道判定（TrackDirectorService.assign）</text>
+      <text class="small" x="210" y="185" text-anchor="middle">TrackScore ≥ 40 → MERGED/WEAK/ISOLATED</text>
+    </g>
+    <path class="edge" marker-end="url(#arr1)" d="M 360 173 H 600 V 203" />
+  </svg>
+  <figcaption>图 1：完整链路。注意两个关键分支：① 玩家消息走「DYAD 唯一路径」（不消费轨道分配）；② NPC 之间按听觉候选建组（消费轨道分配）。每 tick 循环重算（虚线回环）。</figcaption>
+
+  <!-- ============ 图 2：断点因果 ============ -->
+  <h2>图 2 · 为什么用户进不去他人的聊天轨道（三环叠加）</h2>
+  <svg viewBox="0 0 1000 460" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="断点因果图">
+    <defs>
+      <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--line)" />
+      </marker>
+    </defs>
+    <!-- three rings -->
+    <rect class="zone" x="20" y="60" width="310" height="300" rx="10" />
+    <rect class="zone" x="350" y="60" width="300" height="300" rx="10" />
+    <rect class="zone" x="670" y="60" width="310" height="300" rx="10" />
+    <text class="small" x="40" y="82">环 A · 后端无「加入」能力</text>
+    <text class="small" x="370" y="82">环 B · 前端无「加入」入口</text>
+    <text class="small" x="690" y="82">环 C · 自动路径主动排除玩家</text>
+
+    <!-- Ring A -->
+    <g><rect class="node risk" x="40" y="100" width="270" height="44" rx="6" /><text class="label" x="175" y="118" text-anchor="middle">ConversationGroup 无 addParticipant</text><text class="small" x="175" y="134" text-anchor="middle">成员表 LinkedHashMap，建组时一次性固定</text></g>
+    <g><rect class="node risk" x="40" y="160" width="270" height="44" rx="6" /><text class="label" x="175" y="178" text-anchor="middle">ConversationManager 无 joinGroup</text><text class="small" x="175" y="194" text-anchor="middle">grep 全项目 joinGroup 零命中</text></g>
+    <g><rect class="node risk" x="40" y="220" width="270" height="44" rx="6" /><text class="label" x="175" y="238" text-anchor="middle">无任何 join 类 REST 端点</text><text class="small" x="175" y="254" text-anchor="middle">SimulationController 26 端点零 join</text></g>
+    <path class="edge" marker-end="url(#arr2)" d="M 175 144 V 160" />
+    <path class="edge" marker-end="url(#arr2)" d="M 175 204 V 220" />
+
+    <!-- Ring B -->
+    <g><rect class="node risk" x="370" y="100" width="260" height="44" rx="6" /><text class="label" x="500" y="118" text-anchor="middle">群组框纯可视化、无交互</text><text class="small" x="500" y="134" text-anchor="middle">applyGroups 仅绘制（L261 注释明确）</text></g>
+    <g><rect class="node risk" x="370" y="160" width="260" height="44" rx="6" /><text class="label" x="500" y="178" text-anchor="middle">点击画布只移动「自己」</text><text class="small" x="500" y="194" text-anchor="middle">pointerdown → target，无选中角色语义</text></g>
+    <g><rect class="node risk" x="370" y="220" width="260" height="44" rx="6" /><text class="label" x="500" y="238" text-anchor="middle">SimGroup 类型不含 id</text><text class="small" x="500" y="254" text-anchor="middle">前端拿不到组标识可传后端</text></g>
+    <path class="edge" marker-end="url(#arr2)" d="M 500 144 V 160" />
+    <path class="edge" marker-end="url(#arr2)" d="M 500 204 V 220" />
+
+    <!-- Ring C -->
+    <g><rect class="node risk" x="690" y="100" width="270" height="44" rx="6" /><text class="label" x="825" y="118" text-anchor="middle">tick L164 排除 playerControlled</text><text class="small" x="825" y="134" text-anchor="middle">玩家从不进 available 候选池</text></g>
+    <g><rect class="node risk" x="690" y="160" width="270" height="44" rx="6" /><text class="label" x="825" y="178" text-anchor="middle">ModeClassifier 候选永不含玩家</text><text class="small" x="825" y="194" text-anchor="middle">连通分量按 available 构建</text></g>
+    <g><rect class="node risk" x="690" y="220" width="270" height="44" rx="6" /><text class="label" x="825" y="238" text-anchor="middle">发言只建 DYAD（L180-183）</text><text class="small" x="825" y="254" text-anchor="middle">且 DYAD 不消费轨道分配</text></g>
+    <path class="edge" marker-end="url(#arr2)" d="M 825 144 V 160" />
+    <path class="edge" marker-end="url(#arr2)" d="M 825 204 V 220" />
+
+    <!-- unique path -->
+    <g>
+      <rect class="node external" x="330" y="390" width="340" height="52" rx="8" />
+      <text class="label" x="500" y="412" text-anchor="middle">玩家唯一路径：发言 → 最近空闲 NPC → DYAD 组</text>
+      <text class="small" x="500" y="430" text-anchor="middle">只能 1v1 拉人，不能进群；正在对话的 NPC 不可选（isBusy 排除）</text>
+    </g>
+    <path class="edge" marker-end="url(#arr2)" d="M 175 264 V 380 H 480" />
+    <path class="edge" marker-end="url(#arr2)" d="M 500 264 V 360 H 520 V 390" />
+    <path class="edge" marker-end="url(#arr2)" d="M 825 264 V 380 H 520" />
+
+    <!-- conclusion -->
+    <g>
+      <rect class="node neutral" x="700" y="390" width="280" height="52" rx="8" />
+      <text class="label" x="840" y="410" text-anchor="middle">结论：2D 轨道是 NPC 空间社交</text>
+      <text class="small" x="840" y="428" text-anchor="middle">玩家=旁观者（D-027 语义），「进群」能力不存在</text>
+    </g>
+  </svg>
+  <figcaption>图 2：三环叠加（A 后端无能力 + B 前端无入口 + C 自动路径排除），任一环补齐都不足以让玩家进群——需同时打通。距离/阈值判定（5 格 / TrackScore 40）只决定「组内轨道模式」，不是进不了组的主因。</figcaption>
+
+  <!-- ============ 图 3：方案对比 ============ -->
+  <h2>图 3 · 改进方案对比（三案共用同一 join 原语）</h2>
+  <svg viewBox="0 0 1000 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="方案对比图">
+    <defs>
+      <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="var(--line)" />
+      </marker>
+    </defs>
+    <!-- three方案 columns -->
+    <g>
+      <rect class="node process" x="30" y="70" width="300" height="240" rx="10" />
+      <text class="title" x="180" y="96" text-anchor="middle">方案 A · 点击加入（推荐）</text>
+      <text class="small" x="50" y="120">· 点击群组框 / NPC → 「💬 加入对话」</text>
+      <text class="small" x="50" y="140">· 后端 joinGroup 原语：addParticipant +</text>
+      <text class="small" x="60" y="156">重算轨道 + 玩家消息注入轮次</text>
+      <text class="small" x="50" y="176">· 工作量：后端 1-1.5d + 前端 0.5-1d</text>
+      <text class="small" x="50" y="200">· 风险：并发竞态 / 玩家隔离豁免需拍板</text>
+      <text class="small" x="50" y="216">/ DYAD 组应禁止 join</text>
+      <text class="small" x="50" y="240">· Track 语义影响：低（纯增量能力）</text>
+    </g>
+    <g>
+      <rect class="node external" x="350" y="70" width="300" height="240" rx="10" />
+      <text class="title" x="500" y="96" text-anchor="middle">方案 B · 靠近自动进组</text>
+      <text class="small" x="370" y="120">· 玩家走近对话中的 NPC 组 → 自动进</text>
+      <text class="small" x="370" y="140">· 改 tick L164 排除逻辑（开关控制）</text>
+      <text class="small" x="370" y="160">· 工作量：后端 0.5-1d，前端几乎零改动</text>
+      <text class="small" x="370" y="184">· 风险：被动拉进打断自由移动 /</text>
+      <text class="small" x="370" y="200">进组冻结被困 30s / 与 DYAD 双路径打架</text>
+      <text class="small" x="370" y="224">· Track 语义影响：中（推翻 D-027 语义，</text>
+      <text class="small" x="370" y="240">必须开关默认关）</text>
+    </g>
+    <g>
+      <rect class="node neutral" x="670" y="70" width="300" height="240" rx="10" />
+      <text class="title" x="820" y="96" text-anchor="middle">方案 C · 轨道列表 UI</text>
+      <text class="small" x="690" y="120">· 2D 侧边「📡 轨道/讨论组」面板</text>
+      <text class="small" x="690" y="140">· 数据源：conversation-status（已有）</text>
+      <text class="small" x="690" y="160">· 点「加入」→ 走方案 A 的 join API</text>
+      <text class="small" x="690" y="184">· 工作量：后端同 A + 前端多 0.5d 面板</text>
+      <text class="small" x="690" y="208">· 风险：同 A + 多组信息负担</text>
+      <text class="small" x="690" y="232">· Track 语义影响：低</text>
+    </g>
+    <path class="edge" marker-end="url(#arr3)" d="M 180 310 V 340 H 500" />
+    <path class="edge" marker-end="url(#arr3)" d="M 500 310 V 340" />
+    <path class="edge" marker-end="url(#arr3)" d="M 820 310 V 340 H 500" />
+
+    <!-- shared primitive -->
+    <g>
+      <rect class="node storage" x="290" y="340" width="420" height="70" rx="10" />
+      <text class="title" x="500" y="364" text-anchor="middle">共用原语 + 配置开关</text>
+      <text class="small" x="310" y="386">ConversationManager.joinGroup(groupId, playerName)</text>
+      <text class="small" x="310" y="402">开关：roleplay.track.player-join: off | click | proximity</text>
+    </g>
+
+    <!-- 待拍板 -->
+    <g>
+      <rect class="node risk" x="240" y="428" width="520" height="34" rx="8" />
+      <text class="label" x="500" y="450" text-anchor="middle">待拍板：玩家进组后恒 MERGED 视角？AI 可反向拉玩家进组？DYAD 升格多人群组语义？</text>
+    </g>
+  </svg>
+  <figcaption>图 3：三案都依赖同一后端原语 joinGroup（成员加入 + 轨道重算 + 玩家发言注入轮次），区别只在触发方式（点击 / 靠近 / 列表）。建议：以 A 为主实施，B 作为可选增强（默认关），C 视 UI 需要附加。</figcaption>
+</main>
