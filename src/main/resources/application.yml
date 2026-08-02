@@ -43,6 +43,9 @@ roleplay:
     summary-interval: 10
   round:
     parallel-agents: true
+    # C-2 一般模式串行调度开关：false=保持并行（默认，零破坏）；true=同轮按序生成、
+    # 每个角色输出完成立即入史，后发言者上下文包含前面角色本轮已完成的发言
+    serial: false
     agent-max-tokens: 300
     arbiter-max-tokens: 150
   mode:
@@ -71,6 +74,23 @@ roleplay:
       priority-decay-rounds: 3
       wait-bias: 0.5
       cold-break: true
+    werewolf:
+      # 狼人杀自动推进（P-0802-F，主人授权后端批次）：
+      #   ai-night-actions=AI 角色夜间自动决策（狼刀/预言家验/女巫救毒/猎人反杀）
+      #   auto-play=init 后整局自动推进（真人行动后自动结算流转；false=纯手工 admin 驱动旧行为）
+      #   auto-approve-ms=autoPlay 下投票结算审批门自动批准延迟（0=不自动批，等 DM 手动批准；对齐 D7）
+      #   witch-poison-probability=AI 女巫后续夜使用毒药概率（0-1）
+      ai-night-actions: true
+      auto-play: true
+      auto-approve-ms: 3000
+      witch-poison-probability: 0.5
+  auth:
+    # 邀请码功能显式开关（P-0801-G）：false=关闭（默认，不影响现有游戏功能，
+    # /api/auth/verify 返回 403「邀请码功能未启用」）；true=启用（校验邀请码发 token）。
+    # 改配置后重启服务生效；功能代码/端点全部保留。
+    invite-enabled: false
+    # 持久化初始邀请码（服务重启不丢，启用后立即可用；DEFAULT2024 兼容保留）
+    invite-code: "B3283A78"
   broadcast:
     # 演讲与广播合并地基：公告管线节流参数（AnnouncementService 读取）
     window-ms: 1000       # 滑动窗口长度

@@ -17,10 +17,19 @@ import com.roleplay.engine.service.ArbiterService.TrackConfigResult;
 import com.roleplay.engine.service.ArbiterService.UserInputCategory;
 import com.roleplay.engine.service.TrackRequestService.TrackChangeRequest;
 import com.roleplay.engine.controller.SSEController;
+import com.roleplay.engine.interrupt.CancellationToken;
+import com.roleplay.engine.interrupt.InterruptManager;
+import com.roleplay.engine.interrupt.StopType;
+import com.roleplay.engine.interrupt.TaskCancelledException;
+import com.roleplay.engine.interrupt.TaskType;
+import com.roleplay.engine.interrupt.TrackChangeEvent;
+import com.roleplay.engine.interrupt.WorldEventBus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -59,6 +68,10 @@ public class RouterService {
     private final Map<String, Agent> agents = new ConcurrentHashMap<>();
     private final Map<String, Object> state = new ConcurrentHashMap<>();
 
+    /** C-2: 一般模式串行调度开关（roleplay.round.serial，默认 false=保持并行行为；true=同轮按序生成、每完成一个即时入史）。 */
+    @Value("${roleplay.round.serial:false}")
+    private boolean serialRound;
+
     private volatile boolean running = false;
     private String mode = "free";        // free | protagonist | multi_track | director | werewolf | script
     private String protagonist = "";
@@ -71,6 +84,8 @@ public class RouterService {
     private String sessionId = "";
     // D5: 剧本杀当前对局 —— 用于把 secrets 发放到对应角色上下文（仅 script 模式生效）
     private ScriptGameService.ScriptGame scriptGame = null;
+    // P-0802-F: 狼人杀当前对局 —— 用于把身份（含狼人互认）发放到对应角色上下文（仅 werewolf 模式生效）
+    private WerewolfService.GameState werewolfGame = null;
 
     public RouterService(ArbiterService arbiter, AgentExecutor executor,
                          MemoryStore memory, Compressor compressor,
@@ -195,10 +210,27 @@ public class RouterService {
      * 4. Memory saves, compressor checks
      */
     public RoundResult runRound(String userInput, String userInterjection) {
-        if (!running || agents.isEmpty()) {
+        return runRound(userInput, userInterjection, null);
+    }
+
+    /**
+     * P0-2（2026-08-02）修复：
+     * ① 会话已停止（running=false，如 /api/stop）但角色仍在时，发消息/自动轮视为恢复会话自动置 running=true——
+     *    消除「send 前 stop 后永久停摆」；仅 agents 为空才报 No active session。
+     * ② 支持显式发言人 speaker（前端 player_name）：命中 agent 名单时，该角色原文直接入史（角色说），
+     *    跳过主控旁白化，本轮该角色不参与 LLM 生成（避免自问自答双声）；未命中走原主控旁白链路。
+     */
+    public RoundResult runRound(String userInput, String userInterjection, String speaker) {
+        if (agents.isEmpty()) {
             if (sse != null) sse.broadcastError("No active session");
             return RoundResult.error("No active session");
         }
+        if (!running) {
+            // P0-2：恢复会话（用户再次发消息/点三轮 = 恢复运行）
+            running = true;
+        }
+        // P0-2：发言人命中 agent → 该角色直接发言（跳过 arbiter 主控旁白化）
+        boolean speakerIsAgent = speaker != null && !speaker.isBlank() && agents.containsKey(speaker);
 
         roundCount++;
         // Snapshot current round before starting
@@ -272,6 +304,15 @@ public class RouterService {
             if (userInput.startsWith("/")) {
                 // Handle commands
                 narration = handleCommand(userInput);
+            } else if (speakerIsAgent) {
+                // P0-2：玩家以自己角色身份发言 → 原文直接入史（角色说），不再主控旁白化；
+                // 该角色本轮不参与 LLM 生成（避免同一句被角色再生成一遍的双声）
+                Message agentSpoke = new Message(Message.Role.AGENT, speaker, userInput);
+                agentSpoke.setRoundNumber(roundCount);
+                memory.addMessage(agentSpoke);
+                if (sse != null) {
+                    sse.broadcastUserInput(userInput, "human_discussion", speaker, roundCount);
+                }
             } else {
                 UserInputCategory cat = arbiter.classifyUserInput(
                     userInput, "always", memory.getShortTermContextRaw(2));
@@ -280,22 +321,43 @@ public class RouterService {
                     userInput, cat, sceneDescription, agentNames, goals);
             }
             if (narration != null) {
-                Message userMsg = new Message(Message.Role.USER, "me", narration);
+                // P0-1：历史发言人不再硬编码 "me"——有显式发言人时用其名字，避免与同名角色混淆
+                String speakerName = (speaker != null && !speaker.isBlank()) ? speaker : "me";
+                Message userMsg = new Message(Message.Role.USER, speakerName, narration);
                 userMsg.setRoundNumber(roundCount);
                 memory.addMessage(userMsg);
                 // D8: 非命令输入 → 推送 user_input 事件（前端回显主控输入）
                 if (sse != null && !userInput.startsWith("/")) {
-                    sse.broadcastUserInput(narration, userCategory, "", roundCount);
+                    sse.broadcastUserInput(narration, userCategory, speakerName, roundCount);
                 }
             }
         }
 
-        // Step 3: Execute all agents in parallel
+        // Step 3: Execute all agents (parallel default; serial when roleplay.round.serial=true)
         Map<String, Agent> agentMap = new HashMap<>(agents);
-        AgentExecutor.ContextBuilder ctxBuilder = (agentName, trackMode, trackId, cfg) ->
-            buildAgentContext(agentName, trackMode, trackId);
+        if (speakerIsAgent) {
+            // P0-2：发言人角色本轮已“说过话”，从生成任务中排除（buildTasks 对缺失 agent 自动跳过）
+            agentMap.remove(speaker);
+        }
 
-        AgentExecutor.ExecutionResult execResult = executor.executeRound(config, agentMap, ctxBuilder);
+        AgentExecutor.ExecutionResult execResult;
+        List<Map<String, Object>> agentOutputs = new ArrayList<>();
+        // D8: trackId → 轨道信息映射（agent_output 事件的 track_label / track_mode）
+        Map<String, Map<String, Object>> trackById = new HashMap<>();
+        for (Map<String, Object> t : trackResult.tracks) {
+            trackById.put(String.valueOf(t.getOrDefault("id", "main")), t);
+        }
+
+        if (serialRound) {
+            // C-2 串行调度：按轨道顺序 × 轨道内 agent 顺序逐个生成，每个 agent 输出完成
+            // 立即 memory.addMessage + SSE 推送 —— 后发言者 buildAgentContext 读到
+            // 的对话历史即包含前面角色本轮已完成的发言（解决「同轮上下文不共享」）。
+            execResult = executeRoundSerial(config, agentMap, trackById, agentOutputs);
+        } else {
+            AgentExecutor.ContextBuilder ctxBuilder = (agentName, trackMode, trackId, cfg) ->
+                buildAgentContext(agentName, trackMode, trackId);
+            execResult = executor.executeRound(config, agentMap, ctxBuilder);
+        }
 
         // D1: 回合被取消（如 /api/stop）→ 立即返回，不再做 Arbiter 整合 / 落库
         if (execResult.cancelled()) {
@@ -304,34 +366,30 @@ public class RouterService {
             return RoundResult.error("生成已中断");
         }
 
-        // Step 4: Collect agent outputs
-        List<Map<String, Object>> agentOutputs = new ArrayList<>();
-        // D8: trackId → 轨道信息映射（agent_output 事件的 track_label / track_mode）
-        Map<String, Map<String, Object>> trackById = new HashMap<>();
-        for (Map<String, Object> t : trackResult.tracks) {
-            trackById.put(String.valueOf(t.getOrDefault("id", "main")), t);
-        }
-        for (AgentExecutor.AgentOutput output : execResult.outputs()) {
-            if (output.isSuccess() && output.content() != null && !output.content().isBlank()) {
-                Message agentMsg = new Message(Message.Role.AGENT, output.agentName(), output.content());
-                agentMsg.setRoundNumber(roundCount);
-                agentMsg.setTrackId(output.trackId());
-                memory.addMessage(agentMsg);
+        // Step 4: Collect agent outputs（并行路径；串行路径已在 executeRoundSerial 内即时入史+收集）
+        if (!serialRound) {
+            for (AgentExecutor.AgentOutput output : execResult.outputs()) {
+                if (output.isSuccess() && output.content() != null && !output.content().isBlank()) {
+                    Message agentMsg = new Message(Message.Role.AGENT, output.agentName(), output.content());
+                    agentMsg.setRoundNumber(roundCount);
+                    agentMsg.setTrackId(output.trackId());
+                    memory.addMessage(agentMsg);
 
-                Map<String, Object> outMap = new LinkedHashMap<>();
-                outMap.put("agent_name", output.agentName());
-                outMap.put("content", output.content());
-                outMap.put("track_id", output.trackId());
-                agentOutputs.add(outMap);
+                    Map<String, Object> outMap = new LinkedHashMap<>();
+                    outMap.put("agent_name", output.agentName());
+                    outMap.put("content", output.content());
+                    outMap.put("track_id", output.trackId());
+                    agentOutputs.add(outMap);
 
-                // D8: 每个 Agent 输出即时推送（前端 addAgentMsg 实时上屏）
-                if (sse != null) {
-                    Map<String, Object> trackMap = trackById.getOrDefault(output.trackId(), Map.of());
-                    sse.broadcastAgentOutput(
-                        output.agentName(), output.content(), output.trackId(),
-                        String.valueOf(trackMap.getOrDefault("label", "")),
-                        String.valueOf(trackMap.getOrDefault("mode", "merged")),
-                        output.visibleTo());
+                    // D8: 每个 Agent 输出即时推送（前端 addAgentMsg 实时上屏）
+                    if (sse != null) {
+                        Map<String, Object> trackMap = trackById.getOrDefault(output.trackId(), Map.of());
+                        sse.broadcastAgentOutput(
+                            output.agentName(), output.content(), output.trackId(),
+                            String.valueOf(trackMap.getOrDefault("label", "")),
+                            String.valueOf(trackMap.getOrDefault("mode", "merged")),
+                            output.visibleTo());
+                    }
                 }
             }
         }
@@ -383,6 +441,8 @@ public class RouterService {
     /** Run multiple automatic rounds. */
     public List<RoundResult> runAutoRounds(int count) {
         List<RoundResult> results = new ArrayList<>();
+        // P0-2：会话已停止但角色仍在 → 自动恢复（用户点「三轮/自动」= 恢复运行，不再 0 轮静默）
+        if (!running && !agents.isEmpty()) running = true;
         for (int i = 0; i < count && running; i++) {
             results.add(runRound(null, null));
         }
@@ -434,6 +494,34 @@ public class RouterService {
             contextParts.add(scriptCard.toString());
         }
 
+        // P-0802-F: 狼人杀角色卡 —— 每个角色只见自己身份 + 狼人互认（对齐"身份只在自家 prompt"纪律）
+        if ("werewolf".equals(mode) && werewolfGame != null) {
+            StringBuilder wwCard = new StringBuilder("【狼人杀·角色卡】\n");
+            WerewolfService.Role role = werewolfGame.roles.get(agentName);
+            if (role != null) {
+                wwCard.append("你的身份：").append(werewolfRoleLabel(role)).append("。");
+                if (role == WerewolfService.Role.WEREWOLF) {
+                    List<String> mates = werewolfGame.alive.stream()
+                            .filter(p -> !p.equals(agentName) && werewolfGame.roles.get(p) == WerewolfService.Role.WEREWOLF)
+                            .toList();
+                    if (!mates.isEmpty()) {
+                        wwCard.append("你的狼人同伴：").append(String.join("、", mates)).append("。");
+                    }
+                    wwCard.append("隐藏身份，白天伪装成普通玩家参与讨论，误导他人、保护狼队。");
+                } else if (role == WerewolfService.Role.SEER) {
+                    wwCard.append("你每晚可以查验一名玩家的身份。白天利用查验结果引导好人找出狼人，注意隐藏身份避免被狼刀。");
+                } else if (role == WerewolfService.Role.WITCH) {
+                    wwCard.append("你有一瓶解药和一瓶毒药。白天隐藏身份，暗中协助好人阵营。");
+                } else if (role == WerewolfService.Role.HUNTER) {
+                    wwCard.append("你被淘汰时可以开枪带走一名玩家。白天隐藏身份，谨慎发言。");
+                } else {
+                    wwCard.append("你是普通村民，白天通过发言、试探与推理找出狼人。");
+                }
+                wwCard.append("\n当前阶段：").append(werewolfPhaseLabel(werewolfGame.phase));
+            }
+            contextParts.add(wwCard.toString());
+        }
+
         // Track info
         contextParts.add("【轨道】\n" + trackId + " (" + trackMode + "模式)");
 
@@ -453,6 +541,145 @@ public class RouterService {
         }
 
         return String.join("\n\n", contextParts);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  C-2 串行调度（roleplay.round.serial=true）
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * C-2 串行调度（roleplay.round.serial=true）：
+     * 按轨道顺序 × 轨道内 agent 顺序逐个生成（PLAYER > DM > NPC 优先级，与
+     * AgentExecutor.buildTasks 的排序逻辑一致），每个 agent 输出完成**立即**
+     * memory.addMessage + SSE 推送 —— 后发言者 buildAgentContext 读
+     * memory.getAgentContext 即包含前面角色本轮已完成的发言（解决「同轮上下文不共享」断点）。
+     *
+     * <p>D1 中断语义保留：每个 agent 注册 AgentTask + CancellationToken
+     * （register/toRunning/toDone/unregister），/api/stop → cancelAll → 令牌置位
+     * → 生成前检查点抛 TaskCancelledException → 中断循环返回 cancelled
+     * （与并行路径共用调用方处理）。
+     *
+     * <p>性能代价：n agents 从 1× LLM delay → n× LLM delay（主人方案明确「不限速」，
+     * 开关默认 false 保持并行，仅按需开启）。
+     */
+    private AgentExecutor.ExecutionResult executeRoundSerial(
+            TrackConfig config,
+            Map<String, Agent> agentMap,
+            Map<String, Map<String, Object>> trackById,
+            List<Map<String, Object>> agentOutputs) {
+
+        Instant roundStart = Instant.now();
+        List<AgentExecutor.AgentOutput> outputs = new ArrayList<>();
+        List<Long> latencies = new ArrayList<>();
+        boolean cancelled = false;
+        long taskSeq = 0;
+
+        // 顺序：轨道顺序 × 轨道内 agent 顺序，按优先级 PLAYER > DM > NPC 稳定排序
+        List<AgentExecutor.AgentTask> ordered = new ArrayList<>();
+        for (Track track : config.getTracks()) {
+            String trackMode = track.getMode().name().toLowerCase();
+            for (String agentName : track.getActiveAgents()) {
+                if (!agentMap.containsKey(agentName)) continue; // P0-2 speaker 排除
+                AgentExecutor.Priority priority = computeSerialPriority(agentName);
+                ordered.add(new AgentExecutor.AgentTask(
+                        agentName, track.getId(), trackMode, priority, null));
+            }
+        }
+        ordered.sort(Comparator.comparingInt(t -> t.priority().ordinal()));
+
+        for (AgentExecutor.AgentTask task : ordered) {
+            // D1: 每步前检查 —— stop() 置 running=false 则中断循环
+            if (!running) { cancelled = true; break; }
+            Agent agent = agentMap.get(task.agentName());
+            if (agent == null) continue;
+
+            // D1: 注册中断任务（/api/stop → cancelAll 可取消生成中令牌）
+            com.roleplay.engine.interrupt.AgentTask it = new com.roleplay.engine.interrupt.AgentTask(
+                    task.agentName() + "_dialogue_" + (++taskSeq),
+                    task.agentName(), TaskType.DIALOGUE,
+                    Map.of("trackId", task.trackId(), "trackMode", task.trackMode()));
+            interruptManager.register(it);
+            it.toRunning();
+            Instant taskStart = Instant.now();
+            try {
+                CancellationToken token = it.getCancelToken();
+                token.checkpoint(); // 生成前检查点
+                // 上下文在生成时构建：此时 memory 已含本轮前面角色已完成的发言
+                String context = buildAgentContext(task.agentName(), task.trackMode(), task.trackId());
+                token.checkpoint(); // 上下文构建后检查点
+                String content = agent.generateWithContext(context, token);
+                long elapsed = Duration.between(taskStart, Instant.now()).toMillis();
+                it.toDone();
+                interruptManager.unregister(it.getId());
+
+                if (content != null && !content.isBlank()) {
+                    // 即时入史：后发言者 buildAgentContext 立即可见
+                    Message agentMsg = new Message(Message.Role.AGENT, task.agentName(), content);
+                    agentMsg.setRoundNumber(roundCount);
+                    agentMsg.setTrackId(task.trackId());
+                    memory.addMessage(agentMsg);
+
+                    Map<String, Object> outMap = new LinkedHashMap<>();
+                    outMap.put("agent_name", task.agentName());
+                    outMap.put("content", content);
+                    outMap.put("track_id", task.trackId());
+                    agentOutputs.add(outMap);
+
+                    // D8: 每个 Agent 输出即时推送（前端 addAgentMsg 实时上屏）
+                    if (sse != null) {
+                        Map<String, Object> trackMap = trackById.getOrDefault(task.trackId(), Map.of());
+                        sse.broadcastAgentOutput(
+                            task.agentName(), content, task.trackId(),
+                            String.valueOf(trackMap.getOrDefault("label", "")),
+                            String.valueOf(trackMap.getOrDefault("mode", "merged")),
+                            List.of());
+                    }
+                    outputs.add(new AgentExecutor.AgentOutput(
+                            task.agentName(), content, task.trackId(), List.of(), elapsed, null));
+                    latencies.add(elapsed);
+                }
+            } catch (TaskCancelledException e) {
+                // D1: 任务被取消 → 中断循环（软停止的未完成内容保存到任务上）
+                cancelled = true;
+                it.saveUnfinished(e.getPartial());
+                interruptManager.unregister(it.getId());
+                log.info("Agent {} serial task cancelled: {}", task.agentName(), e.getReason());
+                break;
+            } catch (Exception e) {
+                // 与并行路径一致：失败不中断整轮，输出占位（isSuccess=false，不入史）
+                long elapsed = Duration.between(taskStart, Instant.now()).toMillis();
+                interruptManager.markFailed(it.getId(), e.getMessage());
+                interruptManager.unregister(it.getId());
+                outputs.add(new AgentExecutor.AgentOutput(
+                        task.agentName(),
+                        "[" + task.agentName() + " 走神了: " + e.getMessage() + "]",
+                        task.trackId(), List.of(), elapsed, e.getMessage()));
+                log.warn("Agent {} serial failed: {}", task.agentName(), e.getMessage());
+            }
+        }
+
+        double totalTimeMs = Duration.between(roundStart, Instant.now()).toMillis();
+        double avgLatency = latencies.isEmpty() ? 0
+                : latencies.stream().mapToLong(Long::longValue).average().orElse(0);
+        double maxLatency = latencies.stream().mapToLong(Long::longValue).max().orElse(0);
+        AgentExecutor.ExecutorMetrics metrics = new AgentExecutor.ExecutorMetrics(
+                ordered.size(), 1, avgLatency, maxLatency, totalTimeMs);
+
+        log.info("Agent round complete (serial): {} agents in {}ms (avg {}ms/agent){}",
+                outputs.size(), Math.round(totalTimeMs), Math.round(avgLatency),
+                cancelled ? " [CANCELLED]" : "");
+        return new AgentExecutor.ExecutionResult(outputs, metrics, cancelled);
+    }
+
+    /** 串行调度优先级（与 AgentExecutor.computePriority 同规则：PLAYER > DM > NPC）。 */
+    private AgentExecutor.Priority computeSerialPriority(String agentName) {
+        if (agentName.equals(protagonist) || agentName.equals("me")) {
+            return AgentExecutor.Priority.PLAYER;
+        }
+        if (agentName.equals(directorCharacter)) {
+            return AgentExecutor.Priority.DM;
+        }
+        return AgentExecutor.Priority.NPC;
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -512,6 +739,10 @@ public class RouterService {
 
     public void setMode(String mode) { this.mode = mode; }
     public String getMode() { return mode; }
+
+    /** C-2: 串行调度开关（roleplay.round.serial，默认 false）。测试/运行时切换用。 */
+    public void setSerialRound(boolean serialRound) { this.serialRound = serialRound; }
+    public boolean isSerialRound() { return serialRound; }
     public void setProtagonist(String name) { this.protagonist = name; }
     public void setDirectorCharacter(String name) { this.directorCharacter = name; }
     public void setGoals(List<String> goals) { this.goals = goals; }
@@ -528,6 +759,39 @@ public class RouterService {
     /** D5: 解绑剧本局（新剧本 init 时会自动覆盖，通常无需手动调用）。 */
     public void clearScriptGame() {
         this.scriptGame = null;
+    }
+
+    /** P-0802-F: 狼人杀模式 —— 绑定当前狼人杀局，使身份（含狼人互认）能在 buildAgentContext 注入对应角色。 */
+    public void setWerewolfGame(WerewolfService.GameState game) {
+        this.werewolfGame = game;
+        log.info("Werewolf game registered to router ({} players)", game != null ? game.alive.size() : 0);
+    }
+
+    /** P-0802-F: 解绑狼人杀局。 */
+    public void clearWerewolfGame() {
+        this.werewolfGame = null;
+    }
+
+    /** 狼人杀角色中文标签（供角色卡上下文注入）。 */
+    private static String werewolfRoleLabel(WerewolfService.Role role) {
+        return switch (role) {
+            case WEREWOLF -> "狼人";
+            case SEER -> "预言家";
+            case WITCH -> "女巫";
+            case HUNTER -> "猎人";
+            case VILLAGER -> "村民";
+        };
+    }
+
+    /** 狼人杀阶段中文标签（供角色卡上下文注入）。 */
+    private static String werewolfPhaseLabel(WerewolfService.Phase phase) {
+        return switch (phase) {
+            case NIGHT -> "夜晚（选择行动或闭眼等待）";
+            case DAY_DISCUSS -> "白天讨论（发言推理找出狼人）";
+            case DAY_VOTE -> "投票阶段（选出你怀疑的狼人）";
+            case JUDGMENT -> "判定中";
+            case ENDED -> "游戏已结束";
+        };
     }
 
     /** 剧本杀阶段中文标签（供角色卡上下文注入）。 */
@@ -790,6 +1054,8 @@ public class RouterService {
     public List<RoundResult> runAutoRounds(String userInput, int turns) {
         List<RoundResult> results = new ArrayList<>();
         autoRunning = true;
+        // P0-2：同 runTurns —— 停止后恢复
+        if (!running && !agents.isEmpty()) running = true;
         for (int i = 0; i < turns && autoRunning; i++) {
             RoundResult result = runRound(i == 0 ? userInput : null, null);
             results.add(result);
@@ -833,6 +1099,8 @@ public class RouterService {
     public List<RoundResult> runTurns(String userInput, int turns) {
         List<RoundResult> results = new ArrayList<>();
         int target = Math.max(1, turns);
+        // P0-2：会话已停止但角色仍在 → 自动恢复（/api/round/start 后不再「No active session / 0 轮」）
+        if (!running && !agents.isEmpty()) running = true;
         for (int i = 0; i < target && running; i++) {
             RoundResult result = runRound(i == 0 ? userInput : null, null);
             results.add(result);

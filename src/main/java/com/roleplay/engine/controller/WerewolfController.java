@@ -1,6 +1,9 @@
 package com.roleplay.engine.controller;
 
+import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.WerewolfService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -9,17 +12,35 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Werewolf game endpoints — now backed by full WerewolfService game engine.
+ *
+ * <p>P-0802-F（主人授权后端批次）改造：
+ * <ul>
+ *   <li>G0-1：init 返回 session_id + 注册 RouterService（身份进上下文）+ 登记人类玩家 + 自动推进开关</li>
+ *   <li>新增 POST /api/werewolf/discussion_say（白天讨论人类发言，接对话引擎）</li>
+ *   <li>status 响应附加 session_id / waiting_human</li>
+ * </ul>
  */
 @RestController
 @RequestMapping("/api/werewolf")
 public class WerewolfController {
 
     private final WerewolfService werewolfService;
+    private final RouterService router;
     private final Map<String, String> playerSessions = new ConcurrentHashMap<>();
     private String currentSessionId = "";
 
+    /** autoPlay 开关（roleplay.game.werewolf.auto-play，默认 true；直构测试无 Spring 注入 → false 保持手工驱动）。 */
+    @Value("${roleplay.game.werewolf.auto-play:false}")
+    private boolean autoPlay = false;
+
     public WerewolfController(WerewolfService werewolfService) {
+        this(werewolfService, null);
+    }
+
+    @Autowired
+    public WerewolfController(WerewolfService werewolfService, RouterService router) {
         this.werewolfService = werewolfService;
+        this.router = router;
     }
 
     @PostMapping("/init")
@@ -49,7 +70,26 @@ public class WerewolfController {
         players.forEach(p -> playerSessions.put(p, sessionId));
 
         Map<String, Object> state = werewolfService.initGame(sessionId, players, customRoles);
+        // P-0802-F：登记人类玩家（AI = 存活玩家中非人类）→ 注册 router（身份进上下文）→ 自动推进
+        Set<String> humans = playerName.isEmpty() ? Set.of() : Set.of(playerName);
+        werewolfService.setHumanPlayers(sessionId, humans);
+        WerewolfService.GameState game = werewolfService.getGame(sessionId);
+        if (router != null) {
+            router.setWerewolfGame(game);
+            logRouter(sessionId);
+        }
+        werewolfService.setAutoPlay(sessionId, autoPlay);
+        werewolfService.notifyGameInit(sessionId, playerName);
+        // G0-1：响应携带 session_id（前端可拿到）
+        state.put("session_id", sessionId);
+        // 开局夜：AI 角色立即自动行动；autoPlay 下全员行动完毕自动结算（真人行动经 night_action 提交）
+        werewolfService.startNight(sessionId);
         return ResponseEntity.ok(state);
+    }
+
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WerewolfController.class);
+    private void logRouter(String sessionId) {
+        log.info("Werewolf game {} registered to router", sessionId);
     }
 
     @PostMapping("/night_action")
@@ -69,6 +109,17 @@ public class WerewolfController {
         String sessionId = playerSessions.getOrDefault(player, currentSessionId);
         String result = werewolfService.hunterShoot(sessionId, player, target);
         return ResponseEntity.ok(Map.of("result", result));
+    }
+
+    /** P-0802-F：白天讨论人类发言（接入讨论引擎，下轮被排空入发言记录）。 */
+    @PostMapping("/discussion_say")
+    public ResponseEntity<Map<String, Object>> discussionSay(@RequestBody Map<String, String> body) {
+        String player = body.getOrDefault("player", "");
+        String message = body.getOrDefault("message", "");
+        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
+        Map<String, Object> result = werewolfService.discussionSay(sessionId, player, message);
+        result.put("session_id", sessionId);
+        return ResponseEntity.ok(result);
     }
 
     /** Admin: resolve night phase and transition to day. */
@@ -109,6 +160,6 @@ public class WerewolfController {
         if (sessionId.isEmpty()) {
             return ResponseEntity.ok(Map.of("game_over", true, "phase", "idle"));
         }
-        return ResponseEntity.ok(werewolfService.getGame(sessionId).toMap(p));
+        return ResponseEntity.ok(werewolfService.statusMap(sessionId, p));
     }
 }

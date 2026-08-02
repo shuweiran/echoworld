@@ -7,19 +7,28 @@
 
 ---
 
-## 📊 当前基线（最新汇总，2026-08-01 18:40）
+## 📊 当前基线（最新汇总，2026-08-02 21:1x）
 
 | 指标 | 值 |
 |---|---|
-| 测试类 | **34** |
-| 测试用例 | **254** |
+| 测试类 | **39** |
+| 测试用例 | **293（272 基线 + RouterServiceSerialRoundTest 4 + WerewolfAiPlannerTest 9 + WerewolfGameFixTest 8）** |
 | Failures / Errors | **0 / 0** |
-| 最后全量执行 | 2026-08-01 18:47（Phaser 阶段2：MapValidatorTest 18 + BspMapGeneratorTest 7 + ScriptMapServiceTest 10 + ScriptMapPersistenceTest 2 = 37 用例，254/0，含 P-0801-D maxTokens 3 用例） |
+| 最后全量执行 | 2026-08-02 21:1x（**P-0802-H 狼人杀后端授权批次收尾全量 293/0 BUILD SUCCESS**；首轮全量 1 失败为 LongTextStabilityTest 堆增长 49.6%>30%（台账多次记录的既有堆测量脆性 #37/#40/#41 同款），单独复跑 1/0 通过后全量复跑 293/0 全绿，LONG-01 2.85s；C-2-A 批次 v21 记录的「WerewolfAiPlannerTest.humanWolfWaits 单跑失败」系本批 20:22-20:31 修复前的中间态（P3 测试假设错误 + planHunterShoot 守卫写反），已修复并于 20:32 起全绿） |
 | 环境 | H2 mem + mock LLM（application-test.yml） |
 | 真机验证 | **merged 正式版 7 项 PASS**（2026-08-01 13:05，台账 #47）；**P1 剧本生成 maxTokens 修复 4/4 完整生成 PASS**（2026-08-01 18:45，台账 #57：真实 LLM 生成完整 schema v1 剧本 4/4 次，不再走 defaultScript 兜底；讨论自动进 VOTE 且发言多样）；**Phaser 阶段2 已通过未衡终审（2026-08-01 20:4x，三阶段全闭环，8000 重启生效 PID 25760，见 v15）** |
 
+> v22 更新（2026-08-02 21:1x，**P-0802-H 狼人杀后端授权批次**（主会话派单指定 P-0802-E 被 C-2 占用 → 顺延 F 与 C-2-A 撞标 → 改登 H），基线 276 → **293 tests / 39 类**）：新增 WerewolfAiPlannerTest 9 用例（狼刀不刀狼/狼队共刀/人类狼不代刀、预言家查验、女巫首夜救被刀者/概率毒（1.0 必毒/0.0 不毒同种子对照）、夜间完成判定、猎人反杀目标（有目标/只剩自己空串）、白天投票（村民随机非己/狼队共投非狼/已投不重复））+ WerewolfGameFixTest 8 用例（parseRole 宽容解析中英文别名/非法回退村民、initGame 别名 customRoles 不抛异常、controller init 返回 session_id+verify router.setWerewolfGame、SSE 事件流（init 玩家·角色→夜间结算→白天讨论→投票→等待真人→真人投票后结算推送，含讨论发言 werewolf_speech 与 transcript）、autoPlay 全 AI 局自动打到 ENDED（winner 非空+game_over 推送）、人类白天发言入讨论引擎 transcript、AI 猎人夜间死亡自动反杀→狼胜终局）；改 WerewolfGameSmokeTest W-5/W-10（原锁定旧 bug 断言改为修复后行为：猎人夜间死亡后可开枪反杀一次、toMap 输出 visible 狼人互认）；后端 8 文件 + 前端 8 文件 + static（index-Bu8YksJU.js + index-aWRy_sYe.css SHA256 一致）；npm run build 通过（tsc 0 错误 + vite 64 modules）；详见 Round 22 / 台账 #71 / DECISION_LOG D-024
+
 > v14 更新：基线从 217 → **254 tests / 34 类**（**Phaser 阶段2 LLM 地图生成接入**：MapValidatorTest 18 用例——契约 v1 校验（尺寸/层一致性/热点越界/出生点越界/碰撞值 0-1/房间边界/走廊连通等）/ BspMapGeneratorTest 7 用例——BSP 递归二分生成（房间数/走廊连通 BFS 全可达/种子可复现/降级输出契约 v1）/ ScriptMapServiceTest 10 用例——LLM 生成路径（正常/空输出兜底 BSP/宽容解析/缓存命中 regenerate 强制重生成/校验失败降级/快照落库恢复）/ ScriptMapPersistenceTest 2 用例——mapData 随对局快照持久化+重启恢复；详见 Round 14；**前端部分：文件已落地（mapData.ts/PhaserScriptMapView.tsx/ScriptMapScene.ts/client.ts scriptMap）但 ScenePage 接线未完成 + build 失败 23 处 TS 错误，未同步 static，见台账 #56**（该前端缺口已由台账 #58/#59 修复，见 v15）
 
+> v16 更新（2026-08-01 22:47，P-0801-G 邀请码功能显式开关，基线 254 → **261 tests / 35 类**）：AuthControllerInviteSwitchTest 7 用例——启用路径（application-test.yml invite-enabled=true + invite-code=B3283A78）：配置码 B3283A78 验证通过 200+token / 错误码 401 / DEFAULT2024 兼容保留可验证 / token 过 /api/auth/me；关闭路径（直构 AuthController(false,...)）：/verify 一律 403「邀请码功能未启用」（正确配置码也不放行，不暴露码是否正确）；直构 AuthController(true,...) 验证配置码（重启不丢语义）；详见 Round 15
+> v17 更新（2026-08-02 13:3x，P-0802-B P1 批次修复（P1-6/P1-8/P1-9），纯前端零后端改动，mvn 基线 261/0 不动）：P1-6 删除报错根治——client.ts request() 不再无条件 res.json()：200 空 body（DELETE /api/scenes|/api/characters 等）返回 null 视为成功，非 JSON 亦不崩（SettingsPage/ScenePage 删除入口同坑一并修复）；P1-9 狼人杀文案门控——ChatPage 加载文案仅 werewolf 模式走 getLoadingText（白天讨论中...），free/director 显示「⏳ 运行中...」；P1-8 公告栏改 2D 内触发——AnnouncementBanner/Ticker 从 App.tsx 全局挂载移除，改挂 PhaserSimulationView（2D 游戏视图）内（inline 绝对定位跟随面板，Ticker 空态不占位 + 「×」收起），新增「📢」开关与 ChatPage「⚙️ 设置」面板（聊天模式切换 free/director + 公告显示开关，localStorage roleplay_ann_show 联动）；npm run build 通过（tsc 0 错误 + vite 63 modules），产物 index-DYdLFONY.js + index-BLkB2f6f.css 已同步 static/（SHA256 dist↔static 一致），index.html 引用已更新；详见 Round 17 / 台账 #65
+> v18 更新（2026-08-02 19:4x，P-0802-C C-1 批次（P3-10/P3-11/2D UI 重构/2D 入口合并），纯前端零后端改动，mvn 基线 261/0 不动）：P3-10 演讲+广播 demo 面板从 ScenePage 场景设置移除迁入 PhaserSimulationView 2D 视图（精简版默认折叠：AI 自动演讲/玩家发广播/模式 select）；P3-11 场景设置外层 maxWidth 960→'none' 不限宽 + 角色/场景列表分类排序（前端 useMemo 本地分组，角色：全部/已选/未选×默认/A-Z/Z-A，场景：全部/剧本杀对局（scene_id 前缀 script_）/普通×默认/A-Z/Z-A，后端零改动）；2D UI 重构——左地图（flex:1）+ 右侧聊天面板（320px 可折叠，控制条「💬 聊天」按钮+面板 ✕，收起=地图全宽），P0-3 内嵌聊天整合进右面板不双份；C-2 衔接——消息结构统一 SimChatMsg 带 status:'pending'|'playing'|'done' 播放状态（新世界对话先 pending 再翻 done 演示状态机制，渲染按 status 样式区分，C-2 打字机队列直接消费）；2D 入口合并——删 ScenePage use2D checkbox 及 roleplay_2d_inline 写库，主入口=场景页单一「🎮 2D 模拟」按钮，ChatPage 剧本杀「查看 2D 模拟」联动保留但无独立开启按钮、不再自动展开；npm run build 通过（tsc 0 错误 + vite 63 modules），产物 index-BX3fEiRB.js + index-BANIh__s.css 已同步 static/（SHA256 dist↔static 一致），index.html 引用已更新；详见 Round 18 / 台账 #66
+> v18 并行协调注记：并行批次 P-0802-D（狼人杀重构，subagent 15a56863）同窗作业，双方改动共存于最终 ScenePage.tsx（C-1 只改 use2D/2D 入口与场景设置区，P-0802-D 只改狼人杀区）；C-1 最终交付基于含 P-0802-D 前端改动的完整源码重构建（index-BX3fEiRB.js），部署包同时含两批前端改动；P-0802-D 将 mvn 基线提至 **272/0（36 类）**（WerewolfGameSmokeTest 11 用例），见其 v19 条目
+> v21 更新（2026-08-02 20:5x，P-0802-F C-2 批次 A 部分实施：一般模式串行调度）：新增配置开关 `roleplay.round.serial`（默认 false=并行零破坏；true=串行+同轮即时入史），RouterService.runRound 串行分支 + executeRoundSerial（每 agent 输出完成立即入史，后发言者上下文含前面角色本轮发言）；新增 RouterServiceSerialRoundTest 4 用例（同轮上下文共享/默认并行行为不变/并行不共享同轮上下文/配置默认 false+切换）；本批 4/4 全绿 + 排除并发未登记批次失败用例后全量 284/0 BUILD SUCCESS；⚠️ 并发未登记批次（狼人杀 AI 行动器 G0-2，代码注释同用 P-0802-F 撞标）在改 WerewolfService/WerewolfController/WerewolfAiPlanner/RouterService（werewolfGame 角色卡，与串行调度不同区域共存），其 WerewolfAiPlannerTest.humanWolfWaits 单跑失败与本批无关，已按规则 5 登记占位 P-0802-未知；详见 Round 21 / 台账 #70
+> v20 更新（2026-08-02 19:5x，P-0802-E C-2 批次：输出机制重构——前端打字机流式播放队列 + 一般模式串行调度调研，mvn 基线 **272/0 不变**（无新增测试，TrackStrategy/GroupStrategy prompt 改动后全量复跑全绿，TrackStrategyTest 7/0））：**B 前端打字机（核心）**——PhaserSimulationView 打字机队列引擎：消费 C-1 SimChatMsg.status 驱动 pending→playing（3字/秒逐字）→done，严格串行（上一段播完+3s 句间停顿→下一段）；参数集中 `phaser/simChatConfig.ts`（typingCharsPerSec=3 / interSentencePauseMs=3000 / pauseTimeoutMs=60000 / maxSentenceChars=60 / typingTickMs=333）；暂停/恢复=聊天输入框有字冻结播放进度、发送后恢复；60s 暂停超时看门狗跳过当前句；用户在场判定=conversation-status 群组成员含玩家名（在场→单轨：世界内只显示当前播放者气泡单例 setBubbleFilter；不在场→多气泡 + SimulationScene computeBubbleLanes 锚定避让层，硬约束不重叠）；渲染硬截断（超长省略号）+ cleanWorldText 过滤非语言噪音（emoji/特殊符号/零宽字符，保留中文标点）；**A 一般模式串行调度=调研报方案未改码**（最小改动点在 RouterService.runRound=禁动，方案见 docs/串行调度方案-20260802.md 交主会话决策）；后端非禁动轻提示——TrackStrategy.MERGED/WEAK + GroupStrategy.fallback 角色发言 prompt 补「每句话不超过60字」（MAX_SENTENCE_CHARS=60 常量，与前端 maxSentenceChars 对齐）；验证：mvn 272/0 + npm run build 通过（tsc 0 错误 + vite 64 modules）+ static 同步（index-4KH0B1ke.js + index-D1bQ2MoB.css，SHA256 dist↔static 一致，index.html 引用已更新）+ bundle grep 10 项全命中；未跑 headless 冒烟（无浏览器工具+8000 旧 jar 产物，build+grep+源码审查替代）；详见 Round 20 / 台账 #69
+> v19 更新（2026-08-02 19:1x，P-0802-D 狼人杀重构非禁动批次（前端 init 根因修复 + 6 个游戏 API 封装 + 后端测试骨架），基线 261 → **272 tests / 36 类**）：WerewolfGameSmokeTest 11 用例——init 全量进局（6 人默认角色分布 2狼/预言家/女巫/猎人/村民）/ controller body{players,roles} 自定义职业生效（前端修复后路径）/ 夜间行动+phase 守卫 / resolveNight 狼刀+毒双亡结算 / 猎人开枪现状 bug 锁定（G1-1 升级证据：resolveNight 置 hunterCanShoot=false 后 hunterShoot 永久被拒，禁动未修）/ 投票全流程含 D7 审批门挂起→批准→放逐→回 NIGHT round++ / 平票无人放逐 / 两狼出局 villager 胜 ENDED / 4 人局狼刀后 werewolf 胜 / toMap 视角现状锁定（visible 键构造后从未 put，狼人互认 API 层缺失，G1-3 证据）/ ENDED 终态 phase 守卫；另锁定现状：customRoles 值 "wolf" → Role.valueOf 抛 IllegalArgumentException（后端只认枚举名 werewolf，前端已规避传枚举名）。前端：ScenePage.startWWGame 改 body{players: 全量, roles: 职业映射}（AI 进 GameState、职业配置生效、res.ok 检查不再静默吞掉）、start() werewolf 分支同步、client.ts 补 6 个游戏端点封装（原前端零调用）。⚠️ static 未同步（禁动）：并行批次 C-1 同步的 index-BX3fEiRB.js 早于本批编辑不含狼人杀修复，最终 dist index-BX3fEiRB.js 含 C-1+本批全部改动（bundle grep 双向验证），需主会话重同步 static + 8000 重启；详见 Round 19 / 台账 #67
 > v15 更新（2026-08-01 20:4x，状态同步注记，基线不变 **254/0**）：**Phaser 阶段2 已通过未衡终审，三阶段全闭环**——前端缺口已闭合：台账 #58（ScriptMapScene.ts 20 处 TS 修复 + ScenePage 剧本杀 Tab「生成地图」接线 + npm run build 63 modules 通过，index-Ccc-CMzG.js 1,814,610 B 已同步 static）+ #59 独立复核（SHA256 dist↔static 三方一致 + 冒烟 stage2 16/16 + 阶段1 回归 10/10）；**8000 实例已随新打包重启生效（PID 25760）**；终审遗留 P2（非阻塞）：①BSP 降级 seed 硬编码 DEFAULT_BSP_SEED=20260801（未 @Value 注入，建议配置化）②地图不在对局 toMap 的 your_secret 同级暴露（实现选择，非缺陷）
 
 > v13 更新：基线从 214 → **217 tests / 30 类**（P1 缺陷修复：ScriptServiceMaxTokensTest 3 用例——mock 返回 2000+ token 完整剧本 JSON（5 角色×长 intro/secret + 5 线索 + secrets + background + truth）→ generateScript 解析成功且 roles/secrets/clues/killer_id/truth 字段齐全、长字段不截断；verify generateScript 必须以 maxTokens=4000 调用 callJson（600 旧值回归即失败）；LLM 空输出仍走 defaultScript 兜底符合 schema A1-3 不回归）；详见 Round 13
@@ -37,9 +46,9 @@
 
 ---
 
-## 测试类明细（254 tests / 34 类）
+## 测试类明细（293 tests / 39 类）
 
-| 测试类 | 用例 | 状态 | 对应 |
+| 测试类 | **36** |
 |---|---|---|---|
 | ApprovalServiceTest | 11 | ✅ | 审批门（D7） |
 | RouterServiceHooksTest | 11 | ✅ | Hook 系统 |
@@ -74,6 +83,8 @@
 | **ScriptMapServiceTest** | 10 | ✅ | **Phaser 阶段2 LLM 地图生成（正常/空输出兜底/宽容解析/缓存与 regenerate/校验降级/快照）** |
 | **ScriptMapPersistenceTest** | 2 | ✅ | **Phaser 阶段2 地图随对局快照落库+重启恢复** |
 | **ScriptServiceMaxTokensTest** | 3 | ✅ | **P1 缺陷修复：LLM 剧本生成 JSON 截断（600→4000 maxTokens，长字段不截断）** |
+| **AuthControllerInviteSwitchTest** | 7 | ✅ | **P-0801-G 邀请码功能显式开关（启用：配置码 B3283A78 200+token/错误码 401/DEFAULT2024 兼容/token 过 me；关闭：403 未启用不暴露码；直构验证配置码重启不丢）** |
+| **WerewolfGameSmokeTest** | 11 | ✅ | **P-0802-D 狼人杀状态机冒烟（W-1~W-11：init 全量进局/自定义职业/夜间行动/结算/猎人开枪现状锁定/投票全流程含审批门/平票/双胜判定/toMap 现状锁定/终态守卫）** |
 | **新增稳定性/中断/DB 测试** | ~26 | ✅ | 并行工作流新增（中断系统/DB/模拟） |
 
 ---
@@ -87,6 +98,15 @@
 ---
 
 ## 📝 执行历史（追加式）
+
+### 2026-08-01 22:42-22:47 — 邀请码功能显式开关（Round 15，261 tests；P-0801-G，台账 #63）
+- **命令**：`mvn compile`（0 错误）→ `mvn test -Dtest=AuthControllerInviteSwitchTest`（单跑 7/0 BUILD SUCCESS）→ `mvn test`（全量 surefire 跑批 22:47 汇总 35 类）
+- **结果**：**261 tests / 0 failures / 0 errors / 35 类 BUILD SUCCESS**（254 基线 + AuthControllerInviteSwitchTest 7 用例）
+- **新增**：`controller/AuthControllerInviteSwitchTest` 7 用例——①G-1a 启用路径（Spring 上下文 + application-test.yml invite-enabled=true/invite-code=B3283A78）：POST /api/auth/verify code=B3283A78 → 200 + token + user=player + message=验证成功；②G-1b 错误码 WRONG-CODE → 401 无效的邀请码；③G-1c DEFAULT2024 兼容保留仍可验证 200；④G-1d 验证所得 token 过 GET /api/auth/me → 200 authenticated=true；⑤G-2a 关闭路径（直构 `new AuthController(false, "B3283A78")` 无 Spring）：verify 正确配置码 → 403 邀请码功能未启用；⑥G-2b 空码同样 403（不暴露邀请码是否正确）；⑦G-2c 直构 `new AuthController(true, "B3283A78")`：配置码可验证 200（构造时入映射，重启不丢语义）
+- **改动**：AuthController（+@Value roleplay.auth.invite-enabled 默认 false / roleplay.auth.invite-code 默认 DEFAULT2024，构造入映射保留 DEFAULT2024 兼容；verify 关闭时 403）；application.yml/application-test.yml（+roleplay.auth.* 两键，主 false / 测试 true，UTF-8 无 BOM）；其余端点（me/admin/*）零改动
+- **回归**：既有 254 基线零破坏（含 LONG-01 10 万字全绿、ScriptGameDmTest/ResumeTest/ApTransferTest、MapValidator/Bsp/ScriptMap 四类、SpeechGateTest 24 用例）
+- **git**：未 commit（统一 gate，未获授权）；并行登记 P-0801-G
+
 
 ### 2026-08-01 18:36-18:50 — Phaser 阶段2 LLM 地图生成接入（Round 14，254 tests；台账 #56）
 - **命令**：mvn test（全量，surefire 跑批 18:47 汇总 34 类）
@@ -305,3 +325,58 @@ ode --check）：bsp.js 多 seed（20260801/1/42/999）生成+validateMap 全过
 - **Java 测试基线**：未触碰，保持 214/0（29 类）（并行批次 D 已在 13:39 报 214/0）；本次无 mvn 重跑（前端测试）
 - **git**：未 commit（未获授权）；并行登记 P-0801-B 与台账 #52 相关，不动并行批次 D 的 8 个 Java 文件
 - **残留**：原 window.open 自研 Canvas 渲染（simulation.html 791 行）保留不删（回退通道）；任何前端改动都经 tsc 检查 + 构建冒烟
+
+
+### 2026-08-02 12:50-13:45 �� P0 �����޸���P-0802-A��subagent 035a7279�����Ự�ɵ������� ��˸Ķ���ȫ������
+- **��Χ**����� `service/RouterService.java`��runRound �������� + speaker ֧�� + ֹͣ�Զ��ָ� + runTurns/runAutoRounds �ָ����û���Ϣ��ʷ�����˲���Ӳ���� "me"����`controller/SessionController.java`��/api/send ��ȡ player_name����`simulation/SimulationService.java` + `simulation/SimulationController.java`��load-characters ֧����ʽ player_name �����ҿ��ƣ����Ӳ�������� "me"����ǰ�� `store/appStore.ts`����ѯ����ж��������޸�����`components/ScenePage/ScenePage.tsx`��hasMe �ų���ɫͬ�� / me ��ͬ����ʾ / use2D ���� window.open ����Ƕ / ɾ��ԭ�洰�ڡ���ť / �籾ɱ���ɺ��Զ����֣���`components/ChatPage/ChatPage.tsx`��send ȥӲ���� "me"��ȥ�ֹ�˫��չʾ��2D �Ÿ���Ƕ���ء�����ҳ��Ƕ 2D ��壩��`phaser/PhaserSimulationView.tsx`����Ƕ���죺��Ϣչʾ + �������� + player_name ͸������`static/simulation.html`��autoLoadFromApp ���Զ� start + ͸�� player_name��
+- **���**��**mvn test ȫ�� 261/0 BUILD SUCCESS**�����߲��䣬������������RouterService ����/���ظĶ����ƻ����� 261 ��������npm run build ͨ����tsc -b 0 ���� + vite 63 modules������ index-CGo4Hc0R.js ��ͬ�� static/��index.html �����Ѹ��£���bundle grep 8 �� P0 �Ķ��ַ��� 7/8 ֱ������ + 1 ��ģ���ַ��������֤���У���ݷ��ԣ�
+- **��ע**��ǰ��δ�� headless �����ð�̣�ʱ��Լ�� 14:00 ǰ�չ����Ķ����� tsc + ���� + bundle ��֤����8000 ʵ�����������Ự���𣬺�� java �Ķ����������Ч��δ git commit��δ����Ȩ��
+- **git**��δ commit
+
+
+### 2026-08-02 13:2x-13:5x — P1 批次修复（P1-6 / P1-8 / P1-9，P-0802-B，subagent 70f8a090，主会话重派）—— 纯前端改动
+- **范围**：① pi/client.ts（P1-6：request() 空 body 兜底——200 空响应返回 null，不再抛 Unexpected end of JSON input）；② components/ChatPage/ChatPage.tsx（P1-9：加载文案模式门控 werewolf 专属；P1-8：「⚙️ 设置」面板——聊天模式切换（自由对话/导演模式）+ 公告栏显示开关，localStorage roleplay_ann_show）；③ App.tsx（P1-8：移除 AnnouncementBanner/Ticker 全局挂载 + 相关 import）；④ components/AnnouncementBanner.tsx / components/AnnouncementTicker.tsx（P1-8：inline prop 支持 2D 面板内定位；Ticker 空态不渲染 + 「×」收起按钮）；⑤ styles/global.css（P1-8：.ann-banner.inline / .ann-ticker.inline 绝对定位跟随 2D 面板 + .ann-ticker-close 样式）；⑥ phaser/PhaserSimulationView.tsx（P1-8：2D 视图内挂载横幅+公告栏 + 控制条「📢」显示开关）
+- **结果**：**npm run build 通过**（tsc -b 0 错误 + vite 63 modules，产物 index-DYdLFONY.js 1,811,160 B + index-BLkB2f6f.css 37.83 kB）；**static 同步完成**（dist↔static SHA256 一致；index.html 引用已更新为 index-DYdLFONY.js/index-BLkB2f6f.css）；bundle grep 确认 P1-8（roleplay_ann_show/聊天设置）与 P1-9（白天讨论中/运行中）字符串均在产物中
+- **后端**：零改动（P1-6 优先前端方案；SceneController/CharacterController 未动，mvn 基线 261/0 不变，未重跑）
+- **备注**：未跑 headless 浏览器冒烟（时间约束 14:00 前收工，改动均经 tsc + 构建 + bundle 验证）；8000 重启由主会话负责，新 static 产物需重启后生效；未 git commit（未获授权）
+- **git**：未 commit
+
+### 2026-08-02 18:5x-19:4x — C-1 批次（P3-10 / P3-11 / 2D UI 重构 / 2D 入口合并，P-0802-C，subagent 6e7d626f）—— 纯前端改动，后端 Java 零改动
+- **范围**：① phaser/PhaserSimulationView.tsx（C-1 重构：左地图+右侧聊天面板可折叠（控制条「💬 聊天」按钮 + 面板 ✕，收起=地图全宽）；P0-3 内嵌聊天整合进右面板不双份；消息统一 SimChatMsg 结构带播放状态 status:'pending'|'playing'|'done'（C-2 打字机队列衔接：新世界对话先置 pending 再翻 done 演示状态机制，渲染按 status 样式区分 pending=半透明「⏳ 待播放」/playing=高亮闪烁「▶ 播放中」/done=正常）；P3-10 演讲+广播 demo 迁入（精简版默认折叠：AI 自动演讲/玩家发广播/模式 select merged|auto|split））；② components/ScenePage/ScenePage.tsx（P3-10：删除 demo 面板 section + demo 状态/函数/useEffect；P3-11：maxWidth 960→'none' + 角色列表分类（全部/已选/未选）+排序（默认/A-Z/Z-A）+ 场景列表分类（全部/剧本杀对局（scene_id 前缀 script_）/普通）+排序（useMemo 本地分组）；2D 入口合并：删 use2D checkbox 与 start() 内 roleplay_2d_inline 写库，保留单一「🎮 2D 模拟」按钮）；③ components/ChatPage/ChatPage.tsx（showSimPanel 不再 localStorage 自动展开、toggleSimPanel 纯开关，剧本杀「查看 2D 模拟（内嵌）」onOpen2D 联动保留，面板标题改「左地图 · 右聊天」）；④ styles/global.css（+ .sim-chat-panel/.sim-chat-list/.sim-chat-msg kind/status 样式 + status-tag + sim-blink 动画）
+- **结果**：**npm run build 通过**（tsc -b 0 错误 + vite 63 modules，产物 index-BX3fEiRB.js 1,824,095 B + index-BANIh__s.css 38.61 kB）；**static 同步完成**（dist↔static SHA256 字节一致；index.html 引用已更新为 index-BX3fEiRB.js/index-BANIh__s.css）；bundle grep 验证关键字符串全命中（sim-chat-panel/sim-chat-msg、CSS 规则 .sim-chat-msg.status-pending/.status-playing、待播放/播放中/AI 自动演讲/玩家发广播/正式版 merged/💬 聊天/排序：名称/分类：已选/剧本杀对局/2D 模拟（左地图 · 右聊天）/🎮 2D 模拟）；ScenePage 中「合并地基 demo」字符串确认已不存在（demo 面板移除成功）
+- **后端**：零改动（git diff src/main/java 无新增；mvn 基线 261/0 不变，未重跑）
+- **给 C-2 的接口**：PhaserSimulationView 导出 SimChatMsg 类型（id/who/text/kind/status/ts），status: 'pending'|'playing'|'done' 为播放状态字段，历史列表渲染已按 status 样式区分；世界消息签名状态存 worldSigRef（Map<sig, status>），C-2 打字机队列可直接驱动 pending→playing→done，无需改消息结构
+- **备注**：未跑 headless 浏览器冒烟（PhaserSimulationView 为 React 组件，真实后端需登录 token，时间约束内以 build + bundle grep + 源码审查替代）；8000 重启由主会话负责，新 static 产物需重启后生效；未 git commit（未获授权）
+- **git**：未 commit
+
+### 2026-08-02 18:53-19:2x — 狼人杀重构非禁动批次（P-0802-D，subagent 15a56863，主会话派单）
+- **范围**：① 新增 `src/test/java/com/roleplay/engine/service/WerewolfGameSmokeTest.java`（11 用例 W-1~W-11）；② 前端 `roleplay-v4/frontend/src/api/client.ts`（werewolfInit 改 JSON body `{players, roles}` 全量进局 + 新增 werewolfNightAction/werewolfHunterShoot/werewolfVote/werewolfResolveNight/werewolfStartVoting/werewolfResolveVote 6 个 API 封装）；③ `components/ScenePage/ScenePage.tsx`（startWWGame：roleConfig 计数→player→role map（值用后端枚举名 werewolf/seer/witch/hunter/villager，规避 valueOf("WOLF") 抛异常）+ api.werewolfInit 全量进局（修复 AI 从未进 GameState 根因）+ res.ok 检查（不再静默吞掉）+ 状态展示 alive 数；start() werewolf 分支同步全量场景玩家）
+- **结果**：**mvn test 全量 272/0 BUILD SUCCESS**（261 基线 + 11 新用例，35.4s，LONG-01 3.1s 全绿）；单跑 WerewolfGameSmokeTest 11/0；npm run build 通过（tsc -b 0 错误 + vite 63 modules，产物 index-BX3fEiRB.js 1,814.62 kB）
+- **现状 bug 证据（禁动未修）**：① customRoles 值 "wolf" → Role.valueOf 抛 IllegalArgumentException（前端已规避传枚举名）；② toMap 构造 visible 但从未 put 进返回 map（狼人互认 API 层缺失，G1-3）；③ 猎人夜间死亡后 hunterCanShoot=false 且 hunterShoot 要求 true → 开枪永久被拒（G1-1 升级）；④ init 不返回 session_id、不注册 router（G0-1）
+- **并行冲突**：另一并行批次 C-1（subagent 6e7d626f，2D UI 重构）同时占用 P-0802-C 标记并同改 ScenePage.tsx —— 本批标记顺延改 **P-0802-D**；双方改动共存于最终文件（C-1 只改 use2D/2D 入口区域，本批改狼人杀 init 区域），npm build 产物 index-BX3fEiRB.js 经 bundle grep 双向验证（狼人杀 6 API + '2D 模拟' 入口 + roleplay_2d_inline 已移除）
+- **static**：未同步（禁动）。⚠️ 并行批次 C-1 于本批编辑前完成 build 并同步 static `index-BX3fEiRB.js`，该产物**不含**本批狼人杀修复（grep night_action/resolve_vote/hunter_shoot = 0）；本批最终 dist `index-BX3fEiRB.js` 含 C-1 + 本批全部改动，**需主会话核查后重同步 static（index.html 引用更新）+ 8000 重启生效**
+- **备注**：禁动文件（WerewolfService/WerewolfController/SSEController/RouterService/ArbiterService/static）零改动；未跑 headless 冒烟（狼人杀前端 UI 面板未做——缺后端 AI 行动器/SSE，留待主人授权批次）；未 git commit（未获授权）
+- **git**：未 commit
+
+### 2026-08-02 19:08-19:5x — C-2 批次（P-0802-E，subagent 8aecb2bc）—— 前端打字机流式播放队列（B）+ 一般模式串行调度调研报方案（A）
+- **范围**：① 新增 `roleplay-v4/frontend/src/phaser/simChatConfig.ts`（打字机参数集中配置：typingCharsPerSec=3 / typingTickMs=333 / interSentencePauseMs=3000 / pauseTimeoutMs=60000 / maxSentenceChars=60；cleanWorldText 过滤非语言噪音（emoji/特殊符号/零宽字符，保留中文标点）；truncateText 渲染硬截断省略号）；② 改 `phaser/PhaserSimulationView.tsx`（C-2 打字机队列引擎——消费 C-1 SimChatMsg.status 驱动 pending→playing→done 不改消息结构；严格串行：上一段播完+3s 句间停顿→下一段；暂停/恢复=聊天输入框有字冻结播放进度、发送后恢复；60s 暂停超时看门狗跳过当前句（标 done 继续）；用户在场判定=conversation-status 群组成员含玩家名；世界气泡单例=在场只显示当前播放者（lastSpeakerRef→setBubbleFilter）；消息拍平时即清洗+截断（揭示字数与显示文本一致）；智能滚动（新消息或已在底部才滚，打字机逐字不打断上翻））；③ 改 `phaser/SimulationScene.ts`（setBubbleFilter 单例 + computeBubbleLanes 锚定避让层（重叠向上抬最多 4 层）硬约束气泡不重叠）；④ 改 `styles/global.css`（+.typewriter-caret 光标样式）；⑤ 后端非禁动：改 `simulation/conversation/TrackStrategy.java`（+MAX_SENTENCE_CHARS=60 常量，MERGED/WEAK prompt 轻提示每句话不超过60字，与前端 maxSentenceChars 对齐）、`simulation/conversation/GroupStrategy.java`（legacy fallback 两行同提示）；⑥ static 同步（index-4KH0B1ke.js + index-D1bQ2MoB.css，SHA256 dist↔static 一致，index.html 引用已更新）
+- **结果**：**mvn test 全量 272/0 BUILD SUCCESS**（基线不变，TrackStrategy/GroupStrategy prompt 改动零破坏：TrackStrategyTest 7/0、SpeechGateTest 24/0、ScriptGameDiscussionTest 4/0 等全回归；LONG-01 全绿）；**npm run build 通过**（tsc -b 0 错误 + vite 64 modules，index-4KH0B1ke.js 1,819,120 B）；static 同步完成（SHA256 一致）；bundle grep 10 项字符串全命中（待播放/播放中/输入时暂停播放/typewriter-caret/字/秒/句间停顿/暂停超时/对话与发言/setBubbleFilter/bubbleLanes）
+- **A 部分（一般模式串行调度）结论**：未改码，报方案——执行链 RouterService.runRound（**禁动**）→ AgentExecutor.executeRound（全部角色虚拟线程并行）；上下文 buildAgentContext 只读 memory（仅上一轮及以前消息）；同轮各角色输出在并行完成后的 Step 4 才批量入 memory →「同轮上下文不共享」断点=AgentExecutor 并行执行 + RouterService Step3→Step4 顺序；串行调度最小改动点在 RouterService.runRound（并行 executeRound 改串行循环 + 每角色输出即时入 memory 再构建下一角色上下文）；触及禁动文件按纪律停手，完整方案（改法/风险/测试建议）见 `docs/串行调度方案-20260802.md`，交主会话决策
+- **备注**：未跑 headless 冒烟（无浏览器工具可用 + 8000 运行旧 jar 产物无法验证新 bundle，以 build + grep + 源码审查替代）；8000 重启由主会话负责（新 static 产物需重启生效）；未 git commit（未获授权）
+- **git**：未 commit
+
+### 2026-08-02 20:1x-20:5x — C-2 批次 A 部分实施：一般模式串行调度（P-0802-F，subagent b938dfb7，主人已授权动 RouterService.runRound）
+- **命令**：`mvn compile`（0 错误）→ `mvn test -Dtest=RouterServiceSerialRoundTest`（单跑 4/0 BUILD SUCCESS）→ `mvn test`（全量 surefire 跑批 20:3x 汇总；并发未登记批次失败用例用 `-Dtest=!WerewolfAiPlannerTest` 复核 284/0）
+- **结果**：**本批 RouterServiceSerialRoundTest 4/0 全绿**；全量 285 用例中 **284 通过 / 1 失败**——唯一失败 `WerewolfAiPlannerTest.humanWolfWaits`（第 73 行「人类狼未行动→狼刀决策未完成」）属**并发未登记批次**（狼人杀 AI 行动器 G0-2，代码注释同用 P-0802-F 撞标，20:22-20:31 正在改 WerewolfService/WerewolfController/WerewolfAiPlanner/RouterService），**单跑复现失败（`-Dtest=WerewolfAiPlannerTest` 9 中 1 失败），与本批改动无关**（本批零触碰狼人杀后端=禁动）；排除该用例后 **284/0 BUILD SUCCESS**（272 基线 + 本批 4 + 并发批次 WerewolfAiPlannerTest 8 个通过用例）
+- **新增**：`service/RouterServiceSerialRoundTest` 4 用例——①serial=true 同轮上下文共享：mock LLM 捕获 USER 上下文，断言后发言者 B 的上下文包含 A 本轮发言「A发言：我看到了碎玻璃。」且内存顺序 A→B、输出顺序 A→B；②serial=false 默认并行：两角色均有输出且入史（行为不变）；③serial=false 不共享同轮上下文：并行路径 LLM 收到的上下文不含任一角色本轮发言；④配置开关：AppConfig.RoundConfig.serial 默认 false + setSerialRound(true) 生效
+- **改动**：RouterService（runRound Step3-4 重排：`serialRound` @Value（roleplay.round.serial 默认 false）分支——false 走既有并行 executeRound 逐字节不变；true 走新增 `executeRoundSerial`：按轨道顺序×轨道内 agent 顺序（PLAYER>DM>NPC，computeSerialPriority）逐个生成，每 agent 输出完成**立即** memory.addMessage + SSE broadcastAgentOutput + 收集，后发言者 buildAgentContext 读 memory.getAgentContext 即含前面角色本轮已完成的发言=同轮上下文共享；上下文经 `agent.generateWithContext(context, token)` 显式传入 LLM（并行路径构建的 context 实际未传给 generateSync 属既有行为，串行路径按方案文档显式传入）；D1 中断语义保留：每步注册 AgentTask+CancellationToken、检查 running、TaskCancelledException 中断循环返回 cancelled、失败 agent 输出占位不入史；新增 setSerialRound/isSerialRound）；AppConfig（RoundConfig 补 serial 字段+getter/setter）；application.yml + application-test.yml（`roleplay.round.serial: false` 双份）
+- **回归**：272 基线零破坏（本批仅在 RouterService 增分支，默认 false 路径逐字节不变；TrackStrategyTest/SpeechGateTest/ScriptGameDiscussionTest/LONG-01 等全绿）；⚠️ 并发未登记批次在 RouterService 的 werewolfGame 角色卡改动与本批 serialRound 改动**不同区域共存无冲突**，本批测试在其合并后重跑仍 4/4 绿
+- **git**：未 commit（统一 gate，未获授权）；并行登记 P-0802-F（本批）+ P-0802-未知占位（并发批次，按规则 5 登记待溯源）
+
+### 2026-08-02 20:13-21:1x — 狼人杀后端授权批次（P-0802-H，subagent 53b74666，主人已授权解禁 WerewolfService/WerewolfController/RouterService）
+- **命令**：`mvn compile`（0 错误 ×3）→ `mvn test -Dtest=WerewolfAiPlannerTest,WerewolfGameFixTest,WerewolfGameSmokeTest`（28/0）→ `mvn test`（全量首跑 293 中 1 失败）→ `-Dtest=LongTextStabilityTest`（单独复跑 1/0 通过）→ `mvn test`（全量复跑 **293/0 BUILD SUCCESS**，LONG-01 2.85s）
+- **结果**：**全量 293/0**（272 基线 + 本批 WerewolfAiPlannerTest 9 + WerewolfGameFixTest 8 + 并行 C-2-A RouterServiceSerialRoundTest 4）。首轮全量唯一失败=LongTextStabilityTest 堆增长 49.6%>30%——台账多次记录的既有堆测量脆性（#37 37.4%/#40 34.8%/#41 34.8% 同款，单跑即过），单独复跑 1/0 通过，全量复跑全绿，与本次改动无关（本批零触碰 Compressor/记忆链路）
+- **新增**：`WerewolfAiPlannerTest` 9 用例（P1 狼刀不刀狼+决策标记 / P2 狼队共刀单目标 / P3 单狼局人类狼不代刀 / P4 预言家查验随机存活+结果=目标角色 / P5 女巫首夜救被刀者+毒决策放行不消耗 / P6 女巫后续夜概率毒 1.0 必毒 vs 0.0 不毒（同种子对照）/ P7 全员 AI 夜间完成后 nightComplete=true / P8 猎人反杀目标（有存活/只剩自己空串）/ P9 白天投票村民随机非己+狼队共投非狼+已投不重复）；`WerewolfGameFixTest` 8 用例（F1 parseRole 宽容解析中英文别名+非法 null / F2 initGame 别名 customRoles 不抛异常+正确解析 / F2b 非法角色回退村民 / F3 controller init 返回 session_id+verify router.setWerewolfGame / F4 SSE 事件流：init 玩家·人类角色→夜间结算→白天讨论→讨论发言（werewolf_speech+transcript）→自动投票→等待真人→真人投票后结算推送 / F5 autoPlay 全 AI 局自动打完到 ENDED（winner 非空+game_over 推送+讨论 transcript 非空） / F6 人类白天发言 discussionSay 入讨论引擎 transcript / F7 AI 猎人夜间死亡自动反杀（狼刀猎人→反杀一名→狼胜终局））；改 `WerewolfGameSmokeTest` W-5（原锁定「夜间死亡后开枪被拒」旧 bug 断言→修复后：可开枪反杀一次+机会仅一次）、W-10（原锁定「toMap 无 visible 键」→修复后：狼人互见+村民仅见自己）
+- **改动**：后端 8 文件——WerewolfService（autoPlay 自动推进闭环：startNight/runAiNightActions/advanceIfNightComplete/isNightComplete/nightComplete 静态/startDayDiscussion/runDiscussionEngine/finishDayDiscussion/discussionSay/resolveVoteAuto（D7 审批门保留+auto-approve-ms 自动批准）/scheduleAutoApprove/十类 werewolf_* SSE 推送（SseBroadcaster 接口注入，null 守卫）/parseRole 宽容解析/toMap visible 修复/猎人开枪修复/autoShootDeadHunter/autoShootExiledHunter/statusMap；GameState +nightDecisions/discussionTranscript/pendingHumanEvents/discussionActive/autoPlay）、新增 WerewolfAiPlanner（纯规则零 LLM：狼共刀/预言家验/女巫救毒/猎人反杀/白天投票，种子可固定）、WerewolfController（init 返回 session_id+router.setWerewolfGame+setHumanPlayers+setAutoPlay+notifyGameInit+startNight、新增 POST /api/werewolf/discussion_say、status 附加 session_id/waiting_human、@Value auto-play 直构测试=off）、RouterService（+setWerewolfGame/clearWerewolfGame+狼人杀角色卡（本人身份+狼人互认+阶段）注入 buildAgentContext，与并行 C-2-A serialRound 改动不同区域共存）、application.yml/application-test.yml（+roleplay.game.werewolf.{ai-night-actions,auto-play,auto-approve-ms,witch-poison-probability}）；前端 8 文件——client.ts（+werewolfDiscussionSay）、useSSE.ts（+4 事件注册）、appStore.ts（+werewolfSessionId/Alive/Visible/Discussion/Winner/VoteCount/Approval 9 状态）、App.tsx（+4 SSE 分支：night_result/vote_update（含 pending 审批态）/speech/status + player_eliminated 支持无角色公告 + normalizeWerewolfPhase 模块级）、ChatPage.tsx（+WerewolfActionPanel：夜间刀/验/救/毒、白天讨论发言+记录、投票+审批批准驳回、已出局猎人开枪；+狼人杀 3s 轮询；autoPlay 分支改后端驱动不再 startRound（原=「仍按一般模式交流」根因⑭））、ScenePage.tsx（两处 werewolfInit 存 session_id+过时注释更新）、global.css（+ww-action-box/ww-target-chip/ww-discussion 等样式）；static 同步 index-Bu8YksJU.js + index-aWRy_sYe.css（SHA256 dist↔static 一致，index.html 引用已更新）
+- **验证**：npm run build 通过（tsc -b 0 错误 + vite 64 modules）；bundle grep 关键字符串全命中（werewolfDiscussionSay/werewolf_night_result/werewolf_vote_update/werewolf_speech/ww-target-chip/ww-action-box/btn-small）；改动文件 UTF-8 无 BOM；未跑 headless 冒烟（无浏览器工具+8000 旧 jar 产物，build+grep+源码审查替代）
+- **禁动边界**：本批仅动 WerewolfService/WerewolfController/RouterService（setWerewolfGame+角色卡，与并行 C-2-A 共存）/yml/前端/static；SSEController/ArbiterService/审批主链路零改动（werewolf_* 经 SseBroadcaster 接口复用既有 broadcast 管线）；未 git commit（统一 gate 未获授权）

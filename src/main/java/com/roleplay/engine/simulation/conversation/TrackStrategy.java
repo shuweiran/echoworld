@@ -48,6 +48,12 @@ public class TrackStrategy implements ConversationStrategy {
     private static final int SUMMARY_REFRESH_TURNS = 4;
     /** Full chat history window for MERGED agents. */
     private static final int HISTORY_WINDOW = 8;
+    /**
+     * C-2：角色发言每句话字数上限（prompt 轻提示，与前端
+     * roleplay-v4/frontend/src/phaser/simChatConfig.ts 的 maxSentenceChars=60 对齐，
+     * 前端渲染硬截断为真保险，此处仅轻提示）。
+     */
+    private static final int MAX_SENTENCE_CHARS = 60;
 
     private final java.util.function.Function<String, Agent> agentLookup;
     private final java.util.function.Function<String, String> narrationSupplier;
@@ -227,7 +233,8 @@ public class TrackStrategy implements ConversationStrategy {
             sb.append("\n");
         }
 
-        sb.append("请发表你的看法，简短（50字内）。末尾标注【情绪：xxx】。");
+        sb.append("请发表你的看法，每句话不超过").append(MAX_SENTENCE_CHARS)
+          .append("字（含标点），确保对话内容简洁。末尾标注【情绪：xxx】。");
         return sb.toString();
     }
 
@@ -249,7 +256,8 @@ public class TrackStrategy implements ConversationStrategy {
                         : weakObservation)
                 .append("\n\n");
 
-        sb.append("作为旁观者，你可以简短回应、提问或保持沉默（回复…表示沉默）。末尾标注【情绪：xxx】。");
+        sb.append("作为旁观者，你可以一句话简短回应、提问或保持沉默（回复…表示沉默），每句话不超过")
+          .append(MAX_SENTENCE_CHARS).append("字（含标点）。末尾标注【情绪：xxx】。");
         return sb.toString();
     }
 

@@ -149,6 +149,8 @@ public class AppConfig {
     public static class RoundConfig {
         private boolean enabled = true;
         private boolean parallelAgents = true;
+        /** C-2 串行调度开关（roleplay.round.serial，默认 false=保持并行；true=同轮按序生成、每完成一个即时入史）。 */
+        private boolean serial = false;
         private int arbiterMaxTokens = 150;
         private int agentMaxTokens = 300;
         private int compressionInterval = 5;
@@ -157,6 +159,8 @@ public class AppConfig {
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public boolean isParallelAgents() { return parallelAgents; }
         public void setParallelAgents(boolean parallelAgents) { this.parallelAgents = parallelAgents; }
+        public boolean isSerial() { return serial; }
+        public void setSerial(boolean serial) { this.serial = serial; }
         public int getArbiterMaxTokens() { return arbiterMaxTokens; }
         public void setArbiterMaxTokens(int arbiterMaxTokens) { this.arbiterMaxTokens = arbiterMaxTokens; }
         public int getAgentMaxTokens() { return agentMaxTokens; }

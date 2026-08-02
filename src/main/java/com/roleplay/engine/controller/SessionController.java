@@ -102,8 +102,11 @@ public class SessionController {
         String message = body.getOrDefault("message", body.getOrDefault("text", ""));
         // D11: 按 session_id 路由到对应会话实例；未传 → 默认单例（向后兼容）
         String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
+        // P0-2：读取前端传来的 player_name —— 命中 agent 名单时该角色直接发言（角色说），
+        // 否则主控旁白（原来完全忽略 player_name，导致 me 发消息恒变主控）
+        String playerName = String.valueOf(body.getOrDefault("player_name", "")).trim();
         RouterService r = sessions.get(sessionId);
-        RouterService.RoundResult result = r.runRound(message, null);
+        RouterService.RoundResult result = r.runRound(message, null, playerName);
         return ResponseEntity.ok(Map.of(
             "status", result.status,
             "agent_outputs", result.agentOutputs,

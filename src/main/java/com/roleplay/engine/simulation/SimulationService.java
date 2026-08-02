@@ -160,8 +160,18 @@ public class SimulationService {
     /**
      * Initialize simulation with user-defined Personas (bridging from roleplay).
      * Each persona becomes an agent in the 2D world with random starting positions.
+     * 兼容旧调用（无 playerName）：按旧规则把名字为 "me" 的 agent 标记为玩家控制。
      */
     public void initWithPersonas(List<Persona> personas, String sceneName) {
+        initWithPersonas(personas, sceneName, null);
+    }
+
+    /**
+     * P0-1（2026-08-02）：玩家控制标记改为显式指定——传 playerName 时只把同名 agent 标记为
+     * playerControlled（不再硬编码名字 "me"，避免新建角色名 "me" 被误识别成玩家自己）；
+     * 未传时保持旧行为向后兼容。
+     */
+    public void initWithPersonas(List<Persona> personas, String sceneName, String playerName) {
         clearAll();
         if (personas.isEmpty()) {
             log.warn("Empty persona list, falling back to demo");
@@ -173,6 +183,7 @@ public class SimulationService {
             world.setScene(sceneName);
         }
 
+        boolean explicitPlayer = playerName != null && !playerName.isBlank();
         for (Persona p : personas) {
             Agent agent = new Agent(p, "npc", llmClient);
             double x = 100 + Math.random() * 800;
@@ -184,14 +195,15 @@ public class SimulationService {
             AgentState state = world.getState(p.getName());
             if (state != null) {
                 state.setEmotion(Emotion.NEUTRAL);
-                // Mark player-controlled agents ("me", or any agent with the tag)
-                if (PLAYER_AGENT_NAME.equals(p.getName())) {
+                // Mark player-controlled agents: 显式 playerName（P0-1）或旧规则名字 "me"
+                if (explicitPlayer ? playerName.equals(p.getName())
+                                   : PLAYER_AGENT_NAME.equals(p.getName())) {
                     state.setPlayerControlled(true);
                 }
             }
         }
 
-        log.info("Loaded {} personas into simulation, scene={}", personas.size(), sceneName);
+        log.info("Loaded {} personas into simulation, scene={}, player={}", personas.size(), sceneName, playerName);
     }
 
     public void clearAll() {

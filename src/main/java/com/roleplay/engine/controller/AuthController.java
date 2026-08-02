@@ -1,5 +1,6 @@
 package com.roleplay.engine.controller;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -9,6 +10,11 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Invite-code authentication endpoints.
  * Maps from Python api/routes_auth.py + services/invite_service.py.
+ *
+ * <p>P-0801-G: 邀请码功能显式开关 {@code roleplay.auth.invite-enabled}（默认 false=关闭）——
+ * 关闭时 /verify 返回 403「邀请码功能未启用」（不暴露邀请码是否正确），其余端点与游戏功能不受影响；
+ * 开启时校验配置的持久化邀请码 {@code roleplay.auth.invite-code}（默认 DEFAULT2024 兼容旧行为）。
+ * 改配置后重启服务生效；功能代码/端点全部保留。</p>
  */
 @RestController
 @RequestMapping("/api/auth")
@@ -18,16 +24,36 @@ public class AuthController {
     private static final String DEFAULT_ADMIN_KEY = "admin-secret-change-me";
 
     private final String adminKey;
+
+    /** 邀请码功能显式开关（roleplay.auth.invite-enabled，默认 false=关闭）。 */
+    private final boolean inviteEnabled;
+
+    /** 持久化初始邀请码（roleplay.auth.invite-code，默认 DEFAULT2024 兼容旧行为；服务重启不丢）。 */
+    private final String inviteCode;
+
     private final Map<String, Boolean> inviteCodes = new ConcurrentHashMap<>();
     private final Set<String> activeTokens = ConcurrentHashMap.newKeySet();
 
-    public AuthController() {
+    public AuthController(
+            @Value("${roleplay.auth.invite-enabled:false}") boolean inviteEnabled,
+            @Value("${roleplay.auth.invite-code:DEFAULT2024}") String inviteCode) {
+        this.inviteEnabled = inviteEnabled;
+        this.inviteCode = inviteCode;
         this.adminKey = System.getenv().getOrDefault("ROLEPLAY_ADMIN_KEY", DEFAULT_ADMIN_KEY);
+        // 兼容旧行为：DEFAULT2024 恒在；配置的持久化邀请码（如 B3283A78）启用后立即可用
         inviteCodes.put("DEFAULT2024", true);
+        if (inviteCode != null && !inviteCode.isBlank()) {
+            inviteCodes.put(inviteCode.trim(), true);
+        }
     }
 
     @PostMapping("/verify")
     public ResponseEntity<Map<String, Object>> verify(@RequestBody Map<String, String> body) {
+        // 显式开关（roleplay.auth.invite-enabled，默认关闭）：关闭时明确 403，
+        // 不暴露邀请码是否正确；仅此端点被门控，不影响其余游戏功能。
+        if (!inviteEnabled) {
+            return ResponseEntity.status(403).body(Map.of("error", "邀请码功能未启用"));
+        }
         String code = body.getOrDefault("code", "");
         if (inviteCodes.containsKey(code) && inviteCodes.get(code)) {
             String token = UUID.randomUUID().toString().replace("-", "").substring(0, 16);

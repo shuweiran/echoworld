@@ -768,6 +768,9 @@ async function autoLoadFromApp() {
   const KNOWN_SCENES = ['park', 'city', 'cafe', 'forest', 'classroom', 'beach'];
   if (!KNOWN_SCENES.includes(scene)) scene = 'park';
   try {
+    // P0-1：显式玩家名（ScenePage 写入 roleplay_2d_player_name）→ 后端只标记同名 agent 为玩家控制
+    let playerName = '';
+    try { playerName = localStorage.getItem('roleplay_2d_player_name') || ''; } catch (e) {}
     await api('POST', '/load-characters', {
       characters: clean.map(c => ({
         name: String(c.name).trim(),
@@ -775,12 +778,15 @@ async function autoLoadFromApp() {
         voice: c.voice || '',
         background: c.background || ''
       })),
-      scene: scene
+      scene: scene,
+      player_name: playerName || undefined
     });
     await fetchState();
     if (es) { es.close(); es = null; }
     startSSE();
     document.getElementById('status').textContent = 'Loaded ' + clean.length + ' characters from app';
+    // P0-3（2026-08-02）：原实现只 load 不 start → 世界 running=false 永久卡住；自动开始
+    if (!running) await startSim();
   } catch (e) {
     console.error('Auto-load characters failed:', e);
   }

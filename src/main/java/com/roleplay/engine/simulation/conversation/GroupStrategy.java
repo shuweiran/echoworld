@@ -184,9 +184,9 @@ public class GroupStrategy implements ConversationStrategy {
         }
 
         if (isActive) {
-            sb.append("请发表你的看法，简短（50字内）。末尾标注【情绪：xxx】。");
+            sb.append("请发表你的看法，每句话不超过60字（含标点），确保对话内容简洁。末尾标注【情绪：xxx】。");
         } else {
-            sb.append("作为听众，你可以简短回应、提问或保持沉默（回复…表示沉默）。末尾标注【情绪：xxx】。");
+            sb.append("作为听众，你可以一句话简短回应、提问或保持沉默（回复…表示沉默），每句话不超过60字（含标点）。末尾标注【情绪：xxx】。");
         }
 
         return sb.toString();

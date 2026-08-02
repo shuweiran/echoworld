@@ -32,6 +32,8 @@ roleplay:
     summary-interval: 10
   round:
     parallel-agents: false
+    # C-2 串行调度开关：与主 yml 同步（默认 false=并行；测试中经 setSerialRound 切换验证串行路径）
+    serial: false
     agent-max-tokens: 300
     arbiter-max-tokens: 150
   mode:
@@ -51,6 +53,17 @@ roleplay:
       priority-decay-rounds: 3
       wait-bias: 0.5
       cold-break: true
+    werewolf:
+      # P-0802-F 狼人杀自动推进（与主 yml 同步；测试直构服务不经 Spring，@Value 默认值生效）
+      ai-night-actions: true
+      auto-play: true
+      auto-approve-ms: 3000
+      witch-poison-probability: 0.5
+  auth:
+    # 邀请码开关（P-0801-G）：测试置 true 验证启用路径（配置码 B3283A78 可验证通过）；
+    # 与主 yml 同步键（invite-code 同值）
+    invite-enabled: true
+    invite-code: "B3283A78"
   broadcast:
     # 演讲与广播合并地基：公告管线节流参数（测试用默认窗口，便于覆盖节流/合并用例）
     window-ms: 1000

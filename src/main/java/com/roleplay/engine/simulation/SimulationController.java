@@ -61,7 +61,8 @@ public class SimulationController {
      *     {"name": "\u5c0f\u660e", "persona": "\u5f00\u6717\u5916\u5411\u7684\u5e74\u8f7b\u4eba", "voice": "\u8bf4\u8bdd\u8f7b\u677e\u6d3b\u6cfc", "background": "\u7a0b\u5e8f\u5458"},
      *     {"name": "\u5c0f\u7ea2", "persona": "\u6e29\u67d4\u7ec6\u5fc3\u7684\u5973\u5b69", "voice": "\u8bf4\u8bdd\u8f7b\u58f0\u7ec6\u8bed", "background": "\u5b66\u751f"}
      *   ],
-     *   "scene": "park"
+     *   "scene": "park",
+     *   "player_name": "me"     // 可选（P0-1）：显式玩家名，同名 agent 标记为玩家控制；缺省按旧规则
      * }
      * }</pre>
      */
@@ -70,6 +71,7 @@ public class SimulationController {
     public Map<String, Object> loadCharacters(@RequestBody Map<String, Object> body) {
         List<Map<String, String>> characterList = (List<Map<String, String>>) body.getOrDefault("characters", List.of());
         String sceneName = (String) body.getOrDefault("scene", "park");
+        String playerName = body.get("player_name") != null ? String.valueOf(body.get("player_name")) : null;
 
         List<Persona> personas = new ArrayList<>();
         for (Map<String, String> ch : characterList) {
@@ -81,7 +83,7 @@ public class SimulationController {
             personas.add(p);
         }
 
-        simulationService.initWithPersonas(personas, sceneName);
+        simulationService.initWithPersonas(personas, sceneName, playerName);
         return Map.of("status", "ok", "message", "Loaded " + personas.size() + " characters into simulation");
     }
 
