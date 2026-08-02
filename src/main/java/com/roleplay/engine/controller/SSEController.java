@@ -194,6 +194,22 @@ public class SSEController implements SseBroadcaster {
         broadcast("agent_silent", Map.of("agent_name", agentName));
     }
 
+    /**
+     * P-0802-M：agent_token → {agent_name, delta, track_id, track_label, track_mode} ——
+     * LLM 流式生成增量片（SSE 推送，前端逐字实时渲染）；完整内容仍由 agent_output 结算
+     * （前端收到 agent_output 后以完整文本替换增量草稿）。
+     */
+    public void broadcastAgentToken(String agentName, String delta, String trackId,
+                                    String trackLabel, String trackMode) {
+        broadcast("agent_token", Map.of(
+            "agent_name", agentName == null ? "" : agentName,
+            "delta", delta == null ? "" : delta,
+            "track_id", trackId == null ? "main" : trackId,
+            "track_label", trackLabel == null ? "" : trackLabel,
+            "track_mode", trackMode == null ? "merged" : trackMode
+        ));
+    }
+
     /** arbiter_integrate → {round, narration} */
     public void broadcastArbiterIntegrate(int round, String narration) {
         broadcast("arbiter_integrate", Map.of("round", round, "narration", narration == null ? "" : narration));

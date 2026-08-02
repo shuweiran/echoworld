@@ -227,6 +227,12 @@ public class LLMClient {
     private String buildChatRequest(List<Message> messages, String modelName,
                                     int maxTokens, double temperature)
             throws JsonProcessingException {
+        return buildChatRequest(messages, modelName, maxTokens, temperature, false);
+    }
+
+    private String buildChatRequest(List<Message> messages, String modelName,
+                                    int maxTokens, double temperature, boolean stream)
+            throws JsonProcessingException {
 
         List<Map<String, String>> msgList = new ArrayList<>();
         for (Message m : messages) {
@@ -245,8 +251,160 @@ public class LLMClient {
         requestBody.put("messages", msgList);
         requestBody.put("max_tokens", maxTokens);
         requestBody.put("temperature", temperature);
+        if (stream) requestBody.put("stream", true);
 
         return mapper.writeValueAsString(requestBody);
+    }
+
+    // ── Streaming call （P-0802-M：LLM 边生成边推送增量） ─────────────
+
+    /**
+     * 流式调用 —— stream=true，解析 OpenAI 兼容 SSE 增量（data: {…choices[].delta.content}），
+     * 每收到一个内容片即回调 {@code onDelta}（可为 null），返回完整文本（与 {@link #callSync} 同语义，
+     * 调用方无需感知流式差异）。
+     *
+     * <p>重试规则：仅当尚未发出任何增量时重试（已发出增量后出错 → 直接上抛，由调用方降级
+     * 非流式完整调用，避免前端已渲染的增量被重复追加）。
+     *
+     * <p>兼容兜底：若服务端忽略 stream 参数返回普通 JSON（如测试 mock），整段内容作为单个增量回调。
+     */
+    public String callStream(List<Message> messages, CancellationToken token,
+                             java.util.function.Consumer<String> onDelta) {
+        String[] modelsToTry = {defaultModel(), fallbackModel};
+        Set<String> seen = new LinkedHashSet<>(Arrays.asList(modelsToTry));
+        Exception lastError = null;
+
+        for (String currentModel : seen) {
+            for (int retry = 0; retry < 2; retry++) {
+                // 检查点：每次尝试前（取消 → 立即中断，不发起新请求）
+                if (token != null) token.checkpoint();
+                try {
+                    String requestBody = buildChatRequest(messages, currentModel, 300, 0.7, true);
+                    HttpRequest request = HttpRequest.newBuilder()
+                            .uri(URI.create(chatEndpoint()))
+                            .header("Content-Type", "application/json")
+                            .header("Authorization", "Bearer " + appConfig.getLlm().getApiKey())
+                            .timeout(Duration.ofSeconds(timeoutSeconds))
+                            .POST(HttpRequest.BodyPublishers.ofString(requestBody))
+                            .build();
+
+                    HttpResponse<java.io.InputStream> response = httpClient.send(request,
+                            HttpResponse.BodyHandlers.ofInputStream());
+                    if (token != null) token.checkpoint();
+
+                    if (response.statusCode() == 200) {
+                        // 已发出的增量片数（用于重试判断：有增量后再出错不重试，避免前端重复追加）
+                        int[] emitted = {0};
+                        try {
+                            return parseStreamResponse(response.body(), token, onDelta, emitted);
+                        } catch (Exception e) {
+                            if (emitted[0] > 0) {
+                                // 部分增量已发出 → 上抛，调用方降级非流式完整调用（内容不丢）
+                                throw e;
+                            }
+                            lastError = e;
+                            log.warn("LLM stream parse failed (attempt {}/2, model {}): {}",
+                                    retry + 1, currentModel, e.getMessage());
+                        }
+                    } else {
+                        lastError = new RuntimeException(
+                                "HTTP " + response.statusCode() + ": "
+                                        + new String(response.body().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+                        log.warn("LLM stream call failed (attempt {}/2, model {}): {}",
+                                retry + 1, currentModel, response.statusCode());
+                    }
+                } catch (TaskCancelledException e) {
+                    // 取消信号直接上抛，不做重试
+                    throw e;
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    if (token != null && token.isCancelled()) {
+                        throw new TaskCancelledException(token.getStopType(), token.getReason(), ie);
+                    }
+                    throw new TaskCancelledException(StopType.HARD, "LLM 流式调用线程被中断", ie);
+                } catch (Exception e) {
+                    if (token != null && token.isCancelled()) {
+                        throw new TaskCancelledException(token.getStopType(), token.getReason(), e);
+                    }
+                    lastError = e;
+                    log.warn("LLM stream call exception (attempt {}/2, model {}): {}",
+                            retry + 1, currentModel, e.getMessage());
+                }
+
+                // Wait before retry
+                if (retry == 0) {
+                    try { Thread.sleep(1000); } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        if (token != null && token.isCancelled()) {
+                            throw new TaskCancelledException(token.getStopType(), token.getReason(), ie);
+                        }
+                        throw new TaskCancelledException(StopType.HARD, "LLM 流式重试等待被中断", ie);
+                    }
+                }
+            }
+        }
+
+        throw new RuntimeException("LLM stream call failed after all retries: " +
+                (lastError != null ? lastError.getMessage() : "unknown"));
+    }
+
+    /**
+     * 解析 stream=true 响应体（SSE 格式，OpenAI/DeepSeek 兼容）：
+     * <pre>data: {"choices":[{"delta":{"content":"…"}}]}</pre>
+     * 逐行解析，每行一个内容增量回调；遇 {@code data: [DONE]} 结束。
+     *
+     * <p>兼容兜底：首行为非 {@code data:} 前缀的普通 JSON（mock/忽略 stream 的服务）→
+     * 整段重组按普通 chat/completions JSON 解析，内容作为单个增量回调。
+     */
+    private String parseStreamResponse(java.io.InputStream body, CancellationToken token,
+                                       java.util.function.Consumer<String> onDelta, int[] emitted)
+            throws Exception {
+        StringBuilder full = new StringBuilder();
+        StringBuilder plainBlock = null; // 非 SSE 时重组整个 body
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(body, java.nio.charset.StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (token != null) token.checkpoint(); // 流式读取期间周期检查点（取消立即中断）
+                if (line.isBlank()) continue;
+                if (!line.startsWith("data:")) {
+                    // 非 SSE 响应（测试 mock / 忽略 stream 参数的服务）：重组为普通 JSON
+                    if (plainBlock == null) plainBlock = new StringBuilder(line);
+                    else plainBlock.append('\n').append(line);
+                    continue;
+                }
+                String data = line.substring(5).trim();
+                if (data.isEmpty()) continue;
+                if ("[DONE]".equals(data)) break;
+                try {
+                    JsonNode node = mapper.readTree(data);
+                    JsonNode delta = node.path("choices").get(0).path("delta").path("content");
+                    if (delta != null && !delta.isMissingNode()) {
+                        String d = delta.asText("");
+                        if (!d.isEmpty()) {
+                            full.append(d);
+                            emitted[0]++;
+                            if (onDelta != null) onDelta.accept(d);
+                        }
+                    }
+                } catch (Exception e) {
+                    // 个别 data 行解析失败不中断（容错继续，完整内容以最终拼接为准）
+                    log.warn("LLM stream line parse failed: {}", e.getMessage());
+                }
+            }
+        }
+        if (plainBlock != null && full.length() == 0) {
+            // 整段非 SSE → 按普通 chat/completions JSON 解析
+            JsonNode root = mapper.readTree(plainBlock.toString());
+            String content = root.path("choices").get(0).path("message").path("content").asText("");
+            if (!content.isEmpty()) {
+                emitted[0]++;
+                if (onDelta != null) onDelta.accept(content);
+                return content;
+            }
+            return "";
+        }
+        return full.toString();
     }
 
     private String parseResponse(String responseBody) throws Exception {

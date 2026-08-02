@@ -5,6 +5,8 @@ import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.interrupt.CancellationToken;
 import com.roleplay.engine.interrupt.TaskCancelledException;
 import com.roleplay.engine.llm.LLMClient;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -20,6 +22,8 @@ import java.util.concurrent.CompletableFuture;
  * <p>Maps from Python {@code core/agent.py → Agent}.
  */
 public class Agent {
+
+    private static final Logger log = LoggerFactory.getLogger(Agent.class);
 
     private final Persona persona;
     private final String role;
@@ -196,6 +200,41 @@ public class Agent {
         } catch (TaskCancelledException e) {
             if (e.getPartial() == null && completed != null) e.setPartial(completed);
             throw e;
+        }
+    }
+
+    /**
+     * P-0802-M：流式简化生成 —— 与 {@link #generateWithContext(String, CancellationToken)} 同语义
+     * （同一 context），但 LLM 增量经 {@code onDelta} 逐片回调（SSE 推送用，每片可为 1~N 字符）。
+     *
+     * <p>流式失败（网络中断/协议异常）或调用方未实现流式接口（mock 返回 null）→ 自动降级
+     * 非流式完整调用 {@link #generateWithContext(String, CancellationToken)}，完整文本始终返回，
+     * 调用方照常以 agent_output 结算（前端增量草稿被完整内容替换，内容不丢）。
+     */
+    public String generateWithContextStream(String context, CancellationToken token,
+                                            java.util.function.Consumer<String> onDelta) {
+        String completed = null;
+        try {
+            if (token != null) token.checkpoint();
+            List<Message> messages = List.of(
+                new Message(Message.Role.SYSTEM, "system", persona.buildSystemPrompt()),
+                new Message(Message.Role.USER, "user", context)
+            );
+            completed = llmClient.callStream(messages, token, onDelta);
+            if (token != null) token.checkpoint();
+            if (completed == null) {
+                // 调用方未实现流式（mock/旧实现 callStream 返回 null）→ 非流式兜底
+                return generateWithContext(context, token);
+            }
+            return completed;
+        } catch (TaskCancelledException e) {
+            if (e.getPartial() == null && completed != null) e.setPartial(completed);
+            throw e;
+        } catch (Exception e) {
+            // 流式失败 → 降级非流式完整调用（内容不丢，前端以 agent_output 结算）
+            log.warn("Streaming failed for agent {}: {}, falling back to non-streaming",
+                    getName(), e.getMessage());
+            return generateWithContext(context, token);
         }
     }
 
