@@ -1,5 +1,6 @@
 package com.roleplay.engine.controller;
 
+import com.roleplay.engine.service.PlayerIdentityService;
 import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.WerewolfService;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -26,6 +27,8 @@ public class WerewolfController {
 
     private final WerewolfService werewolfService;
     private final RouterService router;
+    /** P-0802-P2：玩家身份解析器 —— init 带 player_id 时按解析出的当前角色名登记人类玩家（角色库改名兜底）。 */
+    private final PlayerIdentityService identityService;
     private final Map<String, String> playerSessions = new ConcurrentHashMap<>();
     /** P-0802-I：房间码 ? 对局 sessionId 映射（init 可选 room_code 登记；resume 可按房间码定位重连入口，对齐 C3 剧本杀轻量绑定）。 */
     private final Map<String, String> roomGames = new ConcurrentHashMap<>();
@@ -35,19 +38,40 @@ public class WerewolfController {
     @Value("${roleplay.game.werewolf.auto-play:false}")
     private boolean autoPlay = false;
 
+    /** P-0802-P3：测试钩子 —— 玩家 → 对局映射（局中改名后断言键已换名）。 */
+    Map<String, String> playerSessions() {
+        return playerSessions;
+    }
+
+    /**
+     * P-0802-P3（改造方案 §4.2.3 rename 接线）：playerSessions 键 oldName→newName 同步。
+     * 局中改名端点同步时由 PlayerIdentityService 编排调用；currentSessionId 不随玩家名变（会话级）。
+     */
+    public void renamePlayerSessionKey(String oldName, String newName) {
+        String sid = playerSessions.remove(oldName);
+        if (sid != null) playerSessions.put(newName, sid);
+    }
+
     public WerewolfController(WerewolfService werewolfService) {
-        this(werewolfService, null);
+        this(werewolfService, null, null);
+    }
+
+    public WerewolfController(WerewolfService werewolfService, RouterService router) {
+        this(werewolfService, router, null);
     }
 
     @Autowired
-    public WerewolfController(WerewolfService werewolfService, RouterService router) {
+    public WerewolfController(WerewolfService werewolfService, RouterService router,
+                              PlayerIdentityService playerIdentityService) {
         this.werewolfService = werewolfService;
         this.router = router;
+        this.identityService = playerIdentityService;
     }
 
     @PostMapping("/init")
     public ResponseEntity<Map<String, Object>> init(@RequestParam(defaultValue = "") String player_name,
                                                      @RequestParam(defaultValue = "") String human_players,
+                                                     @RequestParam(defaultValue = "") String player_id,
                                                      @RequestBody(required = false) Map<String, Object> body) {
         // Support both query param and JSON body formats
         List<String> players = new ArrayList<>();
@@ -78,7 +102,19 @@ public class WerewolfController {
 
         Map<String, Object> state = werewolfService.initGame(sessionId, players, customRoles);
         // P-0802-F：登记人类玩家（AI = 存活玩家中非人类）→ 注册 router（身份进上下文）→ 自动推进
-        Set<String> humans = playerName.isEmpty() ? Set.of() : Set.of(playerName);
+        // P-0802-P2：加收 player_id —— 有 player_id 且能解析出当前角色名时 humans=Set.of(解析名)
+        //（角色库改名后即使前端仍传旧名 player_name 也按新名登记，防 AI 行动器接管玩家角色）；
+        // 无 player_id / 未绑定 / identityService 缺失 → 现状逻辑（Set.of(player_name)），零行为变化。
+        String pid = !player_id.isBlank() ? player_id
+                : (body != null && body.get("player_id") != null ? String.valueOf(body.get("player_id")) : "");
+        Set<String> humans;
+        String resolvedName = (!pid.isBlank() && identityService != null)
+                ? identityService.resolveCharacterName(pid).orElse(null) : null;
+        if (resolvedName != null) {
+            humans = Set.of(resolvedName);
+        } else {
+            humans = playerName.isEmpty() ? Set.of() : Set.of(playerName);
+        }
         werewolfService.setHumanPlayers(sessionId, humans);
         WerewolfService.GameState game = werewolfService.getGame(sessionId);
         if (router != null) {

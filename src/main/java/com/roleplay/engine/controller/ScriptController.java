@@ -1,10 +1,12 @@
 package com.roleplay.engine.controller;
 
+import com.roleplay.engine.service.PlayerIdentityService;
 import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.ScriptGameService;
 import com.roleplay.engine.simulation.SimulationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -24,6 +26,10 @@ public class ScriptController {
     private final ScriptGameService scriptGameService;
     private final RouterService router;
     private final SimulationService simulationService;
+    /** P-0802-P2：玩家身份解析器 —— init 带 player_id 时按解析出的当前角色名登记（角色库改名兜底）。 */
+    private final PlayerIdentityService identityService;
+    /** P-0802-P2：玩家身份登记 —— 解析名 → player_id（init 带 player_id 时写入；Phase 3 局中改名/重连恢复用）。 */
+    private final Map<String, String> playerIdBindings = new ConcurrentHashMap<>();
     private final Map<String, String> playerSessions = new ConcurrentHashMap<>();
     /** C3: 房间码 ↔ 对局 sessionId 映射（init 可选 room_code 登记；resume 可用房间码定位重连入口）。 */
     private final Map<String, String> roomGames = new ConcurrentHashMap<>();
@@ -34,11 +40,40 @@ public class ScriptController {
     @Value("${roleplay.game.dm.key:}")
     private String dmKey = "";
 
+    /**
+     * P-0802-P3（改造方案 §4.2.4 rename 接线）：playerSessions 键 + playerIdBindings 键 oldName→newName 同步。
+     * 局中改名端点同步时由 PlayerIdentityService 编排调用。
+     */
+    public void renamePlayerSessionKey(String oldName, String newName) {
+        String sid = playerSessions.remove(oldName);
+        if (sid != null) playerSessions.put(newName, sid);
+        String pid = playerIdBindings.remove(oldName);
+        if (pid != null) playerIdBindings.put(newName, pid);
+    }
+
     public ScriptController(ScriptGameService scriptGameService, RouterService router,
                             SimulationService simulationService) {
+        this(scriptGameService, router, simulationService, null);
+    }
+
+    /** P-0802-P2：四参构造（Spring 注入路径，@Autowired 显式指定）。identityService 可为 null（旧测试直构路径，init 内 null 守卫）。 */
+    @Autowired
+    public ScriptController(ScriptGameService scriptGameService, RouterService router,
+                            SimulationService simulationService, PlayerIdentityService playerIdentityService) {
         this.scriptGameService = scriptGameService;
         this.router = router;
         this.simulationService = simulationService;
+        this.identityService = playerIdentityService;
+    }
+
+    /** P-0802-P2：测试钩子 —— player_id 登记映射（解析名 → player_id）。 */
+    Map<String, String> playerIdBindings() {
+        return playerIdBindings;
+    }
+
+    /** P-0802-P3：测试钩子 —— 玩家 → 对局映射（局中改名后断言键已换名）。 */
+    Map<String, String> playerSessions() {
+        return playerSessions;
     }
 
     @PostMapping("/init")
@@ -48,10 +83,26 @@ public class ScriptController {
         String theme = (String) body.getOrDefault("theme", "默认主题");
         // C3: 可选房间码绑定（/api/rooms 6 位码 → 对局，重连入口；不传则跳过）
         String roomCode = (String) body.getOrDefault("room_code", "");
+        // P-0802-P2：可选 player_id —— 按解析出的当前角色名登记绑定（角色库改名后即使 players 仍传旧名，
+        // 也登记到新名；无 player_id / 未绑定 / identityService 缺失 → 不登记，零行为变化）
+        String playerId = body.get("player_id") != null ? String.valueOf(body.get("player_id")) : "";
+        if (!playerId.isBlank() && identityService != null) {
+            String resolved = identityService.resolveCharacterName(playerId).orElse(null);
+            if (resolved != null) {
+                playerIdBindings.put(resolved, playerId);
+            }
+        }
         String sessionId = UUID.randomUUID().toString().substring(0, 12);
         currentSessionId = sessionId;
         players.forEach(p -> playerSessions.put(p, sessionId));
         if (roomCode != null && !roomCode.isBlank()) roomGames.put(roomCode.trim().toUpperCase(), sessionId);
+        // P-0802-P3：登记绑定到服务层（initGame 的初始快照即携带，改名后重连按绑定重映射恢复新名）
+        if (!playerId.isBlank() && identityService != null) {
+            String resolved = identityService.resolveCharacterName(playerId).orElse(null);
+            if (resolved != null) {
+                scriptGameService.registerPlayerBinding(sessionId, playerId, resolved);
+            }
+        }
         Map<String, Object> state = scriptGameService.initGame(sessionId, theme, players);
         // D5: 将剧本局注册到 RouterService，secrets 随对话注入对应角色上下文
         ScriptGameService.ScriptGame game = scriptGameService.getGame(sessionId);

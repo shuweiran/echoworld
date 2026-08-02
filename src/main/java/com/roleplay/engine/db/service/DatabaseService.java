@@ -65,11 +65,26 @@ public class DatabaseService {
     @Transactional
     public Map<String, Object> saveCharacter(String name, String persona,
                                               String voice, String background) {
+        return saveCharacter(name, persona, voice, background, null);
+    }
+
+    /**
+     * Phase 1（改造方案 §3.2）：saveCharacter 带 player_id 重载。
+     * 旧签名（无 playerId）委托本方法 null——既有调用点/测试零改动。
+     * 语义：playerId 非空时显式写入（建角色落绑定 / update 换绑）；
+     * playerId 为空时保留既有绑定（改名迁移绑定，不误解绑）。
+     */
+    @Transactional
+    public Map<String, Object> saveCharacter(String name, String persona,
+                                              String voice, String background, String playerId) {
         CharacterEntity entity = characterRepo.findByName(name)
-                .orElse(new CharacterEntity(name, persona, voice, background));
+                .orElse(new CharacterEntity(name, persona, voice, background, playerId));
         entity.setPersona(persona != null ? persona : "");
         entity.setVoice(voice != null ? voice : "");
         entity.setBackground(background != null ? background : "");
+        if (playerId != null) {
+            entity.setPlayerId(playerId);
+        }
         if (entity.getCreatedAt() == null) {
             entity.setCreatedAt(LocalDateTime.now());
         }
@@ -100,7 +115,8 @@ public class DatabaseService {
                 (String) ch.getOrDefault("name", "未命名"),
                 (String) ch.getOrDefault("persona", ""),
                 (String) ch.getOrDefault("voice", ""),
-                (String) ch.getOrDefault("background", "")
+                (String) ch.getOrDefault("background", ""),
+                nullableString(ch.get("player_id"))
             );
         }
     }
@@ -300,8 +316,16 @@ public class DatabaseService {
         map.put("persona", e.getPersona());
         map.put("voice", e.getVoice());
         map.put("background", e.getBackground());
+        map.put("player_id", e.getPlayerId());
         map.put("createdAt", e.getCreatedAt() != null ? e.getCreatedAt().toString() : null);
         return map;
+    }
+
+    /** 空字符串视为 null（解绑语义：Phase 1 不解绑，仅规范化入参） */
+    private static String nullableString(Object o) {
+        if (o == null) return null;
+        String s = String.valueOf(o);
+        return s.isEmpty() ? null : s;
     }
 
     private Map<String, Object> entityToMap(SceneEntity e) {

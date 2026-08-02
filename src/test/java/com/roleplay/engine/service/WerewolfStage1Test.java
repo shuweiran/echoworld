@@ -435,7 +435,7 @@ class WerewolfStage1Test {
         body.put("players", sixPlayers());
         body.put("roles", sixRoles());
         body.put("room_code", "ab12");
-        ResponseEntity<Map<String, Object>> initResp = ctl.init("F", "", body);
+        ResponseEntity<Map<String, Object>> initResp = ctl.init("F", "", "", body);
         assertEquals(200, initResp.getStatusCode().value());
         String sid = (String) initResp.getBody().get("session_id");
         assertNotNull(sid);

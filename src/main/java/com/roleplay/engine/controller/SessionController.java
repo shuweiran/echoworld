@@ -105,8 +105,11 @@ public class SessionController {
         // P0-2：读取前端传来的 player_name —— 命中 agent 名单时该角色直接发言（角色说），
         // 否则主控旁白（原来完全忽略 player_name，导致 me 发消息恒变主控）
         String playerName = String.valueOf(body.getOrDefault("player_name", "")).trim();
+        // P-0802-P2：读取前端 player_id（可选）—— 角色库改名后按 player_id 解析当前角色名
+        // 豁免主控代声（无 player_id 或未绑定 → 零行为变化，走现状 player_name 逻辑）
+        String playerId = String.valueOf(body.getOrDefault("player_id", "")).trim();
         RouterService r = sessions.get(sessionId);
-        RouterService.RoundResult result = r.runRound(message, null, playerName);
+        RouterService.RoundResult result = r.runRound(message, null, playerName, playerId);
         return ResponseEntity.ok(Map.of(
             "status", result.status,
             "agent_outputs", result.agentOutputs,

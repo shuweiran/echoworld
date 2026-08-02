@@ -10,6 +10,7 @@ import com.roleplay.engine.interrupt.InterruptManager;
 import com.roleplay.engine.interrupt.StopType;
 import com.roleplay.engine.interrupt.WorldEventBus;
 import com.roleplay.engine.llm.LLMClient;
+import com.roleplay.engine.service.PlayerIdentityService;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
 import com.roleplay.engine.simulation.conversation.ModeClassifier;
 import com.roleplay.engine.simulation.director.TrackDirectorService;
@@ -55,6 +56,8 @@ public class SimulationService {
     private volatile Map<String, TrackAssignment> lastTrackAssignments = Map.of();
     /** 演讲与广播合并地基：统一公告管线（AI 演讲产出 → 自动选形态 → 优先级队列 → SSE）。 */
     private final AnnouncementService announcementService;
+    /** P-0802-P2（改造方案 Phase 2）：玩家身份解析器 —— player_id → 当前绑定角色名（2D playerControlled 判定解析式）。 */
+    private final PlayerIdentityService identityService;
     private final ExecutorService taskExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private volatile long lastDirectorTime = 0;
     private final Set<String> pendingUserMessages = ConcurrentHashMap.newKeySet();
@@ -63,7 +66,8 @@ public class SimulationService {
 
     public SimulationService(SimulationWorld world, LLMClient llmClient, DatabaseService databaseService,
                              InterruptManager interruptManager, AgentTaskManager agentTaskManager,
-                             WorldEventBus eventBus, AnnouncementService announcementService) {
+                             WorldEventBus eventBus, AnnouncementService announcementService,
+                             PlayerIdentityService playerIdentityService) {
         this.world = world;
         this.llmClient = llmClient;
         this.databaseService = databaseService;
@@ -71,6 +75,7 @@ public class SimulationService {
         this.agentTaskManager = agentTaskManager;
         this.eventBus = eventBus;
         this.announcementService = announcementService;
+        this.identityService = playerIdentityService;
         this.worldDirector = new WorldDirectorService(llmClient);
         conversationManager.init(world, llmClient,
                 name -> world.getAgent(name),
@@ -172,6 +177,16 @@ public class SimulationService {
      * 未传时保持旧行为向后兼容。
      */
     public void initWithPersonas(List<Persona> personas, String sceneName, String playerName) {
+        initWithPersonas(personas, sceneName, playerName, null);
+    }
+
+    /**
+     * P-0802-P2（改造方案《玩家角色改名与 AI 识别》Phase 2）：initWithPersonas 四参重载。
+     * 判定加 playerId 解析式豁免（方案 §3.3）：player_id 存在且能解析 → 用解析出的当前角色名
+     * 标记 playerControlled（角色库改名后即使前端仍传旧名 playerName，也按 player_id 解析新名）；
+     * 未命中/缺省 → 走现状 playerName 逻辑，零行为变化。
+     */
+    public void initWithPersonas(List<Persona> personas, String sceneName, String playerName, String playerId) {
         clearAll();
         if (personas.isEmpty()) {
             log.warn("Empty persona list, falling back to demo");
@@ -184,6 +199,9 @@ public class SimulationService {
         }
 
         boolean explicitPlayer = playerName != null && !playerName.isBlank();
+        // P-0802-P2：player_id 解析出的当前角色名（角色库改名后 = 新名）；未绑定/缺省 → null（回退旧逻辑）
+        String resolvedPlayerName = (playerId != null && !playerId.isBlank() && identityService != null)
+                ? identityService.resolveCharacterName(playerId).orElse(null) : null;
         for (Persona p : personas) {
             Agent agent = new Agent(p, "npc", llmClient);
             double x = 100 + Math.random() * 800;
@@ -195,21 +213,48 @@ public class SimulationService {
             AgentState state = world.getState(p.getName());
             if (state != null) {
                 state.setEmotion(Emotion.NEUTRAL);
-                // Mark player-controlled agents: 显式 playerName（P0-1）或旧规则名字 "me"
-                if (explicitPlayer ? playerName.equals(p.getName())
-                                   : PLAYER_AGENT_NAME.equals(p.getName())) {
+                // Mark player-controlled agents: 显式 playerName（P0-1）、playerId 解析名（P-0802-P2）或旧规则名字 "me"
+                boolean isPlayerControlled = explicitPlayer
+                        ? playerName.equals(p.getName()) || (resolvedPlayerName != null && resolvedPlayerName.equals(p.getName()))
+                        : PLAYER_AGENT_NAME.equals(p.getName());
+                if (isPlayerControlled) {
                     state.setPlayerControlled(true);
                 }
             }
         }
 
-        log.info("Loaded {} personas into simulation, scene={}, player={}", personas.size(), sceneName, playerName);
+        log.info("Loaded {} personas into simulation, scene={}, player={}, playerId={}", personas.size(), sceneName, playerName, playerId);
     }
 
     public void clearAll() {
         // D1: 清场时同时停止所有群组生成任务
         conversationManager.stopAll();
         world.clearAgents();
+    }
+
+    /**
+     * P-0802-P3（改造方案 §4.2.2）：2D 局中改名 —— world.renameAgent（agents/states 换键 + persona 改名）
+     * + 重新断言 playerControlled（玩家本人标记随绑定迁移；判定读点 :450/:553 无需改动，标记随 state 走）。
+     * 方法锁：与 tick/对话并发时防半同步状态被读取（2D 单世界）。
+     */
+    public synchronized void renamePlayerCharacter(String oldName, String newName) {
+        world.renameAgent(oldName, newName);
+        AgentState st = world.getState(newName);
+        if (st != null) {
+            st.setPlayerControlled(true);
+        }
+        log.info("2D player character renamed: {} → {} (playerControlled re-asserted)", oldName, newName);
+    }
+
+    /** P-0802-P3：2D 世界 agents 名单是否含指定名字（局中改名会话收集用）。 */
+    public boolean hasAgent(String name) {
+        return name != null && world.getAgent(name) != null;
+    }
+
+    /** P-0802-P3：指定角色是否被标记为玩家控制（局中改名后断言标记保留用）。 */
+    public boolean isPlayerControlled(String name) {
+        AgentState st = world.getState(name);
+        return st != null && st.isPlayerControlled();
     }
 
     public void start() {

@@ -109,7 +109,7 @@ class WerewolfGameSmokeTest {
         roles.put("林诗", "seer");
         body.put("roles", roles);
 
-        ResponseEntity<Map<String, Object>> resp = ctl.init("me", "", body);
+        ResponseEntity<Map<String, Object>> resp = ctl.init("me", "", "", body);
         assertEquals(200, resp.getStatusCode().value());
         Map<String, Object> state = resp.getBody();
         @SuppressWarnings("unchecked")

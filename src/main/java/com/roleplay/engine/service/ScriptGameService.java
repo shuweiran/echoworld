@@ -122,6 +122,13 @@ public class ScriptGameService {
     /** GAP-3: 讨论轮次执行线程池（虚拟线程，讨论结束自动进 VOTE）。 */
     private final ExecutorService discussionExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
+    // P-0802-P3（改造方案 Phase 3）：本局 player_id 绑定（sessionId → playerId → 当前角色名）——
+    // init 时 controller 经 registerPlayerBinding 登记；renamePlayer 同步更新值；saveSnapshot 随快照落库；
+    // restoreFromSnapshot/resumeGame 按绑定重映射（旧存档含旧名 → 恢复到新名，解决“改完名再重连”）。
+    private final Map<String, Map<String, String>> playerBindingsBySession = new ConcurrentHashMap<>();
+    /** P-0802-P3：玩家身份解析器（可选注入；直接构造的旧测试为 null → 绑定重映射跳过，零行为变化）。 */
+    private final PlayerIdentityService identityService;
+
     public enum Phase { SETUP, INVESTIGATION, DISCUSSION, VOTE, REVEAL, ENDED }
 
     public static class ScriptGame {
@@ -267,6 +274,12 @@ public class ScriptGameService {
             return new ArrayList<>(players);
         }
 
+        /** P-0802-P3：测试/编排钩子 —— 玩家→角色表副本（局中改名断言用）。 */
+        public Map<String, String> getAssignments() { return new LinkedHashMap<>(assignments); }
+
+        /** P-0802-P3：测试/编排钩子 —— 玩家→roleKey 表副本。 */
+        public Map<String, String> getPlayerKeys() { return new LinkedHashMap<>(playerKeys); }
+
         public boolean isSimulationStarted() {
             return simulationStarted;
         }
@@ -285,15 +298,25 @@ public class ScriptGameService {
     }
 
     /** Spring 注入路径（GAP-4c/GAP-8 + 方案B Step 3）：剧本落库 + script SSE 推送 + announcement SYSTEM 广播。 */
-    @Autowired
     public ScriptGameService(LLMClient llmClient, ApprovalService approvalService,
                              DatabaseService databaseService, SSEController sse,
                              AnnouncementService announcementService) {
+        this(llmClient, approvalService, databaseService, sse, announcementService, null);
+    }
+
+    /** P-0802-P3（改造方案 Phase 3）：六参 @Autowired 构造 —— 追加 PlayerIdentityService（快照 player_id_bindings 重映射用）；
+     *  旧五参构造委托本构造 null（既有测试/调用点零改动）。 */
+    @Autowired
+    public ScriptGameService(LLMClient llmClient, ApprovalService approvalService,
+                             DatabaseService databaseService, SSEController sse,
+                             AnnouncementService announcementService,
+                             PlayerIdentityService playerIdentityService) {
         this.llmClient = llmClient;
         this.approvalService = approvalService;
         this.databaseService = databaseService;
         this.sse = sse;
         this.announcementService = announcementService;
+        this.identityService = playerIdentityService;
         this.scriptService = new ScriptService(llmClient);
         this.mapService = new ScriptMapService(llmClient);
     }
@@ -1291,6 +1314,93 @@ public class ScriptGameService {
         return games.get(sessionId);
     }
 
+    /**
+     * P-0802-P3（改造方案 §4.2.4）：登记本局 player_id 绑定（playerId → 当前角色名）。
+     * init 带 player_id 时由 controller 调用；renamePlayer 同步更新值；saveSnapshot 随快照落库。
+     */
+    public void registerPlayerBinding(String sessionId, String playerId, String characterName) {
+        if (playerId == null || playerId.isBlank()) return;
+        playerBindingsBySession.computeIfAbsent(sessionId, k -> new ConcurrentHashMap<>()).put(playerId, characterName);
+    }
+
+    /**
+     * P-0802-P3（改造方案 §4.2.4）：局中改名 —— ScriptGame 名字键全量迁移（per-session 锁 synchronized(game)）：
+     * players（:140）/assignments（:141）/playerAp（:149）/playerApMax（:151）/playerTalkativeness（:153）/
+     * playerIsHuman（:155，虽只写不读仍同步保持一致）/playerKeys（:160）/线索归属（playerClues）/投票
+     * （votes voter→suspect 双向）/discussionTranscript（speaker 字段）/discussionContexts（agent 键）。
+     * checkPlayerAccess（:1428-1451）无需改——键同步后自然通过。
+     * 讨论引擎 world（若本局讨论已建）同步改名；playerBindingsBySession 绑定值同步；状态变更 → 快照落库。
+     * pendingHumanEvents 队列内既有事件不追溯（事件已在途，语义可接受，对齐 §4.2.3 同款决策）。
+     */
+    public void renamePlayer(String sessionId, String oldName, String newName) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return;
+        synchronized (game) {
+            // players 列表元素替换
+            int pi = game.players.indexOf(oldName);
+            if (pi >= 0) game.players.set(pi, newName);
+            // assignments: 换键
+            String role = game.assignments.remove(oldName);
+            if (role != null) game.assignments.put(newName, role);
+            // 各玩家键 Map 换键
+            moveKey(game.playerAp, oldName, newName);
+            moveKey(game.playerApMax, oldName, newName);
+            moveKey(game.playerTalkativeness, oldName, newName);
+            moveKey(game.playerIsHuman, oldName, newName);
+            moveKey(game.playerKeys, oldName, newName);
+            // 线索归属: 换键
+            List<String> clues = game.playerClues.remove(oldName);
+            if (clues != null) game.playerClues.put(newName, clues);
+            // 投票: voter→suspect 双向替换
+            Map<String, String> newVotes = new LinkedHashMap<>();
+            game.votes.forEach((voter, suspect) -> newVotes.put(
+                    voter.equals(oldName) ? newName : voter,
+                    suspect.equals(oldName) ? newName : suspect));
+            game.votes.clear();
+            game.votes.putAll(newVotes);
+            // discussionTranscript: speaker 字段替换
+            for (Map<String, String> t : game.discussionTranscript) {
+                if (oldName.equals(t.get("speaker"))) t.put("speaker", newName);
+            }
+            // discussionContexts: agent 键替换
+            String ctx = game.discussionContexts.remove(oldName);
+            if (ctx != null) game.discussionContexts.put(newName, ctx);
+            // 绑定值同步（playerId → 角色名 的值 oldName → newName）
+            Map<String, String> bindings = playerBindingsBySession.get(sessionId);
+            if (bindings != null) {
+                for (Map.Entry<String, String> e : bindings.entrySet()) {
+                    if (oldName.equals(e.getValue())) e.setValue(newName);
+                }
+            }
+        }
+        // 讨论引擎 world（若本局讨论已建）：agent 名同步（世界为 per-game 隔离实例）
+        SimulationWorld w = discussionWorlds.get(sessionId);
+        if (w != null) w.renameAgent(oldName, newName);
+        // 改名是状态变更 → 快照落库（重连按新名恢复，绑定随快照持久化）
+        saveSnapshot(game);
+        log.info("Script player renamed in {}: {} → {}", sessionId, oldName, newName);
+    }
+
+    /** P-0802-P3：含指定玩家的所有活跃对局 sessionId（局中改名会话收集用）。 */
+    public java.util.Set<String> sessionsOfPlayer(String playerName) {
+        Set<String> out = new java.util.HashSet<>();
+        games.forEach((sid, g) -> {
+            if (g.players.contains(playerName)) out.add(sid);
+        });
+        return out;
+    }
+
+    /** P-0802-P3：是否任一活跃对局含指定玩家（局中改名撞名检查用）。 */
+    public boolean anyGameHasPlayer(String playerName) {
+        return !sessionsOfPlayer(playerName).isEmpty();
+    }
+
+    /** 名字键 Map 换键工具（renamePlayer 用）。 */
+    private static <V> void moveKey(Map<String, V> map, String oldName, String newName) {
+        V v = map.remove(oldName);
+        if (v != null) map.put(newName, v);
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  GAP-4b/4c/8: ENDED 终态 + 剧本落库 + script SSE 推送
     // ═══════════════════════════════════════════════════════════
@@ -1598,6 +1708,10 @@ public class ScriptGameService {
             game = restoreFromSnapshot(sessionId);
             if (game == null) return Map.of("error", "对局不存在且无快照可恢复");
             restored = true;
+        } else {
+            // P-0802-P3: 内存对局也按登记绑定重映射（改完名再重连：绑定值 = init/rename 时解析名，
+            // 与当前角色名不一致 → 迁移到新名；renamePlayer 已同步过的对局绑定值已是新名 → 幂等跳过）
+            remapByBindings(game, playerBindingsBySession.getOrDefault(sessionId, Map.of()));
         }
         // 由 roleKey 反查玩家（重连场景客户端可能只持 key）
         String player = findPlayerByKey(sessionId, playerKey);
@@ -1661,6 +1775,9 @@ public class ScriptGameService {
         // 阶段 2: 对局地图（LLM/BSP 生成，契约 v1；旧快照无此键 → 恢复时置 null）
         content.put("map_data", game.mapData);
         content.put("map_fallback_reasons", new ArrayList<>(game.mapFallbackReasons));
+        // P-0802-P3: player_id 绑定随快照落库（{playerId → characterName}）——
+        // 恢复时按绑定重映射（改完名再重连：旧存档含旧名 → 恢复到新名）；无绑定回退旧名逻辑
+        content.put("player_id_bindings", new LinkedHashMap<>(playerBindingsBySession.getOrDefault(game.sessionId, Map.of())));
         databaseService.saveScript("对局快照:" + game.sessionId, content);
     }
 
@@ -1729,10 +1846,70 @@ public class ScriptGameService {
             }
         }
 
+        // P-0802-P3: 快照内 player_id 绑定恢复 + 按绑定重映射（旧存档含旧名 → 恢复到新名）
+        Map<String, String> savedBindings = strMap(c.get("player_id_bindings"));
+        playerBindingsBySession.put(sessionId, new LinkedHashMap<>(savedBindings));
+        remapByBindings(game, savedBindings);
+
         games.put(sessionId, game);
         log.info("Script game {} restored from snapshot (phase={}, players={}, round={})",
                 sessionId, game.phase.name(), game.players.size(), game.round);
         return game;
+    }
+
+    /**
+     * P-0802-P3: 按 player_id 绑定重映射 —— 若绑定存在且角色名与快照内玩家名不一致，
+     * 按绑定把快照内旧名迁移到绑定解析出的当前名（改完名再重连场景）。
+     * identityService 为 null（直接构造的旧测试）→ 跳过，回退旧名逻辑（零行为变化）。
+     *
+     * @param bindings 绑定表 {playerId → characterName}（快照或内存登记）；
+     *                 重映射目标 = identityService.resolveCharacterName(playerId)（当前角色名），
+     *                 解析不到则保持快照名（无绑定回退旧名逻辑）。
+     */
+    private void remapByBindings(ScriptGame game, Map<String, String> bindings) {
+        if (game == null || bindings == null || bindings.isEmpty()) return;
+        for (Map.Entry<String, String> e : bindings.entrySet()) {
+            String playerId = e.getKey();
+            String savedName = e.getValue();
+            if (savedName == null || savedName.isBlank()) continue;
+            // 玩家可能已在改名端点同步过（内存快照已用新名）→ 命中新名无需重映射
+            if (game.players.contains(savedName)) {
+                String currentName = (identityService != null)
+                        ? identityService.resolveCharacterName(playerId).orElse(savedName)
+                        : savedName;
+                if (!currentName.equals(savedName)) {
+                    migratePlayerNames(game, savedName, currentName);
+                    log.info("Script game {} binding remap: {} → {} (player_id {})",
+                            game.sessionId, savedName, currentName, playerId);
+                }
+            }
+        }
+    }
+
+    /** 快照恢复路径的名字键迁移（不依赖 games map 已在位；renamePlayer 同款迁移逻辑复用）。 */
+    private void migratePlayerNames(ScriptGame game, String oldName, String newName) {
+        int pi = game.players.indexOf(oldName);
+        if (pi >= 0) game.players.set(pi, newName);
+        String role = game.assignments.remove(oldName);
+        if (role != null) game.assignments.put(newName, role);
+        moveKey(game.playerAp, oldName, newName);
+        moveKey(game.playerApMax, oldName, newName);
+        moveKey(game.playerTalkativeness, oldName, newName);
+        moveKey(game.playerIsHuman, oldName, newName);
+        moveKey(game.playerKeys, oldName, newName);
+        List<String> clues = game.playerClues.remove(oldName);
+        if (clues != null) game.playerClues.put(newName, clues);
+        Map<String, String> newVotes = new LinkedHashMap<>();
+        game.votes.forEach((voter, suspect) -> newVotes.put(
+                voter.equals(oldName) ? newName : voter,
+                suspect.equals(oldName) ? newName : suspect));
+        game.votes.clear();
+        game.votes.putAll(newVotes);
+        for (Map<String, String> t : game.discussionTranscript) {
+            if (oldName.equals(t.get("speaker"))) t.put("speaker", newName);
+        }
+        String ctx = game.discussionContexts.remove(oldName);
+        if (ctx != null) game.discussionContexts.put(newName, ctx);
     }
 
     // ── C3: 快照恢复的宽容转换辅助（Jackson 反序列化后类型为 Map<String,Object>/List<Object>/Number 等） ──

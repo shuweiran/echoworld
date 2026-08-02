@@ -150,7 +150,7 @@ class WerewolfGameFixTest {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("players", sixPlayers());
         body.put("roles", sixRoles());
-        var resp = ctl.init("F", "", body);
+        var resp = ctl.init("F", "", "", body);
         assertEquals(200, resp.getStatusCode().value());
         Map<String, Object> state = resp.getBody();
         assertNotNull(state.get("session_id"), "init 响应必须返回 session_id");

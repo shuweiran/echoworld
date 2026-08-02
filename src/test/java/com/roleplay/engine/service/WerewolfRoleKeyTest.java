@@ -175,7 +175,7 @@ class WerewolfRoleKeyTest {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("players", sixPlayers());
         body.put("roles", sixRoles());
-        ResponseEntity<Map<String, Object>> initResp = ctl.init("F", "", body);
+        ResponseEntity<Map<String, Object>> initResp = ctl.init("F", "", "", body);
         String sid = (String) initResp.getBody().get("session_id");
 
         ResponseEntity<Map<String, Object>> resp = ctl.getKeys(sid);

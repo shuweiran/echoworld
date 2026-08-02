@@ -72,6 +72,9 @@ public class SimulationController {
         List<Map<String, String>> characterList = (List<Map<String, String>>) body.getOrDefault("characters", List.of());
         String sceneName = (String) body.getOrDefault("scene", "park");
         String playerName = body.get("player_name") != null ? String.valueOf(body.get("player_name")) : null;
+        // P-0802-P2：可选 player_id —— 角色库改名后按 player_id 解析当前角色名标记 playerControlled
+        //（无 player_id 或未绑定 → 零行为变化，走现状 playerName 逻辑）
+        String playerId = body.get("player_id") != null ? String.valueOf(body.get("player_id")) : null;
 
         List<Persona> personas = new ArrayList<>();
         for (Map<String, String> ch : characterList) {
@@ -83,7 +86,7 @@ public class SimulationController {
             personas.add(p);
         }
 
-        simulationService.initWithPersonas(personas, sceneName, playerName);
+        simulationService.initWithPersonas(personas, sceneName, playerName, playerId);
         return Map.of("status", "ok", "message", "Loaded " + personas.size() + " characters into simulation");
     }
 

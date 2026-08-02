@@ -77,6 +77,26 @@ public class SimulationWorld {
         agents.remove(name);
     }
 
+    /**
+     * P-0802-P3（改造方案 §4.2.2）：局中改名 —— agents/states 两个 map 换键 + persona/state 改名。
+     * Agent 经 persona.setName 改名（Agent.getName 委托 persona，零 Agent 类改动）；
+     * AgentState 经 {@link AgentState#rename} 原地改名（去 final 后引用一致性保留，toMap 自动用新名）。
+     * 方法锁：与 tick/对话并发时防半同步状态被读取（单会话世界，方法级锁即可）。
+     */
+    public synchronized void renameAgent(String oldName, String newName) {
+        Agent a = agents.remove(oldName);
+        if (a != null) {
+            a.getPersona().setName(newName);
+            agents.put(newName, a);
+        }
+        AgentState st = states.remove(oldName);
+        if (st != null) {
+            st.rename(newName);
+            states.put(newName, st);
+        }
+        log.info("Agent renamed: {} → {}", oldName, newName);
+    }
+
     public AgentState getState(String name) { return states.get(name); }
     public Agent getAgent(String name) { return agents.get(name); }
     public Map<String, AgentState> getAllStates() { return new HashMap<>(states); }

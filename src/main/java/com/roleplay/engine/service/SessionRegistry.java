@@ -54,13 +54,16 @@ public class SessionRegistry {
     private final WorldEventBus eventBus;
     /** D8: SSE 广播器 —— 每个会话 router 实例共享同一批 SSE 连接。 */
     private final SSEController sse;
+    /** P-0802-P2：玩家身份解析器（Phase 2 判定链路解析式，透传给会话 router 实例）。 */
+    private final PlayerIdentityService identityService;
 
     public SessionRegistry(@Lazy RouterService defaultRouter, ArbiterService arbiter,
                            AgentExecutor executor, Compressor compressor, Monitor monitor,
                            GeneratorService generator, TrackRequestService trackRequestService,
                            LLMClient llmClient, @Lazy HistoryController historyController,
                            LorebookService lorebookService, InterruptManager interruptManager,
-                           WorldEventBus eventBus, SSEController sse) {
+                           WorldEventBus eventBus, SSEController sse,
+                           PlayerIdentityService playerIdentityService) {
         this.defaultRouter = defaultRouter;
         this.arbiter = arbiter;
         this.executor = executor;
@@ -74,6 +77,7 @@ public class SessionRegistry {
         this.interruptManager = interruptManager;
         this.eventBus = eventBus;
         this.sse = sse;
+        this.identityService = playerIdentityService;
     }
 
     /**
@@ -101,7 +105,7 @@ public class SessionRegistry {
     private RouterService createRouter(String sessionId) {
         RouterService r = new RouterService(arbiter, executor, new MemoryStore(), compressor,
             monitor, generator, trackRequestService, llmClient, historyController,
-            lorebookService, interruptManager, eventBus, sse);
+            lorebookService, interruptManager, eventBus, sse, identityService);
         log.info("D11: created isolated RouterService for session {}", sessionId);
         return r;
     }

@@ -94,7 +94,8 @@ class RouterServiceSerialRoundTest {
                 null,            // lorebookService（runRound 内 null 守卫）
                 interruptManager,
                 new WorldEventBus(),
-                null);           // sse（runRound 内 null 守卫）
+                null,           // sse（runRound 内 null 守卫）
+                null);          // identityService（P-0802-P2；runRound 内 null 守卫，本批用例不走 playerId）
         router.setSerialRound(serial);
         router.initSession(SESSION_ID, List.of(
                 new Persona("A", "你是一个细心观察的侦探。"),

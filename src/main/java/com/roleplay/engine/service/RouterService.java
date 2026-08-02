@@ -64,6 +64,8 @@ public class RouterService {
     private final InterruptManager interruptManager;
     /** D1: 世界事件总线 —— 轨道变化时发布 TrackChangeEvent（§七）。 */
     private final WorldEventBus eventBus;
+    /** P-0802-P2（改造方案 Phase 2）：玩家身份解析器 —— player_id → 当前绑定角色名（纯 DB 查询零缓存）。 */
+    private final PlayerIdentityService identityService;
 
     private final Map<String, Agent> agents = new ConcurrentHashMap<>();
     private final Map<String, Object> state = new ConcurrentHashMap<>();
@@ -96,7 +98,8 @@ public class RouterService {
                          LorebookService lorebookService,
                          InterruptManager interruptManager,
                          WorldEventBus eventBus,
-                         SSEController sse) {
+                         SSEController sse,
+                         PlayerIdentityService playerIdentityService) {
         this.arbiter = arbiter;
         this.executor = executor;
         this.memory = memory;
@@ -110,6 +113,7 @@ public class RouterService {
         this.interruptManager = interruptManager;
         this.eventBus = eventBus;
         this.sse = sse;
+        this.identityService = playerIdentityService;
         memory.setCompressor(compressor);
     }
 
@@ -186,6 +190,45 @@ public class RouterService {
     public boolean isRunning() { return running; }
 
     /**
+     * P-0802-P3（改造方案 §4.2.1，主人授权 2026-08-02 沿 P-0802 授权链）：局中改名 ——
+     * agents map 换键（:68）+ persona 改名（Persona.setName :64，Agent.getName 委托 persona :35-36）
+     * + protagonist/directorCharacter（initSession :126-127）/restrictedAgents（:80）引用同步替换。
+     * 历史消息保留旧名（不可篡改，正确行为）；后续轮次经 Agent.getName 自然用新名。
+     * 方法锁：单会话 Router，方法级锁防与 runRound 并发（改名与对话轮/自动轮互斥）。
+     */
+    public synchronized void renameAgent(String oldName, String newName) {
+        Agent a = agents.remove(oldName);
+        if (a == null) return;
+        a.getPersona().setName(newName);
+        agents.put(newName, a);
+        // 引用名同步替换：主角 / 导演角色 / 受限角色集合
+        if (protagonist != null && protagonist.equals(oldName)) protagonist = newName;
+        if (directorCharacter != null && directorCharacter.equals(oldName)) directorCharacter = newName;
+        if (restrictedAgents != null && restrictedAgents.remove(oldName)) restrictedAgents.add(newName);
+        log.info("Router agent renamed: {} → {}", oldName, newName);
+    }
+
+    /** P-0802-P3：当前会话 agents 名单是否含指定名字（局中改名会话收集用）。 */
+    public boolean hasAgent(String name) {
+        return name != null && agents.containsKey(name);
+    }
+
+    /** P-0802-P3：主角引用是否为指定角色（局中改名后断言引用同步用）。 */
+    public boolean isProtagonist(String name) {
+        return name != null && name.equals(protagonist);
+    }
+
+    /** P-0802-P3：受限角色集合副本（局中改名后断言引用同步用）。 */
+    public Set<String> getRestrictedAgents() {
+        return new HashSet<>(restrictedAgents);
+    }
+
+    /** P-0802-P3：设置受限角色集合（测试/运行时注入用；renameAgent 同步替换引用）。 */
+    public void setRestrictedAgents(Set<String> names) {
+        this.restrictedAgents = names != null ? new HashSet<>(names) : new HashSet<>();
+    }
+
+    /**
      * 停止会话。D1 增强：除置位停止标志外，立即硬停止所有进行中的生成任务
      * （取消令牌 + 中断 LLM 调用线程），使 /api/stop 真正能中断进行中的生成。
      */
@@ -221,6 +264,15 @@ public class RouterService {
      *    跳过主控旁白化，本轮该角色不参与 LLM 生成（避免自问自答双声）；未命中走原主控旁白链路。
      */
     public RoundResult runRound(String userInput, String userInterjection, String speaker) {
+        return runRound(userInput, userInterjection, speaker, null);
+    }
+
+    /**
+     * P-0802-P2（改造方案《玩家角色改名与 AI 识别》Phase 2，主人授权 2026-08-02）：
+     * runRound 四参重载 —— playerId 解析式豁免。判定优先级（方案 §3.3）：player_id 存在且能解析
+     * → 用解析出的当前角色名；否则用 player_name 字符串（现状逻辑，零行为变化）。
+     */
+    public RoundResult runRound(String userInput, String userInterjection, String speaker, String playerId) {
         if (agents.isEmpty()) {
             if (sse != null) sse.broadcastError("No active session");
             return RoundResult.error("No active session");
@@ -230,7 +282,13 @@ public class RouterService {
             running = true;
         }
         // P0-2：发言人命中 agent → 该角色直接发言（跳过 arbiter 主控旁白化）
-        boolean speakerIsAgent = speaker != null && !speaker.isBlank() && agents.containsKey(speaker);
+        // P-0802-P2：加 playerId 解析式豁免 —— 角色库改名后前端仍传旧名 speaker 时，
+        // 按 player_id 解析当前角色名命中 agent 名单同样豁免（防主控代声 = 防被识别为 AI）；
+        // 解析未命中（player_id 缺省/未绑定/identityService 缺失）→ 回退现状 speakers 字符串逻辑。
+        boolean speakerIsAgent = speaker != null && !speaker.isBlank()
+                && (agents.containsKey(speaker)
+                    || (playerId != null && !playerId.isBlank() && identityService != null
+                        && agents.containsKey(identityService.resolveCharacterName(playerId).orElse(""))));
 
         roundCount++;
         // Snapshot current round before starting
@@ -337,7 +395,13 @@ public class RouterService {
         Map<String, Agent> agentMap = new HashMap<>(agents);
         if (speakerIsAgent) {
             // P0-2：发言人角色本轮已“说过话”，从生成任务中排除（buildTasks 对缺失 agent 自动跳过）
-            agentMap.remove(speaker);
+            // P-0802-P2：排除键优先 speaker 命中名；speaker 为旧名时改用 playerId 解析出的当前名
+            //（否则改名场景下解析名 agent 仍会参与 LLM 生成 → 同一句双声）
+            String excludeName = agents.containsKey(speaker) ? speaker : null;
+            if (excludeName == null && playerId != null && !playerId.isBlank() && identityService != null) {
+                excludeName = identityService.resolveCharacterName(playerId).orElse(null);
+            }
+            if (excludeName != null) agentMap.remove(excludeName);
         }
 
         AgentExecutor.ExecutionResult execResult;
@@ -607,7 +671,17 @@ public class RouterService {
                 // 上下文在生成时构建：此时 memory 已含本轮前面角色已完成的发言
                 String context = buildAgentContext(task.agentName(), task.trackMode(), task.trackId());
                 token.checkpoint(); // 上下文构建后检查点
-                String content = agent.generateWithContext(context, token);
+                // P-0802-M：后端真·流式 —— 增量经 SSE agent_token 逐片推送（前端逐字渲染）；
+                // 完整内容仍由下方 broadcastAgentOutput 结算（流式失败自动降级非流式，内容不丢）
+                String content = agent.generateWithContextStream(context, token, delta -> {
+                    if (sse != null && delta != null && !delta.isEmpty()) {
+                        Map<String, Object> trackMap = trackById.getOrDefault(task.trackId(), Map.of());
+                        sse.broadcastAgentToken(
+                            task.agentName(), delta, task.trackId(),
+                            String.valueOf(trackMap.getOrDefault("label", "")),
+                            String.valueOf(trackMap.getOrDefault("mode", "merged")));
+                    }
+                });
                 long elapsed = Duration.between(taskStart, Instant.now()).toMillis();
                 it.toDone();
                 interruptManager.unregister(it.getId());

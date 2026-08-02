@@ -66,7 +66,7 @@ class MergedSpeechModeTest {
             InterruptManager interruptManager = new InterruptManager(new WorldEventBus());
             sim = new SimulationService(world, mock(LLMClient.class), mock(DatabaseService.class),
                     interruptManager, new AgentTaskManager(interruptManager),
-                    new WorldEventBus(), service);
+                    new WorldEventBus(), service, null); // identityService（P-0802-P2；本批用例不走 playerId）
             // 布局：小明(100,100) 小红(150,100) 相距50 互听；小林(950,100) 远离所有人（与 SpeechStrategySplitModeTest 同）
             world.registerAgent(new Agent(new Persona("小明", "开朗年轻人"), "npc", null), 100, 100, 200, 60);
             world.registerAgent(new Agent(new Persona("小红", "温柔女孩"), "npc", null), 150, 100, 200, 60);

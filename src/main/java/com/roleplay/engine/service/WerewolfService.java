@@ -135,6 +135,12 @@ public class WerewolfService {
         }
 
         public boolean isGameOver() { return !winner.isEmpty(); }
+
+        /** P-0802-P3：测试/编排钩子 —— 角色键表副本（局中改名断言用）。 */
+        public Map<String, Role> getRoles() { return new LinkedHashMap<>(roles); }
+
+        /** P-0802-P3：测试/编排钩子 —— 存活玩家列表副本。 */
+        public List<String> getAlive() { return new ArrayList<>(alive); }
     }
 
     private final Map<String, GameState> games = new ConcurrentHashMap<>();
@@ -232,6 +238,76 @@ public class WerewolfService {
         return games.computeIfAbsent(sessionId, k -> new GameState());
     }
 
+    /**
+     * P-0802-P3（改造方案 §4.2.3）：局中改名 —— GameState 名字键全量迁移（per-session 锁 synchronized(g)）：
+     * roles（:61）/alive（:62 列表元素）/votes（:86 voter→target 双向）/playerKeys（:89）/
+     * eliminated（:87 内 name 字段）/discussionTranscript（:94 内 speaker 字段）/night 目标字符串
+     * （wolfTarget/seerTarget/witchSaveTarget/witchPoisonTarget/lastNightVictim/lastNightSaved）；
+     * humanPlayers（:141）集合换名；讨论引擎 world（若本局讨论已建）同步改名。
+     * :614-619 判定（AI=alive∉humans）无需改——名字键同步后自动正确。
+     * pendingHumanEvents 队列内既有事件不追溯（事件已在途，语义可接受，方案 §4.2.3 明确）。
+     */
+    public void renamePlayer(String sessionId, String oldName, String newName) {
+        GameState g = games.get(sessionId);
+        if (g == null) return;
+        synchronized (g) {
+            // roles: 换键
+            Role role = g.roles.remove(oldName);
+            if (role != null) g.roles.put(newName, role);
+            // alive: 列表元素替换
+            int ai = g.alive.indexOf(oldName);
+            if (ai >= 0) g.alive.set(ai, newName);
+            // votes: voter→target 双向替换
+            Map<String, String> newVotes = new LinkedHashMap<>();
+            g.votes.forEach((voter, target) -> newVotes.put(
+                    voter.equals(oldName) ? newName : voter,
+                    target.equals(oldName) ? newName : target));
+            g.votes.clear();
+            g.votes.putAll(newVotes);
+            // playerKeys: 换键
+            String key = g.playerKeys.remove(oldName);
+            if (key != null) g.playerKeys.put(newName, key);
+            // eliminated: 内嵌 name 字段替换
+            for (Map<String, Object> e : g.eliminated) {
+                if (oldName.equals(e.get("name"))) e.put("name", newName);
+            }
+            // discussionTranscript: 内嵌 speaker 字段替换
+            for (Map<String, String> t : g.discussionTranscript) {
+                if (oldName.equals(t.get("speaker"))) t.put("speaker", newName);
+            }
+            // night 目标字符串（若本夜引用旧名）
+            if (oldName.equals(g.wolfTarget)) g.wolfTarget = newName;
+            if (oldName.equals(g.seerTarget)) g.seerTarget = newName;
+            if (oldName.equals(g.witchSaveTarget)) g.witchSaveTarget = newName;
+            if (oldName.equals(g.witchPoisonTarget)) g.witchPoisonTarget = newName;
+            if (oldName.equals(g.lastNightVictim)) g.lastNightVictim = newName;
+            if (oldName.equals(g.lastNightSaved)) g.lastNightSaved = newName;
+        }
+        // humanPlayers 集合换名（服务级 map，独立于 GameState 锁）
+        Set<String> humans = humanPlayers.get(sessionId);
+        if (humans != null && humans.remove(oldName)) humans.add(newName);
+        // 讨论引擎 world（若本局讨论已建）：agent 名同步（世界为 per-game 隔离实例）
+        SimulationWorld w = discussionWorlds.get(sessionId);
+        if (w != null) w.renameAgent(oldName, newName);
+        // 改名是状态变更 → 快照落库（重连按新名恢复）
+        saveSnapshot(sessionId, g);
+        log.info("Werewolf player renamed in {}: {} → {}", sessionId, oldName, newName);
+    }
+
+    /** P-0802-P3：含指定玩家的所有活跃对局 sessionId（局中改名会话收集用）。 */
+    public java.util.Set<String> sessionsOfPlayer(String playerName) {
+        Set<String> out = new java.util.HashSet<>();
+        games.forEach((sid, g) -> {
+            if (g.roles.containsKey(playerName) || g.alive.contains(playerName)) out.add(sid);
+        });
+        return out;
+    }
+
+    /** P-0802-P3：是否任一活跃对局含指定玩家（局中改名撞名检查用）。 */
+    public boolean anyGameHasPlayer(String playerName) {
+        return !sessionsOfPlayer(playerName).isEmpty();
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  P-0802-F：角色宽容解析（D-014 纪律）与玩家登记
     // ═══════════════════════════════════════════════════════════
@@ -262,6 +338,17 @@ public class WerewolfService {
             humanPlayers.remove(sessionId);
         } else {
             humanPlayers.put(sessionId, new HashSet<>(humans));
+        }
+    }
+
+    /**
+     * P-0802-P3（改造方案 §4.2.3）：仅同步 humanPlayers 集合换名（供只登记人类改名的场景复用）。
+     * 与 {@link #renamePlayer} 的 humanPlayers 迁移逻辑同款，独立方法避免整体改名副作用。
+     */
+    public void renameHumanPlayer(String sessionId, String oldName, String newName) {
+        Set<String> humans = humanPlayers.get(sessionId);
+        if (humans != null && humans.remove(oldName)) {
+            humans.add(newName);
         }
     }
 

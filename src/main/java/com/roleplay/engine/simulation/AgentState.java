@@ -5,7 +5,8 @@ import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 public class AgentState {
-    private final String agentName;
+    /** P-0802-P3（改造方案 Phase 3）：去 final —— 局中改名时 {@link #rename} 原地改键（toMap 依赖对象引用一致性）。 */
+    private volatile String agentName;
     private volatile double x;
     private volatile double y;
     private volatile double vx;
@@ -36,6 +37,11 @@ public class AgentState {
     }
 
     public String getAgentName() { return agentName; }
+
+    /** P-0802-P3（改造方案 §4.2.2）：局中改名 —— 原地改 agentName（位置/情绪/标记等全字段保留）。 */
+    public void rename(String newName) {
+        this.agentName = newName;
+    }
 
     public double getX() { return x; }
     public void setX(double x) { this.x = x; }
