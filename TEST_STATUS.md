@@ -514,3 +514,5 @@ pm run build\（tsc -b 0 错误 + vite 64 modules，index-DEFyKJ5G.js 1,840,208B
 - 零后端改动（不动 RouterService/ArbiterService/审批/狼人杀/剧本杀/SSE 主链路/P-0803-E 地图增强功能本身）；未 git commit（统一 gate 未获授权）；8000 重启由主会话负责
 
 - 2026-08-03 16:2x（P-0803-F 超时修复批次）：相关 4 类测试 BUILD SUCCESS（LLMClient 超时重载 + 地图 45s + mock 3 参 stub）；排除 LONG-01 全量 BUILD SUCCESS；LONG-01 单独复跑 PASS（堆增长 -12.6%，全量环境 53.1% 为既有堆测量脆性 #37/#71 同款，非回归）；前端 npm build 65 modules
+
+- 2026-08-03 16:55（P-0803-G 剧本名超长修复批次）：排除 LONG-01 全量 372/0 BUILD SUCCESS（SceneEntity 列宽 2000 + saveScene 截断 500，无回归）；LONG-01 既有堆测量脆性另行单独复跑 PASS
