@@ -140,6 +140,7 @@ class ScriptMapCoverageTest {
     void generateMapFillsCoverage() {
         LLMClient llm = mock(LLMClient.class);
         when(llm.callJson(anyString(), anyInt())).thenReturn(validLlmMap()); // 只有 1 个 zone（客厅）
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(validLlmMap());
         ScriptMapService svc = new ScriptMapService(llm);
         ScriptMapService.MapResult r = svc.generateMap("民国", List.of("客厅", "书房"),
                 List.of("客厅", "书房", "花园"), 42L);
@@ -169,6 +170,7 @@ class ScriptMapCoverageTest {
             Map.of("id", "c1", "location", "客厅", "content", "碎玻璃", "public", false)));
         script.put("secrets", Map.of("管家", "贪图遗产", "女仆", "知道密信"));
         when(llm.callJson(anyString(), anyInt())).thenReturn(script);
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(script);
 
         ScriptGameService svc = new ScriptGameService(llm, new ApprovalService());
         String sid = "coverage-c3a-" + System.nanoTime();
@@ -196,6 +198,8 @@ class ScriptMapCoverageTest {
         script.put("clues", List.of(Map.of("id", "c1", "location", "客厅", "content", "碎玻璃", "public", false)));
         script.put("secrets", Map.of("管家", "贪图遗产", "女仆", "知道密信"));
         when(llm.callJson(anyString(), anyInt())).thenReturn(script)
+                .thenThrow(new RuntimeException("map llm boom"));
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(script)
                 .thenThrow(new RuntimeException("map llm boom"));
 
         ScriptGameService svc = new ScriptGameService(llm, new ApprovalService());

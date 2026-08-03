@@ -80,7 +80,7 @@ public class LLMClient {
      * This is a BLOCKING call — designed to run in a Virtual Thread.
      */
     public String callSync(List<Message> messages) {
-        return callSyncInternal(messages, defaultModel(), 300, 0.7, null);
+        return callSyncInternal(messages, defaultModel(), 300, 0.7, null, timeoutSeconds);
     }
 
     /**
@@ -91,17 +91,24 @@ public class LLMClient {
      * future.cancel(true)）也会立即 abort 进行中的 HTTP 调用并上抛取消信号。
      */
     public String callSync(List<Message> messages, CancellationToken token) {
-        return callSyncInternal(messages, defaultModel(), 300, 0.7, token);
+        return callSyncInternal(messages, defaultModel(), 300, 0.7, token, timeoutSeconds);
     }
 
     public String callSync(List<Message> messages, String modelOverride,
                            int maxTokens, double temperature) {
-        return callSyncInternal(messages, modelOverride, maxTokens, temperature, null);
+        return callSyncInternal(messages, modelOverride, maxTokens, temperature, null, timeoutSeconds);
+    }
+
+    /** 带单次调用超时覆盖（地图生成等路径：LLM 卡住快速降级，防止 init 自动串联被拖死）。 */
+    public String callSync(List<Message> messages, String modelOverride,
+                           int maxTokens, double temperature, int timeoutSec) {
+        return callSyncInternal(messages, modelOverride, maxTokens, temperature, null,
+                timeoutSec > 0 ? timeoutSec : timeoutSeconds);
     }
 
     private String callSyncInternal(List<Message> messages, String modelOverride,
                                     int maxTokens, double temperature,
-                                    CancellationToken token) {
+                                    CancellationToken token, int timeoutSec) {
 
         String[] modelsToTry = {modelOverride, fallbackModel};
         Set<String> seen = new LinkedHashSet<>(Arrays.asList(modelsToTry));
@@ -118,7 +125,7 @@ public class LLMClient {
                             .uri(URI.create(chatEndpoint()))
                             .header("Content-Type", "application/json")
                             .header("Authorization", "Bearer " + appConfig.getLlm().getApiKey())
-                            .timeout(Duration.ofSeconds(timeoutSeconds))
+                            .timeout(Duration.ofSeconds(timeoutSec))
                             .POST(HttpRequest.BodyPublishers.ofString(requestBody))
                             .build();
 
@@ -202,13 +209,19 @@ public class LLMClient {
      * Includes fuzzy extraction: strips markdown fences, extracts first {…}.
      */
     public Map<String, Object> callJson(String prompt, int maxTokens) {
+        return callJson(prompt, maxTokens, timeoutSeconds);
+    }
+
+    /** 带单次调用超时覆盖（地图生成等路径：LLM 卡住快速降级，防止 init 自动串联被拖死）。 */
+    public Map<String, Object> callJson(String prompt, int maxTokens, int timeoutOverrideSeconds) {
         Message sysMsg = new Message(Message.Role.SYSTEM, "system",
                 "你是一个角色扮演主控（DM）。必须严格按照要求的JSON格式回复。");
         Message userMsg = new Message(Message.Role.USER, "user", prompt);
 
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
-                String content = callSync(List.of(sysMsg, userMsg), defaultModel(), maxTokens, 0.1);
+                String content = callSync(List.of(sysMsg, userMsg), defaultModel(), maxTokens, 0.1,
+                        timeoutOverrideSeconds > 0 ? timeoutOverrideSeconds : timeoutSeconds);
                 String json = extractJson(content);
                 if (json != null) {
                     @SuppressWarnings("unchecked")

@@ -81,7 +81,9 @@ public class ScriptMapService {
                 // G1-3（P-0803-D）：token 预算 800 → 4000。对照 D-023 同款缺陷（剧本 JSON 600 被硬截断）；
                 // 地图 JSON 含 ground+collision 双层数组（20-32×14-20 格 ≈ 560-1280 个数字）+ rooms/zones/spawns，
                 // 估算输出 1300-2000+ tokens，800 必截断 → 高频 BSP 降级。4000 与 D-023 剧本档位对齐。
-                raw = llmClient.callJson(buildPrompt(theme, locations, clueLocations), 4000);
+                // P-0803-F（超时修复）：单次调用 45s 上限（比剧本 60s 更激进）——地图输出小于剧本，
+                // 45s 未完成说明模型慢/卡 → 快速走 BSP 降级，防止 init 自动串联（剧本+地图两次 LLM）被拖死超前端超时。
+                raw = llmClient.callJson(buildPrompt(theme, locations, clueLocations), 4000, 45);
             } catch (Exception e) {
                 log.warn("ScriptMapService: LLM call failed (attempt {}/2): {}", attempt + 1, e.getMessage());
                 raw = Map.of();

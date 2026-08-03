@@ -79,6 +79,7 @@ class ScriptMapServiceTest {
     private LLMClient validLlm() {
         LLMClient llm = mock(LLMClient.class);
         when(llm.callJson(anyString(), anyInt())).thenReturn(validLlmMap());
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(validLlmMap());
         return llm;
     }
 
@@ -91,6 +92,7 @@ class ScriptMapServiceTest {
         zones.set(0, Map.of("id", "z_bad", "name", "墙里热点", "type", "search", "x", 0, "y", 0, "radius", 1, "clue_location", "客厅"));
         m.put("zones", zones);
         when(llm.callJson(anyString(), anyInt())).thenReturn(m);
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(m);
         return llm;
     }
 
@@ -98,6 +100,7 @@ class ScriptMapServiceTest {
     private LLMClient emptyLlm() {
         LLMClient llm = mock(LLMClient.class);
         when(llm.callJson(anyString(), anyInt())).thenReturn(Map.of());
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(Map.of());
         return llm;
     }
 
@@ -144,6 +147,7 @@ class ScriptMapServiceTest {
     void llmExceptionFallsBack() {
         LLMClient llm = mock(LLMClient.class);
         when(llm.callJson(anyString(), anyInt())).thenThrow(new RuntimeException("timeout"));
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenThrow(new RuntimeException("timeout"));
         ScriptMapService svc = new ScriptMapService(llm);
         ScriptMapService.MapResult r = svc.generateMap("民国", List.of(), List.of(), 0L);
         assertTrue(r.usedBsp());
