@@ -3,7 +3,11 @@ package com.roleplay.engine.controller;
 import com.roleplay.engine.db.service.DatabaseService;
 import com.roleplay.engine.service.GeneratorService;
 import com.roleplay.engine.service.RouterService;
+import com.roleplay.engine.service.ScriptMapService;
+import com.roleplay.engine.simulation.map.BspMapGenerator;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -26,14 +30,27 @@ public class SceneController {
     private final RouterService router;
     private final CharacterController characterController;
     private final DatabaseService databaseService;
+    /** P-0803-O：LLM 全量生成统一路径（仅依赖 LLMClient，无循环依赖；4 参旧构造为 null → 防御回落 BSP）。 */
+    private final ScriptMapService mapService;
 
+    /** P-0803-O：4 参旧构造委托（mapService=null，LLM 主题请求防御回落 BSP 确定性；既有测试/调用点零破坏）。 */
     public SceneController(GeneratorService generator, RouterService router,
                            CharacterController characterController,
                            DatabaseService databaseService) {
+        this(generator, router, characterController, databaseService, null);
+    }
+
+    /** P-0803-O：5 参 @Autowired 构造 —— 注入 ScriptMapService（Spring bean，仅依赖 LLMClient，无环）。 */
+    @Autowired
+    public SceneController(GeneratorService generator, RouterService router,
+                           CharacterController characterController,
+                           DatabaseService databaseService,
+                           ScriptMapService mapService) {
         this.generator = generator;
         this.router = router;
         this.characterController = characterController;
         this.databaseService = databaseService;
+        this.mapService = mapService;
     }
 
     @PostConstruct
@@ -69,6 +86,12 @@ public class SceneController {
         scene.put("description", body.getOrDefault("description", ""));
         scene.put("keywords", body.getOrDefault("keywords", ""));
         scene.put("initial_agent_names", body.getOrDefault("initial_agent_names", List.of()));
+        // P-0803-H：剧本绑定三字段（category 分类 / default_roles 默认角色组 / default_map 默认地图）
+        scene.put("category", str(body.get("category"), "general"));
+        scene.put("default_roles", body.getOrDefault("default_roles", List.of()));
+        Object dm = body.get("default_map");
+        // 空串 = 清除（不落库不暴露）；null = 无地图
+        scene.put("default_map", (dm instanceof String s && s.isBlank()) ? null : dm);
         scenes.add(scene);
         persistScene(scene);
         return ResponseEntity.ok(scene);
@@ -87,6 +110,11 @@ public class SceneController {
                     databaseService.deleteScene(id);
                 }
                 persistScene(updated);
+                // P-0803-H：default_map 空串 = 清除信号（已落库为 null）；响应归一不暴露空串
+                Object dm = updated.get("default_map");
+                if (dm instanceof String s && s.isBlank()) {
+                    updated.remove("default_map");
+                }
                 return ResponseEntity.ok(updated);
             }
         }
@@ -198,10 +226,81 @@ public class SceneController {
             }
         }
         databaseService.saveScene(str(scene.get("scene_id")), str(scene.get("name")),
-                str(scene.get("description")), agents, str(scene.get("keywords")));
+                str(scene.get("description")), agents, str(scene.get("keywords")),
+                str(scene.get("category"), "general"),
+                toJson(scene.get("default_roles")),
+                toJson(scene.get("default_map")));
     }
+
+    /** P-0803-H：default_roles/default_map 序列化 —— 已是字符串直用；对象转 JSON；null 传 null（不覆盖旧值） */
+    private static String toJson(Object o) {
+        if (o == null) return null;
+        if (o instanceof String s) return s;
+        try {
+            return MAPPER.writeValueAsString(o);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static String str(Object o) {
         return o == null ? "" : String.valueOf(o);
+    }
+
+    private static String str(Object o, String def) {
+        if (o == null) return def;
+        String s = String.valueOf(o);
+        return s.isBlank() ? def : s;
+    }
+
+    /**
+     * P-0803-H：剧本默认地图生成（BSP 确定性生成，契约 v1）——供前端剧本编辑弹窗「生成默认地图」
+     * 绑定到剧本卡 default_map；零 LLM 零成本（BspMapGenerator 纯规则，同 seed 同输出）。
+     * P-0803-O：升级为双模式 ——
+     * <ul>
+     *   <li>body 无 theme（空/缺省）→ BSP 确定性模式（P-0803-H 既有行为逐字节零回归）</li>
+     *   <li>body 带非空 theme → LLM 全量生成模式：ScriptMapService 统一路径（LLM 完整输出
+     *       ground+collision 双层数组 + rooms/zones/spawns 全量元素 → 契约 v1 校验 → 校验失败/LLM
+     *       失败/超预算自动 BSP 降级兜底，防御性保留），响应附加 mode/generator/validation/fallback 溯源键</li>
+     * </ul>
+     */
+    @PostMapping("/map")
+    public ResponseEntity<Map<String, Object>> generateDefaultMap(@RequestBody(required = false) Map<String, Object> body) {
+        long seed = 0;
+        String theme = "";
+        if (body != null) {
+            if (body.get("seed") instanceof Number n) {
+                seed = n.longValue();
+            }
+            Object t = body.get("theme");
+            if (t != null) {
+                theme = String.valueOf(t).trim();
+            }
+        }
+        // 4 参构造（无 ScriptMapService）防御：主题请求回落 BSP 确定性
+        if (mapService == null) {
+            Map<String, Object> bsp = BspMapGenerator.generate(BspMapGenerator.Options.of(seed, 0, 0, -1));
+            return ResponseEntity.ok(Map.of("map", bsp));
+        }
+        // BSP 确定性模式（无主题）：P-0803-H 既有行为，零 LLM 零回归
+        if (theme.isEmpty()) {
+            Map<String, Object> bsp = BspMapGenerator.generate(BspMapGenerator.Options.of(seed, 0, 0, -1));
+            return ResponseEntity.ok(Map.of("map", bsp));
+        }
+        // LLM 全量生成模式（带主题）：统一路径 → 契约 v1 校验 → 失败/超预算 BSP 兜底
+        ScriptMapService.MapResult result = mapService.generateMap(theme, List.of(), List.of(), seed);
+        Map<String, Object> validation = new LinkedHashMap<>();
+        validation.put("ok", result.validation().ok());
+        validation.put("errors", result.validation().errors());
+        validation.put("warnings", result.validation().warnings());
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("map", result.map());
+        resp.put("mode", result.usedBsp() ? "bsp-fallback" : "llm");
+        resp.put("generator", result.map().get("generator"));
+        resp.put("validation", validation);
+        resp.put("fallback", result.fallbackReasons());
+        return ResponseEntity.ok(resp);
     }
 }

@@ -46,6 +46,11 @@ roleplay:
     dm:
       # C4 主持人面板 key：测试默认放开（与审批门同模式）；DM key 越权用例在 controller 层反射注入验证
       key: ""
+    map:
+      # P-0803-J 剧本杀地图默认尺寸（与主 yml 同步）：默认 24×16 保持既有行为；
+      # 大图（超 LLM token 预算 40×24）直接走 BSP 确定性生成（ScriptMapService 预算闸）
+      default-width: 24
+      default-height: 16
     discussion:
       # 批次 D 发言门控：与主 yml 同步默认值（silence-floor=0.15 / priority-decay-rounds=3 / wait-bias=0.5 / cold-break=true）
       max-rounds: 2

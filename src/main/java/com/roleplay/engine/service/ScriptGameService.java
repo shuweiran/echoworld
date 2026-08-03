@@ -16,6 +16,7 @@ import com.roleplay.engine.simulation.conversation.ConversationGroup;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
 import com.roleplay.engine.simulation.conversation.SpeechGate;
 import com.roleplay.engine.simulation.director.WorldDirectorService;
+import com.roleplay.engine.simulation.map.MapContract;
 import com.roleplay.engine.simulation.track.TrackAssignment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -100,6 +101,18 @@ public class ScriptGameService {
     @Value("${roleplay.game.ap.base:3}")
     private int apBase = 3;
 
+    /** P-0803-J（地图容量扩展）：剧本杀地图默认宽度（roleplay.game.map.default-width，默认 24 保持既有行为）。 */
+    @Value("${roleplay.game.map.default-width:24}")
+    private int mapDefaultWidth = 24;
+
+    /** P-0803-J（地图容量扩展）：剧本杀地图默认高度（roleplay.game.map.default-height，默认 16 保持既有行为）。 */
+    @Value("${roleplay.game.map.default-height:16}")
+    private int mapDefaultHeight = 16;
+
+    /** P-0803-K（多地图切换）：door 靠近校验容差（格）——玩家上报坐标距 door 中心曼哈顿距离
+     *  ≤ radius + 容差 视为靠近（服务端不持有玩家权威位置，坐标由客户端上报，尽力校验；缺坐标跳过）。 */
+    private static final int DOOR_PROXIMITY_SLACK = 2;
+
     /** C2: 搜证阶段提示文案（AP 不足拒绝）。 */
     public static final String ERR_AP_INSUFFICIENT = "行动点不足";
 
@@ -134,6 +147,8 @@ public class ScriptGameService {
     public static class ScriptGame {
         String sessionId;
         volatile Phase phase = Phase.SETUP;
+        /** P-0803-K（剧本杀双版本）：对局模式 —— "full"=真剧本杀（搜证+地图，默认）/ "chat"=简单对话版（无取证，直接多人对话讨论）。 */
+        volatile String mode = "full";
 
         // Script data
         String name = "未命名剧本";
@@ -184,12 +199,29 @@ public class ScriptGameService {
         Map<String, Object> mapData;
         /** 阶段 2: 地图生成溯源（generator/validation/fallback 原因）。 */
         List<String> mapFallbackReasons = new ArrayList<>();
+        /** P-0803-J（地图容量扩展）：对局地图尺寸（0=未定；generateMap 首次生成后记录，
+         *  regenerate 无显式尺寸时保持原尺寸；随快照持久化跨重启）。 */
+        int mapWidth = 0;
+        int mapHeight = 0;
+        /** P-0803-K（多地图切换）：多图注册表 —— mapId → 地图数据（契约 v1）。
+         *  首个地图 = init 自动生成（map_1）；generateMap 生成即注册并设为当前；
+         *  door zone 切换在注册表内迁移 currentMapId。 */
+        final Map<String, Map<String, Object>> maps = new LinkedHashMap<>();
+        /** P-0803-K：每图生成溯源（mapId → fallback 原因列表；当前图镜像到 mapFallbackReasons 兼容旧字段）。 */
+        final Map<String, List<String>> mapFallbacks = new LinkedHashMap<>();
+        /** P-0803-K：每图搜证足迹（mapId → 已搜地点集合；切换时当前图足迹暂存/目标图足迹载入，
+         *  searchedLocations 恒为当前图足迹视图 —— 前端绿点数据源不变）。 */
+        final Map<String, java.util.Set<String>> searchedByMap = new LinkedHashMap<>();
+        /** P-0803-K：当前地图 id（空串 = 未初始化；多图注册表键）。 */
+        String currentMapId = "";
         /** P-0803-E 方案 B: 搜证足迹 —— 全局已搜过的地点（地图绿点恢复 + 面板/地图双通道同步，契约 §5 消费端）。 */
         final java.util.Set<String> searchedLocations = new java.util.LinkedHashSet<>();
 
         public Map<String, Object> toMap(String playerName) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("phase", phase.name().toLowerCase());
+            // P-0803-K: 对局模式（"full"=真剧本杀 / "chat"=简单对话版）——前端据此隐藏搜证/地图/2D 讨论区
+            m.put("mode", mode);
             m.put("session_id", sessionId);
             m.put("schema_version", scriptSchema == null ? 0 : ScriptSchemaV1.CURRENT_VERSION);
             m.put("name", name);
@@ -231,6 +263,13 @@ public class ScriptGameService {
             }
             // P-0803-E 方案 B: 搜证足迹（地图绿点恢复数据源；附加键不破坏既有契约，旧对局为空列表）
             m.put("searched_locations", new ArrayList<>(searchedLocations));
+            // P-0803-K: 多图注册表信息（当前图 id + 已注册图 id 列表；附加键不破坏既有契约，旧对局无此键）
+            if (currentMapId != null && !currentMapId.isBlank()) {
+                m.put("current_map_id", currentMapId);
+            }
+            if (!maps.isEmpty()) {
+                m.put("map_ids", new ArrayList<>(maps.keySet()));
+            }
             if (!discussionTranscript.isEmpty()) {
                 m.put("discussion", new ArrayList<>(discussionTranscript));
             }
@@ -327,7 +366,21 @@ public class ScriptGameService {
 
     /** Phase 1: Generate script and assign roles. */
     public Map<String, Object> initGame(String sessionId, String theme, List<String> playerNames) {
+        return initGame(sessionId, theme, playerNames, "full");
+    }
+
+    /**
+     * P-0803-K（剧本杀双版本）：initGame 带模式重载。
+     *
+     * <p>mode="chat"（简单对话版）：跳过 INVESTIGATION 直接进入 DISCUSSION 并自动启动讨论引擎
+     * （蓝图 v3 Step3v 降级路径「轮次发言」：无取证/无地图、只有多人对话），不自动生成地图、
+     * 搜证/转交被阶段守卫天然拦截；角色/秘密/剧本 Schema v1 生成路径与真剧本杀完全一致。
+     * mode="full"（默认，真剧本杀）：维持既有行为（INVESTIGATION + 自动地图串联）。
+     */
+    public Map<String, Object> initGame(String sessionId, String theme, List<String> playerNames, String mode) {
+        boolean chatMode = "chat".equalsIgnoreCase(mode);
         ScriptGame game = new ScriptGame();
+        game.mode = chatMode ? "chat" : "full";
         game.sessionId = sessionId;
         game.players.addAll(playerNames);
 
@@ -391,7 +444,8 @@ public class ScriptGameService {
             game.playerKeys.put(player, UUID.randomUUID().toString());
         }
 
-        game.phase = Phase.INVESTIGATION;
+        // P-0803-K：简单对话版直接进入 DISCUSSION（无搜证阶段）；真剧本杀维持 INVESTIGATION
+        game.phase = chatMode ? Phase.DISCUSSION : Phase.INVESTIGATION;
         game.round = 1;
         games.put(sessionId, game);
 
@@ -399,16 +453,30 @@ public class ScriptGameService {
         persistScript(game);
         // C3: 初始快照落库（开房即有恢复点；断线重连/崩溃恢复基础）
         saveSnapshot(game);
-        // P-0803-D（地图增强，调研项 1 方案 A 自动串联）：剧本生成即自动生成地图。
-        // 失败不阻塞 init——generateMap 内部已有 LLM→BSP 兜底，此处仅防御性兜底；
-        // mapData 就位后 init 响应（toMap）自动附加 map 键，前端无需额外调用。
-        try {
-            generateMap(sessionId, "", 0L, false);
-        } catch (Exception e) {
-            log.warn("Script game {} auto map generation failed (non-blocking): {}", sessionId, e.getMessage());
+        // P-0803-D（地图增强，调研项 1 方案 A 自动串联）：剧本生成即自动生成地图（仅真剧本杀；
+        // 简单对话版无取证无地图，跳过 LLM 等待直接进入讨论）。失败不阻塞 init——generateMap 内部
+        // 已有 LLM→BSP 兜底，此处仅防御性兜底；mapData 就位后 init 响应（toMap）自动附加 map 键。
+        if (!chatMode) {
+            try {
+                generateMap(sessionId, "", 0L, false);
+            } catch (Exception e) {
+                log.warn("Script game {} auto map generation failed (non-blocking): {}", sessionId, e.getMessage());
+            }
         }
-        // GAP-8: 剧本生成完成，推送首阶段 + 状态
-        broadcastPhase(game, "investigation");
+        // GAP-8: 剧本生成完成，推送首阶段 + 状态；简单版直接推送 discussion 并自动启动讨论引擎
+        if (chatMode) {
+            broadcastPhase(game, "discussion");
+            try {
+                runDiscussionEngine(game);
+            } catch (Exception e) {
+                log.warn("Script game {} chat-mode discussion engine setup failed, advancing to VOTE: {}",
+                        sessionId, e.getMessage());
+                game.phase = Phase.VOTE;
+                broadcastPhase(game, "vote");
+            }
+        } else {
+            broadcastPhase(game, "investigation");
+        }
         broadcastStatus(game);
 
         log.info("Script game {}: {} players, {} locations, {} clues, {} secrets",
@@ -455,6 +523,8 @@ public class ScriptGameService {
         if (found.isEmpty()) {
             // P-0803-E 方案 B: 搜证过且无更多线索 → 记录足迹（地图该地点绿点态；已搜空不再重复提示）
             game.searchedLocations.add(location);
+            // P-0803-K: 同步当前图足迹（切图后按图隔离恢复）
+            game.searchedByMap.computeIfAbsent(game.currentMapId, k -> new java.util.LinkedHashSet<>()).add(location);
             saveSnapshot(game);
             result.put("found", List.of());
             result.put("clues", List.of());
@@ -487,6 +557,8 @@ public class ScriptGameService {
         }
         // P-0803-E 方案 B: 搜证足迹（该地点已搜过，地图绿点同步数据源）
         game.searchedLocations.add(location);
+        // P-0803-K: 同步当前图足迹（切图后按图隔离恢复）
+        game.searchedByMap.computeIfAbsent(game.currentMapId, k -> new java.util.LinkedHashSet<>()).add(location);
         // C3: 状态变更 → 快照落库（搜证结果/AP 扣减可恢复）
         saveSnapshot(game);
 
@@ -513,27 +585,104 @@ public class ScriptGameService {
      * @param regenerate 强制重新生成（默认 false）
      */
     public Map<String, Object> generateMap(String sessionId, String theme, long seed, boolean regenerate) {
+        return generateMap(sessionId, theme, seed, regenerate, 0, 0);
+    }
+
+    /**
+     * 阶段 2: 生成对局地图（P-0803-J 地图容量扩展：显式尺寸贯穿）。
+     * 尺寸解析优先级：显式 width/height（&gt;0）→ 对局已定尺寸（regenerate 无显式尺寸时保持原尺寸）→ 配置默认。
+     * 大图（超 LLM token 预算 40×24）由 ScriptMapService 直接走 BSP 确定性路径。
+     *
+     * @param width  显式地图宽度（≤0 = 不指定）
+     * @param height 显式地图高度（≤0 = 不指定）
+     */
+    public Map<String, Object> generateMap(String sessionId, String theme, long seed, boolean regenerate,
+                                           int width, int height) {
+        return generateMap(sessionId, theme, seed, regenerate, width, height, null);
+    }
+
+    /**
+     * 阶段 2: 生成对局地图（P-0803-K 多地图：生成即注册进多图注册表并设为当前）。
+     * 尺寸解析优先级：显式 width/height（&gt;0）→ 对局已定尺寸（regenerate 无显式尺寸时保持原尺寸）→ 配置默认。
+     * 大图（超 LLM token 预算 40×24）由 ScriptMapService 直接走 BSP 确定性路径。
+     *
+     * @param mapId 注册表键（可空——自动分配 map_&lt;n&gt;；LLM/BSP 输出的 map_id 统一归一为注册表键保证唯一）
+     */
+    public Map<String, Object> generateMap(String sessionId, String theme, long seed, boolean regenerate,
+                                           int width, int height, String mapId) {
         ScriptGame game = games.get(sessionId);
         if (game == null) return Map.of("error", "游戏不存在");
         if (game.mapData != null && !regenerate) {
             return mapResponse(game, Map.of("cached", true, "fallback", new ArrayList<>(game.mapFallbackReasons)));
         }
+        int effW = width > 0 ? width : (game.mapWidth > 0 ? game.mapWidth : mapDefaultWidth);
+        int effH = height > 0 ? height : (game.mapHeight > 0 ? game.mapHeight : mapDefaultHeight);
         String effTheme = (theme == null || theme.isBlank()) ? game.name : theme;
-        // 线索地点（去重）：clues[].location —— zones[].clue_location 对齐目标（契约 §5）
-        List<String> clueLocations = game.clues.stream()
-            .map(c -> String.valueOf(c.getOrDefault("location", "")))
-            .filter(s -> !s.isBlank())
-            .distinct()
-            .collect(Collectors.toList());
-        ScriptMapService.MapResult result = mapService.generateMap(effTheme, game.locations, clueLocations, seed);
-        game.mapData = result.map();
-        game.mapFallbackReasons = new ArrayList<>(result.fallbackReasons());
+        String id = (mapId != null && !mapId.isBlank()) ? mapId.trim() : nextMapId(game);
+        Map<String, Object> m = doGenerateAndRegister(game, id, effTheme, seed, effW, effH);
+        if (m == null) return Map.of("error", "地图生成失败");
+        // 设为当前图（镜像：mapData/mapFallbackReasons/mapWidth/mapHeight 兼容旧消费端）
+        String prevId = game.currentMapId;
+        game.mapData = m;
+        game.currentMapId = id;
+        game.mapFallbackReasons = new ArrayList<>(game.mapFallbacks.getOrDefault(id, List.of()));
+        game.mapWidth = MapContract.intOf(m.get("width"), effW);
+        game.mapHeight = MapContract.intOf(m.get("height"), effH);
+        // P-0803-K: 足迹随切换迁移（与 switchMap 同规则——切走暂存 searchedByMap、目标图足迹载入；
+        // 同图 regenerate 保持足迹；首个地图（prevId 空）无迁移必要）。缺此迁移时切换后
+        // searchedLocations 仍残留旧图足迹（K5/K8 验收失败），且切回时会把污染足迹存进旧图。
+        if (prevId != null && !prevId.isBlank() && !prevId.equals(id)) {
+            game.searchedByMap.put(prevId, new java.util.LinkedHashSet<>(game.searchedLocations));
+            game.searchedLocations.clear();
+            java.util.Set<String> targetSearched = game.searchedByMap.get(id);
+            if (targetSearched != null) game.searchedLocations.addAll(targetSearched);
+        }
         // 状态变更 → 快照落库（地图可恢复）
         saveSnapshot(game);
-        log.info("Script game {} map generated: generator={}, validation.ok={}, fallback={}",
-            sessionId, result.map().get("generator") instanceof Map<?, ?> g ? g.get("kind") : "?",
-            result.validation().ok(), result.fallbackReasons());
+        log.info("Script game {} map generated: id={}, generator={}, size={}x{}, fallback={}",
+            sessionId, id,
+            m.get("generator") instanceof Map<?, ?> g ? g.get("kind") : "?",
+            game.mapWidth, game.mapHeight, game.mapFallbackReasons);
         return mapResponse(game, Map.of("cached", false, "fallback", new ArrayList<>(game.mapFallbackReasons)));
+    }
+
+    /**
+     * P-0803-K: 生成地图并注册进多图注册表（generateMap / switchMap 自动生成目标图共用）。
+     * 注册表键 = mapId（map 数据内 map_id 强制归一为键，保证唯一）；溯源按图存档。
+     * 失败返回 null（仅 LLM 异常 + BSP 兜底也失败时）。
+     */
+    private Map<String, Object> doGenerateAndRegister(ScriptGame game, String mapId, String theme,
+                                                      long seed, int width, int height) {
+        try {
+            int effW = width > 0 ? width : (game.mapWidth > 0 ? game.mapWidth : mapDefaultWidth);
+            int effH = height > 0 ? height : (game.mapHeight > 0 ? game.mapHeight : mapDefaultHeight);
+            String effTheme = (theme == null || theme.isBlank()) ? game.name : theme;
+            // 线索地点（去重）：clues[].location —— zones[].clue_location 对齐目标（契约 §5）
+            List<String> clueLocations = game.clues.stream()
+                .map(c -> String.valueOf(c.getOrDefault("location", "")))
+                .filter(s -> !s.isBlank())
+                .distinct()
+                .collect(Collectors.toList());
+            ScriptMapService.MapResult result = mapService.generateMap(effTheme, game.locations, clueLocations, seed, effW, effH);
+            Map<String, Object> m = new LinkedHashMap<>(result.map());
+            m.put("map_id", mapId);
+            game.maps.put(mapId, m);
+            game.mapFallbacks.put(mapId, new ArrayList<>(result.fallbackReasons()));
+            return m;
+        } catch (Exception e) {
+            log.warn("Script game {} map generation failed for {}: {}", game.sessionId, mapId, e.getMessage());
+            return null;
+        }
+    }
+
+    /** P-0803-K: 自动分配地图注册表键（map_1, map_2, …，注册表内唯一）。 */
+    private static String nextMapId(ScriptGame game) {
+        int n = game.maps.size() + 1;
+        String id;
+        do {
+            id = "map_" + n++;
+        } while (game.maps.containsKey(id));
+        return id;
     }
 
     /** 阶段 2: 获取已生成的对局地图（未生成返回空 map 与 error）。 */
@@ -542,6 +691,250 @@ public class ScriptGameService {
         if (game == null) return Map.of("error", "游戏不存在");
         if (game.mapData == null) return Map.of("error", "地图尚未生成");
         return mapResponse(game, Map.of("cached", true));
+    }
+
+    /** P-0803-K: 当前地图 id（空串 = 未初始化；测试/状态查询）。 */
+    public String getCurrentMapId(String sessionId) {
+        ScriptGame game = games.get(sessionId);
+        return game == null ? "" : game.currentMapId;
+    }
+
+    /** P-0803-K: 已注册地图 id 列表（对局多图注册表视图）。 */
+    public List<String> getRegisteredMapIds(String sessionId) {
+        ScriptGame game = games.get(sessionId);
+        return game == null ? List.of() : new ArrayList<>(game.maps.keySet());
+    }
+
+    /**
+     * P-0803-K（剧本杀模式多地图切换）：玩家进入/靠近 door 型 zone → 切换当前地图。
+     *
+     * <p>校验链：对局存在 → 阶段为 INVESTIGATION → 触发者在本局（+player_key 认证）→
+     * door_zone_id 必须命中当前地图 type=door 的 zone（可选 x/y 靠近校验）→ 目标解析
+     * （body target_map_id → door zone target/to/target_map_id 字段）→ 目标非当前地图 →
+     * 目标已注册直接切换 / 未注册自动生成（BSP 兜底）→ 状态迁移（当前图足迹暂存、目标图
+     * 足迹载入、mapWidth/mapHeight 随目标图尺寸联动）→ 快照 + script_status SSE 广播。
+     * 非法 door 目标（无目标、目标=当前图、door 不存在/非 door 型、远离 door、阶段不符）→ 容错错误返回。
+     * 角色/线索/AP/秘密/票型为对局级状态，切换天然保留。
+     *
+     * @param playerKey  可选身份校验（对齐 C3 玩家级端点，空串向后兼容）
+     * @param doorZoneId 触发 door zone id（可空——缺省走显式 target_map_id 直切模式）
+     * @param px, py     触发者瓦片坐标（可空——服务端不持有玩家权威位置，坐标由客户端上报，缺省跳过靠近校验）
+     * @param targetMapId 目标地图 id（可空——缺省取 door zone 的 target/to/target_map_id 字段）
+     */
+    public Map<String, Object> switchMap(String sessionId, String player, String playerKey,
+                                         String doorZoneId, Integer px, Integer py, String targetMapId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (game.mapData == null) return Map.of("error", "当前地图尚未生成");
+        if (game.phase != Phase.INVESTIGATION) {
+            return Map.of("error", "当前阶段不能切换地图（仅搜证阶段可探索多图）");
+        }
+        if (player == null || player.isBlank()) return Map.of("error", "缺少触发玩家名");
+        if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
+        Map<String, Object> access = checkPlayerAccess(sessionId, player, playerKey);
+        if (access != null) return access;
+
+        // 1) door zone 解析（door_zone_id 缺省时要求显式 target_map_id 直切）
+        String resolvedTarget = (targetMapId == null || targetMapId.isBlank()) ? "" : targetMapId.trim();
+        Map<String, Object> door = null;
+        if (doorZoneId != null && !doorZoneId.isBlank()) {
+            door = findZone(game.mapData, doorZoneId);
+            if (door == null) return Map.of("error", "door zone 不存在: " + doorZoneId);
+            if (!"door".equals(String.valueOf(door.getOrDefault("type", "")))) {
+                return Map.of("error", "zone 不是 door 类型（无法触发切图）: " + doorZoneId);
+            }
+            // 靠近校验：客户端上报瓦片坐标（尽力校验；缺坐标跳过）
+            if (px != null && py != null) {
+                int doorX = MapContract.intOf(door.get("x"), Integer.MIN_VALUE);
+                int doorY = MapContract.intOf(door.get("y"), Integer.MIN_VALUE);
+                if (doorX == Integer.MIN_VALUE || doorY == Integer.MIN_VALUE) {
+                    return Map.of("error", "door zone 坐标缺失");
+                }
+                int dist = Math.abs(px - doorX) + Math.abs(py - doorY);
+                int radius = Math.max(1, MapContract.intOf(door.get("radius"), 1));
+                if (dist > radius + DOOR_PROXIMITY_SLACK) {
+                    return Map.of("error", "玩家未靠近该 door（距离 " + dist
+                            + " > 半径 " + radius + " + 容差 " + DOOR_PROXIMITY_SLACK + "）");
+                }
+            }
+            if (resolvedTarget.isBlank()) {
+                resolvedTarget = doorTargetOf(door);
+            }
+        } else if (resolvedTarget.isBlank()) {
+            return Map.of("error", "缺少目标地图（door_zone_id 或 target_map_id 至少其一）");
+        }
+        if (resolvedTarget.isBlank()) {
+            return Map.of("error", "该 door 未配置目标地图（缺 target/to/target_map_id 字段）");
+        }
+        if (resolvedTarget.equals(game.currentMapId)) {
+            return Map.of("error", "目标地图就是当前地图: " + resolvedTarget);
+        }
+
+        // 2) 目标地图就绪：已注册直接取；未注册自动生成并注册（尺寸取 door 可选 width/height，缺省继承当前图尺寸）
+        Map<String, Object> target = game.maps.get(resolvedTarget);
+        if (target == null) {
+            int tw = 0;
+            int th = 0;
+            if (door != null) {
+                tw = MapContract.intOf(door.get("width"), 0);
+                th = MapContract.intOf(door.get("height"), 0);
+            }
+            String doorTheme = door == null ? "" : String.valueOf(door.getOrDefault("prompt", door.getOrDefault("name", "")));
+            target = doGenerateAndRegister(game, resolvedTarget,
+                    doorTheme.isBlank() ? game.name : doorTheme, 0L, tw, th);
+            if (target == null) return Map.of("error", "目标地图生成失败: " + resolvedTarget);
+        }
+
+        // 3) 切换 + 状态迁移（角色/线索/AP/秘密/票型为对局级状态，天然保留；足迹按图隔离迁移）
+        String fromId = game.currentMapId;
+        if (fromId != null && !fromId.isBlank()) {
+            game.searchedByMap.put(fromId, new java.util.LinkedHashSet<>(game.searchedLocations));
+        }
+        game.currentMapId = resolvedTarget;
+        game.mapData = target;
+        game.mapFallbackReasons = new ArrayList<>(game.mapFallbacks.getOrDefault(resolvedTarget, List.of()));
+        game.mapWidth = MapContract.intOf(target.get("width"), game.mapWidth);
+        game.mapHeight = MapContract.intOf(target.get("height"), game.mapHeight);
+        game.searchedLocations.clear();
+        java.util.Set<String> targetSearched = game.searchedByMap.get(resolvedTarget);
+        if (targetSearched != null) game.searchedLocations.addAll(targetSearched);
+
+        saveSnapshot(game);
+        // 全员同步：现有 script_status SSE 全量推送（含新 map，前端消费）+ announcement SYSTEM 横幅（现有通道）
+        broadcastMapSwitch(game, fromId, resolvedTarget);
+        broadcastStatus(game);
+        log.info("Script game {} map switched {} → {} (size {}x{}) by {}",
+                sessionId, fromId, resolvedTarget, game.mapWidth, game.mapHeight, player);
+        return mapResponse(game, Map.of("switched", true, "from_map_id", fromId,
+                "to_map_id", resolvedTarget, "trigger_player", player));
+    }
+
+    /**
+     * P-0803-K: 在指定地图（缺省当前图）放置 door 型 zone（通往目标地图的门）。
+     * 编排/测试/DM 接口 —— 生成的地图默认无 door，需要多图连通时经本方法布门；
+     * LLM prompt 已预留 door 可选输出（target/to/target_map_id 字段）。
+     * x/y 缺失或落在不可通行格 → 自动吸附最近可通行格（容错，防校验错误）。
+     * door zone 可携带可选 width/height（自动生成目标图时按其尺寸生成，联动 P-0803-J 尺寸链路）。
+     */
+    public Map<String, Object> addDoorZone(String sessionId, String mapId, String zoneId, String name,
+                                           int x, int y, int radius, String targetMapId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        String target = (mapId == null || mapId.isBlank()) ? game.currentMapId : mapId.trim();
+        if (target == null || target.isBlank()) return Map.of("error", "地图尚未生成");
+        Map<String, Object> data = game.maps.get(target);
+        if (data == null) return Map.of("error", "地图不存在: " + target);
+        if (zoneId == null || zoneId.isBlank()) return Map.of("error", "缺少 door zone id");
+        if (targetMapId == null || targetMapId.isBlank()) return Map.of("error", "缺少目标地图（target_map_id 必填）");
+        String tm = targetMapId.trim();
+        if (tm.equals(target)) return Map.of("error", "door 不能指向自身所在地图");
+
+        int[] pos = snapWalkable(data, x, y);
+        if (pos == null) return Map.of("error", "地图无可用可通行格放置 door");
+
+        Map<String, Object> door = new LinkedHashMap<>();
+        door.put("id", zoneId.trim());
+        door.put("name", name == null || name.isBlank() ? zoneId.trim() : name);
+        door.put("type", "door");
+        door.put("x", pos[0]);
+        door.put("y", pos[1]);
+        door.put("radius", Math.max(1, radius));
+        door.put("target", tm);
+
+        // zones 重建（同 id 替换；data 为注册表实例，当前图时与 game.mapData 同一对象，原地生效）
+        List<Map<String, Object>> zones = new ArrayList<>();
+        if (data.get("zones") instanceof List<?> zl) {
+            for (Object o : zl) {
+                if (o instanceof Map<?, ?> z) zones.add(new LinkedHashMap<>((Map<String, Object>) z));
+            }
+        }
+        zones.removeIf(z -> zoneId.trim().equals(String.valueOf(z.get("id"))));
+        zones.add(door);
+        data.put("zones", zones);
+        saveSnapshot(game);
+        log.info("Script game {} door zone {} placed on {} → {} at ({},{})",
+                sessionId, zoneId, target, tm, pos[0], pos[1]);
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("map_id", target);
+        r.put("zone", door);
+        r.put("target_map_id", tm);
+        return r;
+    }
+
+    /** P-0803-K: 在地图数据 zones[] 中按 id 找 zone（无则 null）。 */
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> findZone(Map<String, Object> mapData, String zoneId) {
+        if (mapData == null || zoneId == null || zoneId.isBlank()) return null;
+        Object zonesObj = mapData.get("zones");
+        if (!(zonesObj instanceof List<?> zones)) return null;
+        for (Object o : zones) {
+            if (o instanceof Map<?, ?> z && zoneId.equals(String.valueOf(z.get("id")))) {
+                return new LinkedHashMap<>((Map<String, Object>) z);
+            }
+        }
+        return null;
+    }
+
+    /** P-0803-K: door zone 目标地图解析（宽容字段：target / to / target_map_id，取首个非空）。 */
+    private static String doorTargetOf(Map<String, Object> door) {
+        for (String k : new String[]{"target", "to", "target_map_id"}) {
+            Object v = door.get(k);
+            if (v != null && !String.valueOf(v).isBlank()) return String.valueOf(v).trim();
+        }
+        return "";
+    }
+
+    /**
+     * P-0803-K: (x,y) 可通行则原样返回；否则在 map 内找距其最近的曼哈顿可通行格；找不到返回 null。
+     * （x/y ≤ 0 视作未指定 → 全图最近可通行格）
+     */
+    private static int[] snapWalkable(Map<String, Object> mapData, int x, int y) {
+        int W = MapContract.intOf(mapData.get("width"), 0);
+        int H = MapContract.intOf(mapData.get("height"), 0);
+        int[][] collision = null;
+        if (mapData.get("layers") instanceof Map<?, ?> lm) {
+            collision = MapContract.intGrid(lm.get("collision"));
+        }
+        if (collision == null) return null;
+        if (x > 0 && y > 0 && y < collision.length && collision[y] != null
+                && x < collision[y].length && collision[y][x] == 0) {
+            return new int[]{x, y};
+        }
+        int bestD = Integer.MAX_VALUE;
+        int[] best = null;
+        for (int yy = 0; yy < collision.length && yy < H; yy++) {
+            if (collision[yy] == null) continue;
+            for (int xx = 0; xx < collision[yy].length && xx < W; xx++) {
+                if (collision[yy][xx] == 0) {
+                    int d = Math.abs(xx - (x > 0 ? x : 0)) + Math.abs(yy - (y > 0 ? y : 0));
+                    if (d < bestD) {
+                        bestD = d;
+                        best = new int[]{xx, yy};
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    /**
+     * P-0803-K: 切图全员同步 —— announcement SYSTEM 横幅（现有 AnnouncementService 通道，
+     * 总开关 roleplay.broadcast.script-phase-broadcast 同门控；与 script_status SSE 通道并存）。
+     * script_status 推送见 switchMap 内 broadcastStatus(game)（全量状态含新 map）。
+     */
+    private void broadcastMapSwitch(ScriptGame game, String fromId, String toId) {
+        if (announcementService == null || !announcementService.isScriptPhaseBroadcast()) return;
+        String title = game.name == null || game.name.isBlank() ? "剧本杀" : game.name;
+        String text = "【" + title + "】地图切换：" + (fromId == null || fromId.isBlank() ? "初始" : fromId)
+                + " → " + toId + " —— 请玩家们探索新场景！";
+        announcementService.enqueue(new BroadcastMessage(
+                UUID.randomUUID().toString(),
+                BroadcastMessage.Level.SYSTEM, "system", "system",
+                text, -1, -1, 0, BroadcastMessage.MODE_ANNOUNCEMENT,
+                // 切图是离散横幅事件：coalesceKey 按目标图区分，避免同窗口内重复切图被合并成 ×N
+                "script_map|" + toId,
+                java.time.Instant.now().toEpochMilli()));
     }
 
     /** 组装地图响应（map + 溯源 + 校验信息）。 */
@@ -1765,6 +2158,8 @@ public class ScriptGameService {
         content.put("session_id", game.sessionId);
         content.put("saved_at", LocalDateTime.now().toString());
         content.put("phase", game.phase.name());
+        // P-0803-K: 对局模式随快照落库（简单对话版重连后前端仍按 chat 隐藏搜证 UI；旧快照无此键 → 恢复 full）
+        content.put("mode", game.mode);
         content.put("name", game.name);
         content.put("background", game.background);
         content.put("truth", game.truth);
@@ -1792,8 +2187,23 @@ public class ScriptGameService {
         // 阶段 2: 对局地图（LLM/BSP 生成，契约 v1；旧快照无此键 → 恢复时置 null）
         content.put("map_data", game.mapData);
         content.put("map_fallback_reasons", new ArrayList<>(game.mapFallbackReasons));
+        // P-0803-J: 对局地图尺寸随快照落库（旧快照无此键 → 恢复为 0=未定，下次生成回退配置默认）
+        content.put("map_width", game.mapWidth);
+        content.put("map_height", game.mapHeight);
         // P-0803-E 方案 B: 搜证足迹落快照（旧快照无此键 → 恢复为空集合，前端零影响）
         content.put("searched_locations", new ArrayList<>(game.searchedLocations));
+        // P-0803-K: 多图注册表随快照落库（每图数据 + 溯源 + 足迹；旧快照无此键 → 恢复空注册表仅当前图）
+        List<Map<String, Object>> mapsList = new ArrayList<>();
+        for (Map.Entry<String, Map<String, Object>> e : game.maps.entrySet()) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("map_id", e.getKey());
+            entry.put("data", e.getValue());
+            entry.put("fallback_reasons", new ArrayList<>(game.mapFallbacks.getOrDefault(e.getKey(), List.of())));
+            entry.put("searched", new ArrayList<>(game.searchedByMap.getOrDefault(e.getKey(), java.util.Set.of())));
+            mapsList.add(entry);
+        }
+        content.put("maps", mapsList);
+        content.put("current_map_id", game.currentMapId);
         // P-0802-P3: player_id 绑定随快照落库（{playerId → characterName}）——
         // 恢复时按绑定重映射（改完名再重连：旧存档含旧名 → 恢复到新名）；无绑定回退旧名逻辑
         content.put("player_id_bindings", new LinkedHashMap<>(playerBindingsBySession.getOrDefault(game.sessionId, Map.of())));
@@ -1814,6 +2224,8 @@ public class ScriptGameService {
         ScriptGame game = new ScriptGame();
         game.sessionId = sessionId;
         game.phase = parsePhase(c.get("phase"));
+        // P-0803-K: 对局模式快照恢复（旧快照无此键/非 chat → 真剧本杀，零行为变化）
+        game.mode = "chat".equals(str(c.get("mode"))) ? "chat" : "full";
         game.name = str(c.get("name"));
         game.background = str(c.get("background"));
         game.truth = str(c.get("truth"));
@@ -1858,6 +2270,9 @@ public class ScriptGameService {
         if (md instanceof Map<?, ?> mm) {
             game.mapData = mapOf(mm);
         }
+        // P-0803-J: 对局地图尺寸快照恢复（旧快照无此键 → 0=未定）
+        game.mapWidth = intOf(c.get("map_width"), 0);
+        game.mapHeight = intOf(c.get("map_height"), 0);
         Object mfr = c.get("map_fallback_reasons");
         if (mfr instanceof List<?> list) {
             for (Object o : list) {
@@ -1870,6 +2285,37 @@ public class ScriptGameService {
                 String s = str(o);
                 if (s != null && !s.isBlank()) game.searchedLocations.add(s);
             }
+        }
+        // P-0803-K: 多图注册表恢复（旧快照无 maps 键 → 空注册表；map_data 存在时以当前图为唯一项）
+        game.currentMapId = str(c.get("current_map_id"));
+        if (c.get("maps") instanceof List<?> ml) {
+            for (Object o : ml) {
+                if (!(o instanceof Map<?, ?> mm)) continue;
+                String mid = str(mm.get("map_id"));
+                if (mid.isBlank() || !(mm.get("data") instanceof Map<?, ?> dm)) continue;
+                game.maps.put(mid, mapOf(dm));
+                List<String> fr = new ArrayList<>();
+                if (mm.get("fallback_reasons") instanceof List<?> fl) {
+                    for (Object x : fl) if (x != null) fr.add(str(x));
+                }
+                game.mapFallbacks.put(mid, fr);
+                java.util.Set<String> sd = new java.util.LinkedHashSet<>();
+                if (mm.get("searched") instanceof List<?> sl2) {
+                    for (Object x : sl2) {
+                        String s = str(x);
+                        if (!s.isBlank()) sd.add(s);
+                    }
+                }
+                game.searchedByMap.put(mid, sd);
+            }
+        }
+        // 兼容旧快照：无注册表但当前图存在 → 以当前图作为注册表唯一项（多图切换前向可用）
+        if (game.maps.isEmpty() && game.mapData != null) {
+            String mid = MapContract.str(game.mapData.get("map_id"), "");
+            if (mid.isBlank()) mid = nextMapId(game);
+            game.maps.put(mid, game.mapData);
+            if (game.currentMapId.isBlank()) game.currentMapId = mid;
+            game.mapFallbacks.put(mid, new ArrayList<>(game.mapFallbackReasons));
         }
 
         // P-0802-P3: 快照内 player_id 绑定恢复 + 按绑定重映射（旧存档含旧名 → 恢复到新名）

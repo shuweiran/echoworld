@@ -64,6 +64,13 @@ roleplay:
     dm:
       # 主持人面板 key（C4）：空=放开（与审批门同开放模式）；非空时 DM 端点需请求头 X-DM-Key 匹配，否则 403
       key: ""
+    map:
+      # 剧本杀地图默认尺寸（P-0803-J 地图容量扩展）：默认 24×16 保持既有行为。
+      # LLM 路径 token 预算上限约 40×24（ScriptMapService.LLM_MAX_WIDTH/HEIGHT）——显式请求尺寸超上限
+      # （如 64×64）直接走 BSP 确定性生成（大图路径，精确尺寸零截断）；热点数按面积自动缩放
+      # （BspMapGenerator.scaledZonesCount：24×16=384 格 → 3 个，64×64 → ≈10 个）。
+      default-width: 24
+      default-height: 16
     discussion:
       # 讨论引擎（GAP-3 批次 A + 批次 D 发言门控）：
       #   max-rounds=轮数（默认 2）；

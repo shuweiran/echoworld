@@ -164,6 +164,40 @@ class ScriptMapPersistenceTest {
     }
 
     @Test
+    @DisplayName("M9: 大图尺寸随快照持久化 —— 64×64 BSP 生成 + 重启恢复后尺寸保持")
+    void largeMapDimsPersisted() {
+        mockScriptLlm();
+        mockMapLlm();
+
+        String sid = SESSION + "-big-" + System.nanoTime();
+        svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
+
+        // 显式 64×64 重生成（超 LLM token 预算 40×24 → 直接 BSP 精确尺寸）
+        Map<String, Object> r = svc.generateMap(sid, "", 0, true, 64, 64);
+        assertEquals("bsp", ((Map<?, ?>) r.get("generator")).get("kind"));
+        Map<?, ?> map = (Map<?, ?>) r.get("map");
+        assertEquals(64, map.get("width"));
+        assertEquals(64, map.get("height"));
+        // 对局记录尺寸（regenerate 无显式尺寸时保持）
+        assertEquals(64, svc.getGame(sid).mapWidth);
+        assertEquals(64, svc.getGame(sid).mapHeight);
+
+        // 快照恢复（模拟重启：新实例不经过 initGame）→ 尺寸保持 64×64
+        String key = svc.getGame(sid).playerKeys.values().iterator().next();
+        ScriptGameService fresh = new ScriptGameService(llmClient, new ApprovalService(),
+                databaseService, null, null);
+        Map<String, Object> restored = fresh.resumeGame(sid, key);
+        Map<?, ?> rmap = (Map<?, ?>) restored.get("map");
+        assertEquals(64, rmap.get("width"));
+        assertEquals(64, rmap.get("height"));
+        assertEquals(64, fresh.getGame(sid).mapWidth, "恢复后对局记录尺寸保持");
+        assertEquals(64, fresh.getGame(sid).mapHeight);
+        // 恢复后 regenerate 无显式尺寸 → 保持 64×64（不回落默认 24×16）
+        Map<String, Object> r2 = fresh.generateMap(sid, "", 0, true);
+        assertEquals(64, ((Map<?, ?>) r2.get("map")).get("width"));
+    }
+
+    @Test
     @DisplayName("M6b: 无地图快照的旧对局恢复 → toMap 无 map 键（向前兼容）")
     void restoreLegacySnapshotWithoutMap() throws Exception {
         mockScriptLlm();

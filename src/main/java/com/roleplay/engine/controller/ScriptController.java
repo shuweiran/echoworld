@@ -81,6 +81,8 @@ public class ScriptController {
         @SuppressWarnings("unchecked")
         List<String> players = (List<String>) body.getOrDefault("players", List.of());
         String theme = (String) body.getOrDefault("theme", "默认主题");
+        // P-0803-K（剧本杀双版本）：对局模式 —— 缺省 "full"=真剧本杀（搜证+地图）/ "chat"=简单对话版（无取证，直接多人对话）
+        String mode = (String) body.getOrDefault("mode", "full");
         // C3: 可选房间码绑定（/api/rooms 6 位码 → 对局，重连入口；不传则跳过）
         String roomCode = (String) body.getOrDefault("room_code", "");
         // P-0802-P2：可选 player_id —— 按解析出的当前角色名登记绑定（角色库改名后即使 players 仍传旧名，
@@ -103,7 +105,7 @@ public class ScriptController {
                 scriptGameService.registerPlayerBinding(sessionId, playerId, resolved);
             }
         }
-        Map<String, Object> state = scriptGameService.initGame(sessionId, theme, players);
+        Map<String, Object> state = scriptGameService.initGame(sessionId, theme, players, mode);
         // D5: 将剧本局注册到 RouterService，secrets 随对话注入对应角色上下文
         ScriptGameService.ScriptGame game = scriptGameService.getGame(sessionId);
         if (game != null) {
@@ -119,7 +121,9 @@ public class ScriptController {
 
     /**
      * 阶段 2: 生成/获取对局地图（LLM 统一路径 → 校验 → BSP 降级，docs/地图JSON契约-v1.md）。
-     * body: session_id（可选，缺省用当前对局）/ theme（可选主题覆盖）/ seed（BSP 降级种子）/ regenerate（强制重生成）。
+     * body: session_id（可选，缺省用当前对局）/ theme（可选主题覆盖）/ seed（BSP 降级种子）/
+     *       width·height（可选显式尺寸，P-0803-J：≤0/缺失=默认 24×16；超 LLM token 预算 40×24 直接 BSP）/
+     *       regenerate（强制重生成）。
      * 返回 {map, generator, validation{ok,errors,warnings}, fallback[], cached}。
      */
     @PostMapping("/map")
@@ -135,8 +139,83 @@ public class ScriptController {
         } catch (NumberFormatException ignored) {
             // 非法 seed → 用默认
         }
+        // P-0803-J（地图容量扩展）：显式尺寸可选透传（非法/负数按 0=不指定处理 → 默认 24×16）
+        int width = 0;
+        int height = 0;
+        try {
+            width = Integer.parseInt(body.getOrDefault("width", "0"));
+        } catch (NumberFormatException ignored) {
+            // 非法 width → 用默认
+        }
+        try {
+            height = Integer.parseInt(body.getOrDefault("height", "0"));
+        } catch (NumberFormatException ignored) {
+            // 非法 height → 用默认
+        }
         boolean regenerate = Boolean.parseBoolean(body.getOrDefault("regenerate", "false"));
-        return ResponseEntity.ok(scriptGameService.generateMap(sessionId, theme, seed, regenerate));
+        // P-0803-K（多地图切换）：可选注册表键（缺省自动分配 map_<n>；显式指定可预生成命名地图）
+        String mapId = body.getOrDefault("map_id", "");
+        return ResponseEntity.ok(scriptGameService.generateMap(sessionId, theme, seed, regenerate, width, height, mapId));
+    }
+
+    /**
+     * P-0803-K（剧本杀模式多地图切换）：door zone 触发切图。
+     * body: session_id（可选，缺省当前对局）/ player（必填，触发者）/ player_key（可选，身份校验）/
+     *       door_zone_id（可选——给定必须为当前地图 type=door 的 zone；缺省走显式 target_map_id 直切）/
+     *       x·y（可选——触发者瓦片坐标，靠近校验；缺省跳过）/ target_map_id（可选——目标地图 id，
+     *       缺省取 door zone 的 target/to/target_map_id 字段；目标未注册自动生成）。
+     * 返回 {switched, from_map_id, to_map_id, map, generator, fallback, session_id}；非法 door 目标容错 error。
+     */
+    @PostMapping("/map/switch")
+    public ResponseEntity<Map<String, Object>> mapSwitch(@RequestBody Map<String, String> body) {
+        String sessionId = body.getOrDefault("session_id", currentSessionId);
+        if (sessionId == null || sessionId.isBlank()) {
+            return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        }
+        String player = body.getOrDefault("player", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        String doorZoneId = body.getOrDefault("door_zone_id", "");
+        String targetMapId = body.getOrDefault("target_map_id", "");
+        Integer px = parseIntOrNull(body.get("x"));
+        Integer py = parseIntOrNull(body.get("y"));
+        return ResponseEntity.ok(scriptGameService.switchMap(sessionId, player, playerKey, doorZoneId, px, py, targetMapId));
+    }
+
+    /**
+     * P-0803-K：在地图上放置 door 型 zone（多图连通的布门接口；生成的地图默认无 door，
+     * LLM prompt 已预留 door 可选输出）。
+     * body: session_id / map_id（可选，缺省当前图）/ zone_id（必填，唯一）/ name（可选）/
+     *       x·y（可选，瓦片坐标；缺失或不可通行自动吸附最近可通行格）/ radius（可选，默认 1）/
+     *       target_map_id（必填，该门通往的地图）。
+     * 返回 {ok, map_id, zone, target_map_id}。
+     */
+    @PostMapping("/map/door")
+    public ResponseEntity<Map<String, Object>> mapDoor(@RequestBody Map<String, String> body) {
+        String sessionId = body.getOrDefault("session_id", currentSessionId);
+        if (sessionId == null || sessionId.isBlank()) {
+            return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        }
+        String mapId = body.getOrDefault("map_id", "");
+        String zoneId = body.getOrDefault("zone_id", "");
+        String name = body.getOrDefault("name", "");
+        String targetMapId = body.getOrDefault("target_map_id", "");
+        Integer xi = parseIntOrNull(body.get("x"));
+        Integer yi = parseIntOrNull(body.get("y"));
+        Integer ri = parseIntOrNull(body.get("radius"));
+        int x = xi == null ? -1 : xi;
+        int y = yi == null ? -1 : yi;
+        int radius = ri == null ? 1 : ri;
+        return ResponseEntity.ok(scriptGameService.addDoorZone(sessionId, mapId, zoneId, name, x, y, radius, targetMapId));
+    }
+
+    /** 宽容整数解析（非法/缺失 → null）。 */
+    private static Integer parseIntOrNull(String s) {
+        if (s == null || s.isBlank()) return null;
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     /**

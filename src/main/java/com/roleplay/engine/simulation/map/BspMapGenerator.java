@@ -33,11 +33,28 @@ public final class BspMapGenerator {
                     seed <= 0 ? DEFAULT_SEED : seed, DEFAULT_MIN_LEAF, DEFAULT_MIN_ROOM, DEFAULT_ZONES_COUNT);
         }
 
+        /**
+         * 显式参数构造（P-0803-J 地图容量扩展）：width/height ≤0 → 默认 24×16；seed ≤0 → 默认种子；
+         * zonesCount &lt; 0 → 按面积自动缩放 {@link #scaledZonesCount}（默认 24×16 下等于 DEFAULT_ZONES_COUNT=3，
+         * 旧调用方传 -1 行为不变；大图传 -1 自动获得与面积匹配的热点数）。
+         */
         public static Options of(long seed, int width, int height, int zonesCount) {
-            return new Options(width <= 0 ? DEFAULT_WIDTH : width, height <= 0 ? DEFAULT_HEIGHT : height,
-                    MapContract.DEFAULT_TILE_SIZE, seed <= 0 ? DEFAULT_SEED : seed,
-                    DEFAULT_MIN_LEAF, DEFAULT_MIN_ROOM, zonesCount < 0 ? DEFAULT_ZONES_COUNT : zonesCount);
+            int w = width <= 0 ? DEFAULT_WIDTH : width;
+            int h = height <= 0 ? DEFAULT_HEIGHT : height;
+            return new Options(w, h, MapContract.DEFAULT_TILE_SIZE, seed <= 0 ? DEFAULT_SEED : seed,
+                    DEFAULT_MIN_LEAF, DEFAULT_MIN_ROOM, zonesCount < 0 ? scaledZonesCount(w, h) : zonesCount);
         }
+    }
+
+    /**
+     * 热点数按面积缩放（P-0803-J 地图容量扩展）：基准 24×16=384 格 ↔ DEFAULT_ZONES_COUNT=3，
+     * 平方根缩放（面积×4 → 热点×2）——大图不空旷（64×64≈4096 格 → ≈10 个热点）、小图不过密，
+     * 下限恒为 DEFAULT_ZONES_COUNT。实际 zone 数最终还受房间数封顶（生成时 min(zonesCount, rooms)）。
+     */
+    public static int scaledZonesCount(int width, int height) {
+        int area = Math.max(1, width) * Math.max(1, height);
+        double factor = Math.sqrt(area / (double) (DEFAULT_WIDTH * DEFAULT_HEIGHT));
+        return Math.max(DEFAULT_ZONES_COUNT, (int) Math.round(DEFAULT_ZONES_COUNT * factor));
     }
 
     private BspMapGenerator() {

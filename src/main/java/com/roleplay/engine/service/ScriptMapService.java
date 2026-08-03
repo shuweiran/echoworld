@@ -40,6 +40,14 @@ public class ScriptMapService {
     /** LLM 失败/超时/输出不合法时的 BSP 降级种子（可配置，勿 hardcode 纪律——见 yml roleplay.game.map.bsp-seed）。 */
     public static final long DEFAULT_BSP_SEED = 20260801L;
 
+    /**
+     * LLM 路径 token 预算上限（P-0803-J 地图容量扩展的尺寸分界线）：40×24 格 = 960 格，
+     * ground+collision 双层数组 ≈ 1920 个数字 ≈ 2500-3000 tokens，已逼近 callJson 4000 上限。
+     * 显式请求尺寸超此上限（如 64×64）→ 跳过 LLM 直接 BSP 确定性生成（精确尺寸、零截断风险）。
+     */
+    public static final int LLM_MAX_WIDTH = 40;
+    public static final int LLM_MAX_HEIGHT = 24;
+
     /** 同义词表（契约 §5 宽容映射预案）：键为 LLM 可能输出的变体，值为剧本标准地点。 */
     private static final Map<String, String> LOCATION_SYNONYMS = Map.ofEntries(
             Map.entry("客厅", "客厅"), Map.entry("大堂", "客厅"), Map.entry("大厅", "客厅"), Map.entry("会客厅", "客厅"),
@@ -64,18 +72,37 @@ public class ScriptMapService {
     }
 
     /**
-     * 生成地图（统一路径）。
+     * 生成地图（统一路径）——旧四参签名委托五参（width/height=0 → 默认 24×16，行为不变）。
+     */
+    public MapResult generateMap(String theme, List<String> locations, List<String> clueLocations, long seed) {
+        return generateMap(theme, locations, clueLocations, seed, 0, 0);
+    }
+
+    /**
+     * 生成地图（统一路径，P-0803-J 地图容量扩展：显式尺寸贯穿）。
      *
      * @param theme         主题（LLM prompt 输入）
      * @param locations     剧本 locations[]（房间语义参考 + zones 绑定时序）
      * @param clueLocations 剧本 clues[].location 去重列表（zones[].clue_location 对齐目标）
      * @param seed          BSP 降级种子（LLM 路径忽略）
+     * @param width         显式地图宽度（≤0 → 默认 24；超 {@link #LLM_MAX_WIDTH} 时跳过 LLM 直接 BSP）
+     * @param height        显式地图高度（≤0 → 默认 16；超 {@link #LLM_MAX_HEIGHT} 时跳过 LLM 直接 BSP）
      */
-    public MapResult generateMap(String theme, List<String> locations, List<String> clueLocations, long seed) {
+    public MapResult generateMap(String theme, List<String> locations, List<String> clueLocations, long seed,
+                                 int width, int height) {
         List<String> fallbackReasons = new ArrayList<>();
+        int effW = width > 0 ? width : BspMapGenerator.DEFAULT_WIDTH;
+        int effH = height > 0 ? height : BspMapGenerator.DEFAULT_HEIGHT;
 
-        // ── 路径 1：LLM 生成 → 归一 → 校验（不合法重试 1 次） ──
-        for (int attempt = 0; attempt < 2; attempt++) {
+        // ── 大图预算闸：显式尺寸超 LLM token 预算 → 跳过 LLM 直接 BSP（确定性、精确尺寸） ──
+        boolean llmBudgetOk = effW <= LLM_MAX_WIDTH && effH <= LLM_MAX_HEIGHT;
+        if (!llmBudgetOk) {
+            fallbackReasons.add("请求尺寸 " + effW + "×" + effH + " 超出 LLM token 预算上限 "
+                    + LLM_MAX_WIDTH + "×" + LLM_MAX_HEIGHT + " → 直接 BSP 生成（大图确定性路径）");
+        }
+
+        // ── 路径 1：LLM 生成 → 归一 → 校验（不合法重试 1 次；仅预算内尺寸尝试） ──
+        for (int attempt = 0; llmBudgetOk && attempt < 2; attempt++) {
             Map<String, Object> raw;
             try {
                 // G1-3（P-0803-D）：token 预算 800 → 4000。对照 D-023 同款缺陷（剧本 JSON 600 被硬截断）；
@@ -83,7 +110,8 @@ public class ScriptMapService {
                 // 估算输出 1300-2000+ tokens，800 必截断 → 高频 BSP 降级。4000 与 D-023 剧本档位对齐。
                 // P-0803-F（超时修复）：单次调用 45s 上限（比剧本 60s 更激进）——地图输出小于剧本，
                 // 45s 未完成说明模型慢/卡 → 快速走 BSP 降级，防止 init 自动串联（剧本+地图两次 LLM）被拖死超前端超时。
-                raw = llmClient.callJson(buildPrompt(theme, locations, clueLocations), 4000, 45);
+                // P-0803-J：prompt 内嵌本次要求尺寸（预算内）。
+                raw = llmClient.callJson(buildPrompt(theme, locations, clueLocations, effW, effH), 4000, 45);
             } catch (Exception e) {
                 log.warn("ScriptMapService: LLM call failed (attempt {}/2): {}", attempt + 1, e.getMessage());
                 raw = Map.of();
@@ -109,10 +137,10 @@ public class ScriptMapService {
             log.warn("ScriptMapService: LLM map invalid (attempt {}): {}", attempt + 1, v.errors());
         }
 
-        // ── 路径 2：BSP 降级（确定性兜底，校验器保证可通过） ──
+        // ── 路径 2：BSP 降级（确定性兜底，校验器保证可通过；显式尺寸 + 热点数按面积自动缩放） ──
         long effectiveSeed = seed <= 0 ? DEFAULT_BSP_SEED : seed;
-        Map<String, Object> bsp = BspMapGenerator.generate(BspMapGenerator.Options.of(effectiveSeed, 0, 0, -1));
-        fallbackReasons.add("降级：BSP 生成器兜底（seed=" + effectiveSeed + "）");
+        Map<String, Object> bsp = BspMapGenerator.generate(BspMapGenerator.Options.of(effectiveSeed, effW, effH, -1));
+        fallbackReasons.add("降级：BSP 生成器兜底（seed=" + effectiveSeed + "，尺寸 " + effW + "×" + effH + "）");
         MapValidator.Result v = MapValidator.validateMap(bsp);
         log.warn("ScriptMapService: fell back to BSP map (seed={}), validation ok={}", effectiveSeed, v.ok());
         Map<String, Object> bound = bindClueLocations(bsp, clueLocations);
@@ -301,10 +329,20 @@ public class ScriptMapService {
 
     // ═══════════════════════════════════════════════════════════
 
-    /** 地图生成 prompt（主题 + 地点/线索地点 → 契约 v1 JSON，zones.clue_location 与线索地点对齐）。 */
+    /** 地图生成 prompt（主题 + 地点/线索地点 → 契约 v1 JSON，zones.clue_location 与线索地点对齐）。旧签名委托新签名（尺寸不指定）。 */
     public static String buildPrompt(String theme, List<String> locations, List<String> clueLocations) {
+        return buildPrompt(theme, locations, clueLocations, 0, 0);
+    }
+
+    /** 地图生成 prompt（P-0803-J：显式尺寸嵌入——预算内 LLM 路径按本次要求尺寸输出）。 */
+    public static String buildPrompt(String theme, List<String> locations, List<String> clueLocations,
+                                     int width, int height) {
         String locs = locations == null || locations.isEmpty() ? "（自由发挥 4-6 个地点）" : String.join("、", locations);
         String clues = clueLocations == null || clueLocations.isEmpty() ? "（自由发挥）" : String.join("、", clueLocations);
+        String sizeHint = (width > 0 && height > 0)
+                ? "width/height 为格数（本次要求 " + width + " × " + height
+                + "，layers.ground/collision 二维数组必须严格为 height 行 × width 列）"
+                : "width/height 为格数（建议 20-32 × 14-20）";
         return """
             你是一个剧本杀地图设计师。请为以下剧本生成一张 2D 地图（地图 JSON 契约 v1）。
 
@@ -313,26 +351,28 @@ public class ScriptMapService {
             线索所在地点（zones[].clue_location 必须逐一取自这里）：%s
 
             地图要求：
-            - map_version: 1；width/height 为格数（建议 20-32 × 14-20）；tile_size: 32
+            - map_version: 1；%s；tile_size: 32
             - layers.ground：瓦片 id 二维数组（height 行 × width 列），1=木地板 2=墙 3=草地 4=地毯 5=石板
             - layers.collision：与 ground 同尺寸，1=不可通行（墙/外部边界）、0=可通行（房间/走廊内部）
               （房间内部必须是 0，热点与出生点不能埋在墙里）
             - rooms[]：每个房间 {id, name, x, y, w, h, tags}，x/y 为左上角格坐标，房间之间用走廊连通
             - corridors[]：可选，{id, from, to, points}，points 为四邻接连通路径 [[x,y],...]
             - zones[]：搜证热点（type 固定 "search"），每个热点 {id, name, type, x, y, radius, clue_location, prompt}，
-              clue_location 必须与「线索所在地点」一致，x/y 必须在可通行格上
+              clue_location 必须与「线索所在地点」一致，x/y 必须在可通行格上；
+              可选 door 型热点（type="door"，通往其他地图的门）：{id, name, type, x, y, radius, target}，
+              target 为目标地图 id（如 "map_2"），同样必须落在可通行格上
             - spawn_points[]：{id, type(player/npc), x, y}，1 个玩家出生点 + 2-4 个 npc 出生点，必须在可通行格上
 
             返回JSON格式（不要任何markdown标记，纯JSON）：
             {"map_version": 1, "map_id": "脚本地图", "name": "地图名", "theme": "主题描述",
-             "tile_size": 32, "width": 24, "height": 16,
+             "tile_size": 32, "width": %d, "height": %d,
              "tileset": {"src": "assets/tiles.png", "first_gid": 1, "tile_count": 5},
              "layers": {"ground": [[...]], "collision": [[...]]},
              "rooms": [{"id": "room_1", "name": "客厅", "x": 1, "y": 1, "w": 6, "h": 5, "tags": ["searchable"]}],
              "corridors": [],
              "zones": [{"id": "z_1", "name": "客厅八仙桌", "type": "search", "x": 3, "y": 3, "radius": 1, "clue_location": "客厅", "prompt": "..."}],
              "spawn_points": [{"id": "sp_player", "type": "player", "x": 2, "y": 2}]}
-            """.formatted(theme, locs, clues);
+            """.formatted(theme, locs, clues, sizeHint, width > 0 ? width : 24, height > 0 ? height : 16);
     }
 
     // ── 溯源信息 ──

@@ -23,6 +23,18 @@ public class SceneEntity {
     @Column(length = 2000)
     private String keywords;
 
+    /** P-0803-H：剧本/场景分类 —— general=一般模式 / werewolf=狼人杀模式（默认 general） */
+    @Column(length = 32)
+    private String category;
+
+    /** P-0803-H：剧本绑定默认角色组（JSON 数组字符串，如 ["苏哲","林诗"]；前端选择剧本时自动选中） */
+    @Column(length = 4000)
+    private String defaultRoles;
+
+    /** P-0803-H：剧本绑定默认地图（地图 JSON 契约 v1 字符串，可空；前端剧本卡点开后地图预览用） */
+    @Column(length = 40000)
+    private String defaultMap;
+
     private LocalDateTime createdAt;
 
     public SceneEntity() {}
@@ -51,6 +63,15 @@ public class SceneEntity {
 
     public String getKeywords() { return keywords; }
     public void setKeywords(String keywords) { this.keywords = keywords; }
+
+    public String getCategory() { return category; }
+    public void setCategory(String category) { this.category = category; }
+
+    public String getDefaultRoles() { return defaultRoles; }
+    public void setDefaultRoles(String defaultRoles) { this.defaultRoles = defaultRoles; }
+
+    public String getDefaultMap() { return defaultMap; }
+    public void setDefaultMap(String defaultMap) { this.defaultMap = defaultMap; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
