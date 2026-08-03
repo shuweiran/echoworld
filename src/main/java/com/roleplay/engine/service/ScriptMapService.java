@@ -78,7 +78,10 @@ public class ScriptMapService {
         for (int attempt = 0; attempt < 2; attempt++) {
             Map<String, Object> raw;
             try {
-                raw = llmClient.callJson(buildPrompt(theme, locations, clueLocations), 800);
+                // G1-3（P-0803-D）：token 预算 800 → 4000。对照 D-023 同款缺陷（剧本 JSON 600 被硬截断）；
+                // 地图 JSON 含 ground+collision 双层数组（20-32×14-20 格 ≈ 560-1280 个数字）+ rooms/zones/spawns，
+                // 估算输出 1300-2000+ tokens，800 必截断 → 高频 BSP 降级。4000 与 D-023 剧本档位对齐。
+                raw = llmClient.callJson(buildPrompt(theme, locations, clueLocations), 4000);
             } catch (Exception e) {
                 log.warn("ScriptMapService: LLM call failed (attempt {}/2): {}", attempt + 1, e.getMessage());
                 raw = Map.of();
@@ -93,9 +96,12 @@ public class ScriptMapService {
             MapValidator.Result v = MapValidator.validateMap(normalized);
             if (v.ok()) {
                 normalized.put("generator", generatorInfo("llm", attempt, seed));
-                log.info("ScriptMapService: LLM map OK (attempt {}), {} zones, {} rooms, {} spawns",
-                        attempt + 1, zoneCount(normalized), roomCount(normalized), spawnCount(normalized));
-                return new MapResult(bindClueLocations(normalized, clueLocations), v, fallbackReasons);
+                // P-0803-D（调研项 4 方案 A）：线索地点覆盖补齐——LLM 缺 zone 时自动补全
+                Map<String, Object> covered = ensureClueZoneCoverage(bindClueLocations(normalized, clueLocations), clueLocations);
+                log.info("ScriptMapService: LLM map OK (attempt {}), {} zones, {} rooms, {} spawns (coverage +{})",
+                        attempt + 1, zoneCount(covered), roomCount(covered), spawnCount(covered),
+                        zoneCount(covered) - zoneCount(normalized));
+                return new MapResult(covered, v, fallbackReasons);
             }
             fallbackReasons.add("LLM 输出校验失败（attempt " + (attempt + 1) + "）：" + String.join("；", v.errors()));
             log.warn("ScriptMapService: LLM map invalid (attempt {}): {}", attempt + 1, v.errors());
@@ -108,7 +114,10 @@ public class ScriptMapService {
         MapValidator.Result v = MapValidator.validateMap(bsp);
         log.warn("ScriptMapService: fell back to BSP map (seed={}), validation ok={}", effectiveSeed, v.ok());
         Map<String, Object> bound = bindClueLocations(bsp, clueLocations);
-        return new MapResult(bound, v, fallbackReasons);
+        // P-0803-D（调研项 4 方案 A）：BSP 兜底地图 zone（房间 A/B/C）与线索脱钩 → 覆盖补齐
+        Map<String, Object> covered = ensureClueZoneCoverage(bound, clueLocations);
+        log.info("ScriptMapService: BSP map coverage pass: {} → {} zones", zoneCount(bound), zoneCount(covered));
+        return new MapResult(covered, v, fallbackReasons);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -170,6 +179,122 @@ public class ScriptMapService {
             }
         }
         return trimmed;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  线索地点覆盖补齐 pass（调研项 4 方案 A：G4-1/G4-2）
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * 线索地点覆盖补齐：对每个 distinct 线索地点，若 zones 中无 search 型热点的 clue_location（已归一）
+     * 等于它，自动补一个 search zone（落在可通行格，优先同名房间中心）。一个 pass 同时解决
+     * BSP 兜底地图与线索脱钩（G4-1）与 LLM 地图缺 zone（G4-2）——地图搜证不再必然空手。
+     * 返回新 map；无新增时返回原 map 引用。放置算法保证新 zone 可通行 → 不引入校验错误。
+     */
+    @SuppressWarnings("unchecked")
+    public static Map<String, Object> ensureClueZoneCoverage(Map<String, Object> map, List<String> clueLocations) {
+        if (map == null || clueLocations == null || clueLocations.isEmpty()) return map;
+        List<Map<String, Object>> zones = new ArrayList<>();
+        if (map.get("zones") instanceof List<?> zl) {
+            for (Object o : zl) {
+                if (o instanceof Map<?, ?> z) zones.add(new LinkedHashMap<>((Map<String, Object>) z));
+            }
+        }
+        java.util.Set<String> covered = new java.util.HashSet<>();
+        for (Map<String, Object> z : zones) {
+            if ("search".equals(String.valueOf(z.getOrDefault("type", "search")))) {
+                String cl = String.valueOf(z.getOrDefault("clue_location", "")).trim();
+                if (!cl.isBlank()) covered.add(cl);
+            }
+        }
+        int W = MapContract.intOf(map.get("width"), 0);
+        int H = MapContract.intOf(map.get("height"), 0);
+        int[][] collision = null;
+        if (map.get("layers") instanceof Map<?, ?> lm) {
+            collision = MapContract.intGrid(lm.get("collision"));
+        }
+        int nextId = zones.size() + 1;
+        List<Map<String, Object>> added = new ArrayList<>();
+        for (String loc : clueLocations) {
+            if (loc == null || loc.isBlank()) continue;
+            String standard = loc.trim();
+            if (covered.contains(standard)) continue;
+            int[] pos = findZoneSpot(map, collision, W, H, standard);
+            if (pos == null) continue; // 畸形地图找不到可通行格 → 放弃该项，不阻塞
+            Map<String, Object> zone = new LinkedHashMap<>();
+            zone.put("id", "z_auto_" + (nextId++));
+            zone.put("name", standard + " 线索点");
+            zone.put("type", "search");
+            zone.put("x", pos[0]);
+            zone.put("y", pos[1]);
+            zone.put("radius", 1);
+            zone.put("clue_location", standard);
+            zone.put("prompt", "（自动覆盖补齐）这里似乎藏着什么线索……");
+            added.add(zone);
+        }
+        if (added.isEmpty()) return map;
+        List<Map<String, Object>> outZones = new ArrayList<>(zones);
+        outZones.addAll(added);
+        Map<String, Object> out = new LinkedHashMap<>(map);
+        out.put("zones", outZones);
+        return out;
+    }
+
+    /** 找一个可通行格放置自动 zone：优先同名房间中心 → 任意房间中心 → 全图扫描；失败返回 null。 */
+    private static int[] findZoneSpot(Map<String, Object> map, int[][] collision, int W, int H, String location) {
+        if (map.get("rooms") instanceof List<?> rooms) {
+            // 1) 同名房间（clue_location 与房间名一致 → 落在该房间中心附近）
+            for (Object o : rooms) {
+                if (!(o instanceof Map<?, ?> r)) continue;
+                if (!location.equals(MapContract.str(r.get("name"), ""))) continue;
+                int rx = MapContract.intOf(r.get("x"), 0), ry = MapContract.intOf(r.get("y"), 0);
+                int rw = MapContract.intOf(r.get("w"), 0), rh = MapContract.intOf(r.get("h"), 0);
+                int[] best = nearestWalkable(collision, W, H, rx + rw / 2, ry + rh / 2, rx, ry, rw, rh);
+                if (best != null) return best;
+            }
+            // 2) 任意房间中心
+            for (Object o : rooms) {
+                if (!(o instanceof Map<?, ?> r)) continue;
+                int rx = MapContract.intOf(r.get("x"), 0), ry = MapContract.intOf(r.get("y"), 0);
+                int rw = MapContract.intOf(r.get("w"), 0), rh = MapContract.intOf(r.get("h"), 0);
+                int[] best = nearestWalkable(collision, W, H, rx + rw / 2, ry + rh / 2, rx, ry, rw, rh);
+                if (best != null) return best;
+            }
+        }
+        // 3) 全图扫描（左上角起第一个可通行格）
+        if (collision != null) {
+            for (int y = 0; y < collision.length && y < H; y++) {
+                if (collision[y] == null) continue;
+                for (int x = 0; x < collision[y].length && x < W; x++) {
+                    if (collision[y][x] == 0) return new int[]{x, y};
+                }
+            }
+        }
+        return null;
+    }
+
+    /** 矩形区域内距 (cx,cy) 曼哈顿距离最近的可通行格；区域内无可通行格返回 null。 */
+    private static int[] nearestWalkable(int[][] collision, int W, int H, int cx, int cy, int rx, int ry, int rw, int rh) {
+        if (collision == null) return null;
+        int bestD = Integer.MAX_VALUE;
+        int[] best = null;
+        int x0 = Math.max(0, rx), y0 = Math.max(0, ry);
+        int x1 = Math.min(W, rx + rw), y1 = Math.min(H, ry + rh);
+        for (int y = y0; y < y1; y++) {
+            if (y >= collision.length || collision[y] == null) continue;
+            int[] row = collision[y];
+            for (int x = x0; x < x1; x++) {
+                if (x >= row.length) break;
+                if (row[x] == 0) {
+                    int d = Math.abs(x - cx) + Math.abs(y - cy);
+                    if (d < bestD) {
+                        bestD = d;
+                        best = new int[]{x, y};
+                    }
+                }
+            }
+        }
+        return best;
     }
 
     // ═══════════════════════════════════════════════════════════

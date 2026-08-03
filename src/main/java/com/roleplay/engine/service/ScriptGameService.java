@@ -184,6 +184,8 @@ public class ScriptGameService {
         Map<String, Object> mapData;
         /** 阶段 2: 地图生成溯源（generator/validation/fallback 原因）。 */
         List<String> mapFallbackReasons = new ArrayList<>();
+        /** P-0803-E 方案 B: 搜证足迹 —— 全局已搜过的地点（地图绿点恢复 + 面板/地图双通道同步，契约 §5 消费端）。 */
+        final java.util.Set<String> searchedLocations = new java.util.LinkedHashSet<>();
 
         public Map<String, Object> toMap(String playerName) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -227,6 +229,8 @@ public class ScriptGameService {
             if (mapData != null) {
                 m.put("map", mapData);
             }
+            // P-0803-E 方案 B: 搜证足迹（地图绿点恢复数据源；附加键不破坏既有契约，旧对局为空列表）
+            m.put("searched_locations", new ArrayList<>(searchedLocations));
             if (!discussionTranscript.isEmpty()) {
                 m.put("discussion", new ArrayList<>(discussionTranscript));
             }
@@ -395,6 +399,14 @@ public class ScriptGameService {
         persistScript(game);
         // C3: 初始快照落库（开房即有恢复点；断线重连/崩溃恢复基础）
         saveSnapshot(game);
+        // P-0803-D（地图增强，调研项 1 方案 A 自动串联）：剧本生成即自动生成地图。
+        // 失败不阻塞 init——generateMap 内部已有 LLM→BSP 兜底，此处仅防御性兜底；
+        // mapData 就位后 init 响应（toMap）自动附加 map 键，前端无需额外调用。
+        try {
+            generateMap(sessionId, "", 0L, false);
+        } catch (Exception e) {
+            log.warn("Script game {} auto map generation failed (non-blocking): {}", sessionId, e.getMessage());
+        }
         // GAP-8: 剧本生成完成，推送首阶段 + 状态
         broadcastPhase(game, "investigation");
         broadcastStatus(game);
@@ -441,6 +453,9 @@ public class ScriptGameService {
             .collect(Collectors.toList()));
 
         if (found.isEmpty()) {
+            // P-0803-E 方案 B: 搜证过且无更多线索 → 记录足迹（地图该地点绿点态；已搜空不再重复提示）
+            game.searchedLocations.add(location);
+            saveSnapshot(game);
             result.put("found", List.of());
             result.put("clues", List.of());
             result.put("result", "该地点没有更多可搜证线索");
@@ -470,6 +485,8 @@ public class ScriptGameService {
             game.playerClues.computeIfAbsent(player, k -> new ArrayList<>()).add(clueId);
             foundIds.add(clueId);
         }
+        // P-0803-E 方案 B: 搜证足迹（该地点已搜过，地图绿点同步数据源）
+        game.searchedLocations.add(location);
         // C3: 状态变更 → 快照落库（搜证结果/AP 扣减可恢复）
         saveSnapshot(game);
 
@@ -1775,6 +1792,8 @@ public class ScriptGameService {
         // 阶段 2: 对局地图（LLM/BSP 生成，契约 v1；旧快照无此键 → 恢复时置 null）
         content.put("map_data", game.mapData);
         content.put("map_fallback_reasons", new ArrayList<>(game.mapFallbackReasons));
+        // P-0803-E 方案 B: 搜证足迹落快照（旧快照无此键 → 恢复为空集合，前端零影响）
+        content.put("searched_locations", new ArrayList<>(game.searchedLocations));
         // P-0802-P3: player_id 绑定随快照落库（{playerId → characterName}）——
         // 恢复时按绑定重映射（改完名再重连：旧存档含旧名 → 恢复到新名）；无绑定回退旧名逻辑
         content.put("player_id_bindings", new LinkedHashMap<>(playerBindingsBySession.getOrDefault(game.sessionId, Map.of())));
@@ -1843,6 +1862,13 @@ public class ScriptGameService {
         if (mfr instanceof List<?> list) {
             for (Object o : list) {
                 if (o != null) game.mapFallbackReasons.add(str(o));
+            }
+        }
+        // P-0803-E 方案 B: 搜证足迹恢复（旧快照无此键 → 空集合，地图绿点不重建但功能不受损）
+        if (c.get("searched_locations") instanceof List<?> sl) {
+            for (Object o : sl) {
+                String s = str(o);
+                if (s != null && !s.isBlank()) game.searchedLocations.add(s);
             }
         }
 

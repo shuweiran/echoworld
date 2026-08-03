@@ -10,6 +10,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.mock.mockito.MockBean;
 import org.springframework.test.context.ActiveProfiles;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,7 +27,7 @@ import static org.mockito.Mockito.when;
  * 阶段 2 验收测试（Spring 上下文）：map_data 快照持久化 + 重启恢复（M6）。
  *
  * <p>@SpringBootTest + @MockBean LLMClient（与 ScriptPersistenceTest 同模式）：剧本生成走
- * callJson(…, 600)、地图生成走 callJson(…, 800)，按 maxTokens 区分 stub，互不串扰。
+ * callJson(…, 600)、地图生成走 callJson(…, 4000)（P-0803-D：token 预算 800→4000），按 maxTokens 区分 stub，互不串扰。
  * 验证：generateMap 落快照（type=snapshot 含 map_data）→ 新 service 实例 resumeGame 从快照
  * 重建对局 → toMap 仍携带地图（重启后地图不丢）。
  */
@@ -94,7 +96,7 @@ class ScriptMapPersistenceTest {
             Map.of("id", "sp1", "type", "player", "x", 2, "y", 2),
             Map.of("id", "sp2", "type", "npc", "x", 6, "y", 2)));
         m.put("generator", Map.of("kind", "llm", "model", "mock"));
-        when(llmClient.callJson(anyString(), eq(800))).thenReturn(m);
+        when(llmClient.callJson(anyString(), eq(4000))).thenReturn(m);
     }
 
     @Test
@@ -105,8 +107,9 @@ class ScriptMapPersistenceTest {
 
         String sid = SESSION + "-" + System.nanoTime();
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
+        // P-0803-D：init 已自动生成地图（mockMapLlm 命中 4000 档，LLM 路径）→ 首次调用即缓存命中
         Map<String, Object> r = svc.generateMap(sid, "", 0, false);
-        assertEquals(Boolean.FALSE, r.get("cached"));
+        assertEquals(Boolean.TRUE, r.get("cached"));
         assertNotNull(r.get("map"));
         assertEquals("llm", ((Map<?, ?>) r.get("generator")).get("kind"));
         // 取一个真实 roleKey（resumeGame 需 player_key 认证）
@@ -119,19 +122,60 @@ class ScriptMapPersistenceTest {
         assertNotNull(restored.get("map"), "快照恢复后地图可用");
         Map<?, ?> map = (Map<?, ?>) restored.get("map");
         assertEquals("llm", ((Map<?, ?>) map.get("generator")).get("kind"));
-        assertEquals(2, ((List<?>) map.get("zones")).size());
+        // P-0803-D：覆盖 pass 补齐线索地点（剧本 clues 含 客厅/书房/花园 → 3 个 zone）
+        assertEquals(3, ((List<?>) map.get("zones")).size());
         // 阶段/玩家也一并恢复
         assertEquals("investigation", restored.get("phase"));
         assertEquals(3, ((List<?>) restored.get("players")).size());
     }
 
     @Test
+    @DisplayName("M8: 搜证足迹持久化（方案 B）—— 搜证后 searched_locations 落快照 + toMap 暴露 + 恢复保留")
+    void searchedLocationsPersisted() {
+        mockScriptLlm();
+        mockMapLlm();
+
+        String sid = SESSION + "-foot-" + System.nanoTime();
+        svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
+        String key = svc.getGame(sid).playerKeys.values().iterator().next();
+
+        // Alice 搜证「客厅」（clue c1 location=客厅，public=false）→ 足迹记录
+        Map<String, Object> sr = svc.search(sid, "Alice", "客厅");
+        assertTrue(!String.valueOf(sr.get("result")).contains("没有更多"), "搜证应成功：" + sr.get("result"));
+        assertTrue(svc.getGame(sid).searchedLocations.contains("客厅"));
+        // 搜证空地点（花园：c3 是 public=true 无需搜证 → found 空）→ 足迹也记录（已搜空）
+        Map<String, Object> sr2 = svc.search(sid, "Bob", "花园");
+        assertTrue(String.valueOf(sr2.get("result")).contains("没有更多"), "花园无可搜线索");
+        assertTrue(svc.getGame(sid).searchedLocations.contains("花园"), "已搜空地点也计入足迹");
+
+        // toMap 暴露足迹
+        Map<String, Object> st = svc.getGame(sid).toMap("Alice");
+        List<?> exposed = (List<?>) st.get("searched_locations");
+        assertTrue(exposed.contains("客厅") && exposed.contains("花园"), "toMap 暴露足迹=" + exposed);
+
+        // 快照恢复后足迹保留（重启后地图绿点可重建）
+        ScriptGameService fresh = new ScriptGameService(llmClient, new ApprovalService(),
+                databaseService, null, null);
+        Map<String, Object> restored = fresh.resumeGame(sid, key);
+        List<?> rsl = (List<?>) restored.get("searched_locations");
+        assertTrue(rsl.contains("客厅") && rsl.contains("花园"), "恢复后足迹保留=" + rsl);
+        assertNotNull(restored.get("map"), "地图一并恢复");
+    }
+
+    @Test
     @DisplayName("M6b: 无地图快照的旧对局恢复 → toMap 无 map 键（向前兼容）")
-    void restoreLegacySnapshotWithoutMap() {
+    void restoreLegacySnapshotWithoutMap() throws Exception {
         mockScriptLlm();
         String sid = SESSION + "-legacy-" + System.nanoTime();
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
         String key = svc.getGame(sid).playerKeys.values().iterator().next();
+        // P-0803-D：init 已自动生成地图 → 模拟「旧对局无地图」：清空 mapData 后重落快照
+        Field f = ScriptGameService.ScriptGame.class.getDeclaredField("mapData");
+        f.setAccessible(true);
+        f.set(svc.getGame(sid), null);
+        Method m = ScriptGameService.class.getDeclaredMethod("saveSnapshot", ScriptGameService.ScriptGame.class);
+        m.setAccessible(true);
+        m.invoke(svc, svc.getGame(sid));
 
         ScriptGameService fresh = new ScriptGameService(llmClient, new ApprovalService(),
                 databaseService, null, null);

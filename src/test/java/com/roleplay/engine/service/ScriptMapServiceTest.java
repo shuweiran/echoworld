@@ -199,23 +199,24 @@ class ScriptMapServiceTest {
         String sid = "map-m5";
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
 
+        // P-0803-D：init 已自动生成地图 → 首次调用即缓存命中
         Map<String, Object> r1 = svc.generateMap(sid, "", 0, false);
-        assertEquals(Boolean.FALSE, r1.get("cached"));
+        assertEquals(Boolean.TRUE, r1.get("cached"));
         assertTrue(r1.get("map") instanceof Map<?, ?>);
         assertEquals("llm", ((Map<?, ?>) r1.get("generator")).get("kind"));
         assertEquals(sid, r1.get("session_id"));
 
-        // toMap 暴露 map
+        // toMap 暴露 map（init 响应即含 map）
         Map<String, Object> st = svc.getGame(sid).toMap("Alice");
         assertTrue(st.get("map") instanceof Map<?, ?>);
 
-        // 二次调用 → 缓存（不再调 LLM）
-        Map<String, Object> r2 = svc.generateMap(sid, "", 0, false);
-        assertEquals(Boolean.TRUE, r2.get("cached"));
+        // regenerate=true → 重生成（非缓存）
+        Map<String, Object> r2 = svc.generateMap(sid, "", 0, true);
+        assertEquals(Boolean.FALSE, r2.get("cached"));
 
-        // regenerate=true → 重生成
-        Map<String, Object> r3 = svc.generateMap(sid, "", 0, true);
-        assertEquals(Boolean.FALSE, r3.get("cached"));
+        // 重生成后再调 → 缓存
+        Map<String, Object> r3 = svc.generateMap(sid, "", 0, false);
+        assertEquals(Boolean.TRUE, r3.get("cached"));
 
         // getMap 独立入口
         Map<String, Object> gm = svc.getMap(sid);
@@ -229,7 +230,8 @@ class ScriptMapServiceTest {
         assertEquals("游戏不存在", svc.generateMap("nope", "", 0, false).get("error"));
         String sid = "map-m5b";
         svc.initGame(sid, "庄园", List.of("Alice", "Bob"));
-        assertEquals("地图尚未生成", svc.getMap(sid).get("error"));
+        // P-0803-D：init 自动生成地图 → getMap 直接可用（原「尚未生成」场景在自动串联后不可达）
+        assertTrue(svc.getMap(sid).get("map") instanceof Map<?, ?>);
     }
 
     @Test
