@@ -512,3 +512,5 @@ pm run build\（tsc -b 0 错误 + vite 64 modules，index-DEFyKJ5G.js 1,840,208B
 - 改动：api/client.ts（+joinConversation/leaveConversation）、phaser/SimulationScene.ts（群组框加入/离开悬浮按钮 + SceneCallbacks.onGroupAction + applyGroups opts{playerName,playerInWorld} + hitTestPointer 防误触）、phaser/PhaserSimulationView.tsx（handleGroupAction 交互闭环：成功/失败可见提示 + 手动触发 conversation-status 刷新；worldAgentsRef 玩家在场判定）、phaser/simulationData.ts（SimGroup +id/idleMs）
 - 交互闭环：可加入判定=玩家在场（worldAgents 含玩家名）+ 未在组内 + 非 DYAD（后端上限 2 必满）+ 组有 id；加入成功 → participants 含玩家名 → 4s 轮询自动变「离开对话」入口；后端错误 message（组满/重复/已在组/组不存在等）聊天面板系统消息 + 地图 toast 可见
 - 零后端改动（不动 RouterService/ArbiterService/审批/狼人杀/剧本杀/SSE 主链路/P-0803-E 地图增强功能本身）；未 git commit（统一 gate 未获授权）；8000 重启由主会话负责
+
+- 2026-08-03 16:2x（P-0803-F 超时修复批次）：相关 4 类测试 BUILD SUCCESS（LLMClient 超时重载 + 地图 45s + mock 3 参 stub）；排除 LONG-01 全量 BUILD SUCCESS；LONG-01 单独复跑 PASS（堆增长 -12.6%，全量环境 53.1% 为既有堆测量脆性 #37/#71 同款，非回归）；前端 npm build 65 modules
