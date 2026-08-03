@@ -1,6 +1,7 @@
 package com.roleplay.engine.simulation;
 
 import com.roleplay.engine.core.Persona;
+import com.roleplay.engine.simulation.conversation.ConversationManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -9,6 +10,7 @@ import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -254,6 +256,52 @@ public class SimulationController {
     @GetMapping("/conversation-status")
     public Map<String, Object> getConversationStatus() {
         return simulationService.getConversationStatus();
+    }
+
+    /**
+     * 方案A（轨道系统用户加入）：玩家加入现有对话组。
+     * <pre>{@code POST /api/simulation/group/{groupId}/join  {"player_name":"me"}}
+     * 200 → {"status":"ok","group":{"id":...,"mode":...,"participants":[...]}}
+     * 4xx → {"status":"error","message":"..."}（组不存在 / 角色不存在或不在场 / 已在组 / 组已满）</pre>
+     * 加入后 conversation-status（GET /api/simulation/conversation-status）的 participants 同步反映。
+     */
+    @PostMapping("/group/{groupId}/join")
+    public Map<String, Object> joinConversationGroup(
+            @PathVariable String groupId,
+            @RequestBody(required = false) Map<String, String> body) {
+        String playerName = body != null ? body.getOrDefault("player_name", "") : "";
+        if (playerName.isBlank()) {
+            return Map.of("status", "error", "message", "player_name required");
+        }
+        return joinResultMap(simulationService.joinGroup(groupId, playerName));
+    }
+
+    /**
+     * 方案A（轨道系统用户加入）：玩家离开对话组（组内无人时自动解散）。
+     * <pre>{@code POST /api/simulation/group/{groupId}/leave  {"player_name":"me"}}</pre>
+     */
+    @PostMapping("/group/{groupId}/leave")
+    public Map<String, Object> leaveConversationGroup(
+            @PathVariable String groupId,
+            @RequestBody(required = false) Map<String, String> body) {
+        String playerName = body != null ? body.getOrDefault("player_name", "") : "";
+        if (playerName.isBlank()) {
+            return Map.of("status", "error", "message", "player_name required");
+        }
+        return joinResultMap(simulationService.leaveGroup(groupId, playerName));
+    }
+
+    /** 方案A：join/leave 结果 → 既有端点风格响应（status ok/error + 组信息）。 */
+    private Map<String, Object> joinResultMap(ConversationManager.JoinResult result) {
+        if (!result.success()) {
+            return Map.of("status", "error", "message", result.message());
+        }
+        Map<String, Object> groupInfo = new LinkedHashMap<>();
+        groupInfo.put("id", result.group().getGroupId());
+        groupInfo.put("mode", result.group().getMode().name());
+        groupInfo.put("participants", result.group().getParticipantList().stream()
+                .map(AgentState::getAgentName).toList());
+        return Map.of("status", "ok", "message", result.message(), "group", groupInfo);
     }
 
     @GetMapping("/conversations")

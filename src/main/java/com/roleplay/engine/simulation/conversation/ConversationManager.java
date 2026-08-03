@@ -150,6 +150,93 @@ public class ConversationManager {
 
     private static final String PLAYER_AGENT_NAME = "me";
 
+    /** 方案A（轨道系统用户加入）：加入/离开对话组的结果。 */
+    public record JoinResult(boolean success, String message, ConversationGroup group) {
+        public static JoinResult ok(ConversationGroup group) {
+            return new JoinResult(true, "ok", group);
+        }
+        public static JoinResult fail(String message) {
+            return new JoinResult(false, message, null);
+        }
+    }
+
+    /**
+     * 方案A：玩家加入现有对话组（唯一入口：POST /api/simulation/group/{groupId}/join）。
+     * 校验链：组存在且活跃 → 玩家对应角色存在且在场 → 未在组内 → 组未满 → 加入。
+     * 加入后：在场状态与既有 startGroup 路径一致（inConversation=true + 冻结 + 速度清零），
+     * 组内轨道重算（玩家与 NPC 同等按距离/规则判定）；tick 不得踢出（见 tick 的 isBusy 防护）。
+     * 并发安全：成员表变更与后台 executeRound 的读取经组对象锁互斥（addParticipant/getParticipantList）。
+     */
+    public JoinResult joinGroup(String groupId, String playerName) {
+        ConversationGroup group = activeGroups.get(groupId);
+        if (group == null) return JoinResult.fail("group not found: " + groupId);
+        if (!group.isActive()) return JoinResult.fail("group not active: " + groupId);
+        AgentState player = world == null ? null : world.getState(playerName);
+        if (player == null) return JoinResult.fail("agent not found in world: " + playerName);
+        if (group.containsAgent(playerName)) return JoinResult.fail("player already in group: " + playerName);
+        if (group.getParticipantCount() >= group.getMaxParticipants()) {
+            return JoinResult.fail("group full: " + groupId);
+        }
+        boolean added = group.addParticipant(player);
+        if (!added) return JoinResult.fail("join rejected by group: " + groupId);
+        player.setInConversation(true);
+        player.setVx(0);
+        player.setVy(0);
+        group.freeze(playerName);
+        recomputeTrackAssignments(group);
+        log.info("Player {} joined group {} | mode={} | members={}", playerName, groupId, group.getMode(),
+                group.getParticipantList().stream().map(AgentState::getAgentName).toList());
+        return JoinResult.ok(group);
+    }
+
+    /**
+     * 方案A：玩家离开对话组。还原在场状态（inConversation=false + 解冻 + 速度清零）并重算组内轨道；
+     * 组内已无成员 → 解散（含冷却/主题收尾，对齐 dissolveGroup）。
+     */
+    public JoinResult leaveGroup(String groupId, String playerName) {
+        ConversationGroup group = activeGroups.get(groupId);
+        if (group == null) return JoinResult.fail("group not found: " + groupId);
+        AgentState player = world == null ? null : world.getState(playerName);
+        if (player == null) return JoinResult.fail("agent not found in world: " + playerName);
+        if (!group.containsAgent(playerName)) return JoinResult.fail("player not in group: " + playerName);
+        boolean removed = group.removeParticipant(playerName);
+        if (!removed) return JoinResult.fail("leave rejected by group: " + groupId);
+        player.setInConversation(false);
+        player.setVx(0);
+        player.setVy(0);
+        group.unfreeze(playerName);
+        if (group.getParticipantCount() == 0) {
+            dissolveGroup(groupId);
+        } else {
+            recomputeTrackAssignments(group);
+        }
+        log.info("Player {} left group {} | members={}", playerName, groupId,
+                group.getParticipantList().stream().map(AgentState::getAgentName).toList());
+        return JoinResult.ok(group);
+    }
+
+    /** 重算组内全部成员的轨道分配（join/leave 后即时生效；每 tick 由 SimulationOrchestrator 再回写）。 */
+    private void recomputeTrackAssignments(ConversationGroup group) {
+        try {
+            Map<String, TrackAssignment> assignments;
+            if (trackDirector != null) {
+                // Phase 3: Track Director decides who-knows-what (score + secrets + goals).
+                Map<String, String> goals = goalSupplier != null ? goalSupplier.get() : Map.of();
+                assignments = trackDirector.assign(group.getParticipantList(), goals);
+            } else {
+                // Legacy Phase 1/2 path: pure spatial resolution (unchanged behavior).
+                SpatialTrackResolver trackResolver = new SpatialTrackResolver(CONVERSATION_DISTANCE_THRESHOLD);
+                assignments = trackResolver.resolve(group.getParticipantList());
+            }
+            group.setTrackAssignments(assignments);
+            log.info("Group {} track assignments: {}", group.getGroupId(),
+                    assignments.values().stream()
+                            .map(a -> a.agentId() + "=" + a.type()).toList());
+        } catch (Exception e) {
+            log.warn("Track assignment failed for group {}, continuing without: {}", group.getGroupId(), e.getMessage());
+        }
+    }
+
     public void tick(long now) {
         List<AgentState> allStates = new ArrayList<>(world.getAllStates().values());
         if (allStates.size() < 2) return;
@@ -168,6 +255,10 @@ public class ConversationManager {
         // If any player-controlled agent has a pending message, start a conversation with nearest agent
         for (AgentState player : allStates) {
             if (!player.isPlayerControlled()) continue;
+            // 方案A：玩家已在任一对话组内（手动加入或既有 DYAD）→ 跳过自动建 DYAD 双路径；
+            // 其消息由所在组 executeRound 的玩家发言链路（下方 L346-354 同款）下一轮消费，
+            // 不新建第二组，tick 排除自动建组的逻辑不误伤手动加入的组。
+            if (isBusy(player)) continue;
             if (player.getCurrentMessage() == null || player.getCurrentMessage().isEmpty()
                     || player.getCurrentMessage().startsWith("(主控")) continue;
             AgentState nearest = null;
@@ -226,29 +317,15 @@ public class ConversationManager {
         final ConversationStrategy strategy = strat;
         final ConversationMode finalMode = mode;
 
-        ConversationGroup group = new ConversationGroup(groupId, mode, members);
+        ConversationGroup group = new ConversationGroup(groupId, mode, members,
+                // 方案A：DYAD 对偶组有参与者上限 2（一对一语义，禁 join 破坏 1v1，见调研 §4.2 #5）；
+                // 其余模式默认不限（上限 Integer.MAX_VALUE）。
+                mode == ConversationMode.DYAD ? 2 : Integer.MAX_VALUE);
 
         // Phase 1 Track fusion: compute spatial track assignments (MERGED/WEAK/ISOLATED)
         // at group creation and store them on the group. Phase 1 only stores —
         // Phase 2 (TrackStrategy) will read these to drive context visibility.
-        try {
-            Map<String, TrackAssignment> assignments;
-            if (trackDirector != null) {
-                // Phase 3: Track Director decides who-knows-what (score + secrets + goals).
-                Map<String, String> goals = goalSupplier != null ? goalSupplier.get() : Map.of();
-                assignments = trackDirector.assign(members, goals);
-            } else {
-                // Legacy Phase 1/2 path: pure spatial resolution (unchanged behavior).
-                SpatialTrackResolver trackResolver = new SpatialTrackResolver(CONVERSATION_DISTANCE_THRESHOLD);
-                assignments = trackResolver.resolve(members);
-            }
-            group.setTrackAssignments(assignments);
-            log.info("Group {} track assignments: {}", groupId,
-                    assignments.values().stream()
-                            .map(a -> a.agentId() + "=" + a.type()).toList());
-        } catch (Exception e) {
-            log.warn("Track assignment failed for group {}, continuing without: {}", groupId, e.getMessage());
-        }
+        recomputeTrackAssignments(group);
 
         for (AgentState s : members) {
             s.setInConversation(true);

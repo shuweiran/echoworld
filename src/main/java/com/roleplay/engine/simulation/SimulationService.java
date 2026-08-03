@@ -298,6 +298,16 @@ public class SimulationService {
         return conversationManager.getStatus();
     }
 
+    /** 方案A（轨道系统用户加入）：玩家加入现有对话组（委托 ConversationManager 原语）。 */
+    public ConversationManager.JoinResult joinGroup(String groupId, String playerName) {
+        return conversationManager.joinGroup(groupId, playerName);
+    }
+
+    /** 方案A（轨道系统用户加入）：玩家离开对话组。 */
+    public ConversationManager.JoinResult leaveGroup(String groupId, String playerName) {
+        return conversationManager.leaveGroup(groupId, playerName);
+    }
+
     public void sendUserDirective(String directive) {
         world.setUserDirective(directive);
         log.info("User directive: {}", directive);
