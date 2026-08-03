@@ -10,7 +10,7 @@ public class SceneEntity {
     @Id
     private String id; // scene_id
 
-    @Column(nullable = false)
+    @Column(nullable = false, length = 2000)
     private String name;
 
     @Column(length = 5000)

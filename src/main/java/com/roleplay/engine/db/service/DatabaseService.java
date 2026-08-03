@@ -130,7 +130,10 @@ public class DatabaseService {
         String agentStr = agents != null ? String.join(",", agents) : "";
         SceneEntity entity = sceneRepo.findById(sceneId)
                 .orElse(new SceneEntity(sceneId, name, description, agentStr));
-        entity.setName(name != null ? name : "未命名场景");
+        // P-0803-G（HTTP 500 修复）：LLM 生成的剧本 metadata.title 可能远超 255（实测 268 字符），
+        // scenes.name VARCHAR(255) 超长 → H2 DataIntegrityViolation → 500。双保险：① 列宽扩到 2000；
+        // ② 落库前截断到 500（覆盖所有调用方，防 LLM 极端超长输出；内存态 game.name 不受影响）。
+        entity.setName(truncateName(name, 500));
         entity.setDescription(description != null ? description : "");
         entity.setInitialAgentNames(agentStr);
         entity.setKeywords(keywords != null ? keywords : "");
@@ -326,6 +329,12 @@ public class DatabaseService {
         if (o == null) return null;
         String s = String.valueOf(o);
         return s.isEmpty() ? null : s;
+    }
+
+    /** P-0803-G：剧本名截断（LLM metadata.title 可能超长，防 scenes.name 列溢出） */
+    private static String truncateName(String name, int maxLen) {
+        if (name == null || name.isEmpty()) return "未命名场景";
+        return name.length() <= maxLen ? name : name.substring(0, maxLen);
     }
 
     private Map<String, Object> entityToMap(SceneEntity e) {
