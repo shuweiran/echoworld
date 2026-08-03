@@ -11,6 +11,7 @@ public class ScriptEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(length = 2000)  // P-0803-H：剧本名（LLM title + "剧本："/"对局结果：" 前缀），255 会溢出 → 500（17:15 实测）
     private String name;
 
     @Column(columnDefinition = "TEXT")

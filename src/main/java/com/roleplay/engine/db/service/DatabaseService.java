@@ -77,6 +77,8 @@ public class DatabaseService {
     @Transactional
     public Map<String, Object> saveCharacter(String name, String persona,
                                               String voice, String background, String playerId) {
+        // P-0803-H：角色名截断（用户 API 可传超长名 → characters.name(255) 溢出 500；200 上限留余量）
+        name = truncateName(name, 200);
         CharacterEntity entity = characterRepo.findByName(name)
                 .orElse(new CharacterEntity(name, persona, voice, background, playerId));
         entity.setPersona(persona != null ? persona : "");
@@ -127,6 +129,19 @@ public class DatabaseService {
     public Map<String, Object> saveScene(String sceneId, String name,
                                           String description, List<String> agents,
                                           String keywords) {
+        // P-0803-H：旧五参调用方（剧本杀链路 enterScene 建临时场景等）委托新重载，默认值保持旧行为
+        return saveScene(sceneId, name, description, agents, keywords, "general", "[]", null);
+    }
+
+    /**
+     * P-0803-H：带剧本绑定的场景落库重载 —— category（一般/狼人杀）+ defaultRoles（JSON 数组串）+
+     * defaultMap（地图 JSON 串，可空）。旧五参重载委托本方法（默认 general / 空角色组 / 无地图）。
+     */
+    @Transactional
+    public Map<String, Object> saveScene(String sceneId, String name,
+                                          String description, List<String> agents,
+                                          String keywords, String category,
+                                          String defaultRolesJson, String defaultMapJson) {
         String agentStr = agents != null ? String.join(",", agents) : "";
         SceneEntity entity = sceneRepo.findById(sceneId)
                 .orElse(new SceneEntity(sceneId, name, description, agentStr));
@@ -137,6 +152,17 @@ public class DatabaseService {
         entity.setDescription(description != null ? description : "");
         entity.setInitialAgentNames(agentStr);
         entity.setKeywords(keywords != null ? keywords : "");
+        // P-0803-H：category 非法值归一 general；defaultRoles/defaultMap 语义：
+        // null=不修改保留旧值；defaultRoles 空串→清空为 []；defaultMap 空串→清空为 null（前端「清除地图」用）
+        String cat = category;
+        if (cat == null || cat.isBlank()) cat = "general";
+        entity.setCategory(cat);
+        if (defaultRolesJson != null) {
+            entity.setDefaultRoles(defaultRolesJson.isBlank() ? "[]" : defaultRolesJson);
+        }
+        if (defaultMapJson != null) {
+            entity.setDefaultMap(defaultMapJson.isBlank() ? null : defaultMapJson);
+        }
         if (entity.getCreatedAt() == null) {
             entity.setCreatedAt(LocalDateTime.now());
         }
@@ -215,6 +241,9 @@ public class DatabaseService {
 
     @Transactional
     public Map<String, Object> saveScript(String name, Map<String, Object> content) {
+        // P-0803-H：落库前截断（调用点拼 "剧本："+game.name / "对局结果："+game.name，title 已源头规约 100，
+        // 但快照/其它来源仍可能超长；500 兜底与 saveScene 的 truncateName 同策略）
+        name = truncateName(name, 500);
         String contentJson;
         try {
             contentJson = content != null ? mapper.writeValueAsString(content) : "{}";
@@ -343,6 +372,10 @@ public class DatabaseService {
         map.put("name", e.getName());
         map.put("description", e.getDescription());
         map.put("keywords", e.getKeywords() != null ? e.getKeywords() : "");
+        // P-0803-H：category / default_roles / default_map 三个绑定键（宽容解析：旧行/空值给默认，不崩）
+        map.put("category", e.getCategory() != null && !e.getCategory().isBlank() ? e.getCategory() : "general");
+        map.put("default_roles", parseRoleList(e.getDefaultRoles()));
+        map.put("default_map", parseJsonMap(e.getDefaultMap()));
         String agents = e.getInitialAgentNames();
         if (agents != null && !agents.isEmpty()) {
             map.put("initial_agent_names", List.of(agents.split(",")));
@@ -351,6 +384,35 @@ public class DatabaseService {
         }
         map.put("createdAt", e.getCreatedAt() != null ? e.getCreatedAt().toString() : null);
         return map;
+    }
+
+    /** P-0803-H：defaultRoles JSON 数组串 → List（宽容解析：空/非法 → 空列表） */
+    private static List<String> parseRoleList(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        try {
+            Object v = new ObjectMapper().readValue(raw, Object.class);
+            if (v instanceof List<?> list) {
+                List<String> out = new ArrayList<>();
+                for (Object o : list) if (o != null && !String.valueOf(o).isBlank()) out.add(String.valueOf(o));
+                return out;
+            }
+        } catch (Exception ignored) {
+            // 非 JSON（旧逗号分隔等）→ 按逗号拆分兜底
+            List<String> out = new ArrayList<>();
+            for (String s : raw.split(",")) if (!s.isBlank()) out.add(s.trim());
+            return out;
+        }
+        return List.of();
+    }
+
+    /** P-0803-H：defaultMap JSON 串 → Map/List（宽容解析：空/非法 → null） */
+    private static Object parseJsonMap(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return new ObjectMapper().readValue(raw, Object.class);
+        } catch (Exception ignored) {
+            return null;
+        }
     }
 
     private Map<String, Object> entityToMap(ConversationLogEntity e) {

@@ -159,6 +159,9 @@ public class ScriptController {
         if (sessionId.isBlank()) {
             return ResponseEntity.ok(Map.of("error", "缺少对局标识（game_id / room_code / player_key 至少其一）"));
         }
+        // P-0803-H2：恢复成功后将对局设为当前对局（status/SSE/keys 按 currentSessionId 定位；
+        // 否则重启后 status 恒 idle，前端 scriptState 无法恢复）
+        this.currentSessionId = sessionId;
         return ResponseEntity.ok(scriptGameService.resumeGame(sessionId, playerKey == null ? "" : playerKey));
     }
 

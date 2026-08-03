@@ -152,7 +152,10 @@ public final class ScriptSchemaV1 {
     public static String title(Map<String, Object> script) {
         if (script == null) return "";
         String t = str(meta(script, "title"));
-        return t.isBlank() ? str(script.get("name")) : t;
+        String result = t.isBlank() ? str(script.get("name")) : t;
+        // P-0803-H（源头治理）：LLM 可能把整段描述写进 title（实测 268 字符），下游 scenes.name/scripts.name 都吃这个值。
+        // 源头规约到 100 字符，一劳永逸防列溢出（各落库层另有截断兜底）。
+        return result.length() <= 100 ? result : result.substring(0, 100);
     }
 
     public static String background(Map<String, Object> script) {
