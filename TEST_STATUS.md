@@ -7,16 +7,18 @@
 
 ---
 
-## 📊 当前基线（最新汇总，2026-08-03 13:1x）
+## 📊 当前基线（最新汇总，2026-08-03 25:0x）
 
 | 指标 | 值 |
 |---|---|
-| 测试类 | **54** |
-| 测试用例 | **378（373 基线 + P-0803-H SceneBindingTest 5）** |
+| 测试类 | **58** |
+| 测试用例 | **407（403 基线零破坏 + 新增 SceneMapLlmModeTest 4 用例：LLM 模式成功/无 theme BSP 零回归/LLM 失败 BSP 兜底/4 参构造防御）** |
 | Failures / Errors | **0 / 0** |
-| 最后全量执行 | 2026-08-03 18:15（**P-0803-H 剧本选择与角色卡功能改造批次：全量 378/0 BUILD SUCCESS**，54 类 surefire 汇总，LONG-01 PASS；覆盖：SceneEntity/SceneController 剧本绑定三字段（category/default_roles/default_map）+ POST /api/scenes/map BSP 默认地图生成；详见 Round 34） |
+| 最后全量执行 | 2026-08-03 24:5x（**P-0803-O 两条地图链路 LLM 全量生成批次：全量 407/0 BUILD SUCCESS**，58 类 surefire 汇总，LONG-01 PASS 2.529s；后端 SceneController.generateDefaultMap 双模式 + 前端剧本编辑弹窗生成方式选择 + 剧本杀设置页地图区 theme 暴露；详见 Round 40） |
 | 环境 | H2 mem + mock LLM（application-test.yml） |
 | 真机验证 | **merged 正式版 7 项 PASS**（2026-08-01 13:05，台账 #47）；**P1 剧本生成 maxTokens 修复 4/4 完整生成 PASS**（2026-08-01 18:45，台账 #57：真实 LLM 生成完整 schema v1 剧本 4/4 次，不再走 defaultScript 兜底；讨论自动进 VOTE 且发言多样）；**Phaser 阶段2 已通过未衡终审（2026-08-01 20:4x，三阶段全闭环，8000 重启生效 PID 25760，见 v15）** |
+
+> v40 更新（2026-08-03 24:5x，**P-0803-O 两条地图链路 LLM 全量生成批次**（主人需求「都加上 llm全量生成」），基线 403 → **407 tests / 58 类**）：①**后端 SceneController.generateDefaultMap 双模式**——POST /api/scenes/map body 可选 theme：非空 → ScriptMapService LLM 全量生成统一路径（LLM 完整输出 ground+collision 双层数组 + rooms/zones/spawns → 契约 v1 校验 → 失败/超预算 BSP 兜底），响应附加 mode/generator/validation/fallback 溯源键；空/缺省 → P-0803-H BSP 确定性零回归。注入可行性已核实：ScriptMapService 为 @Service 仅依赖 LLMClient，SceneController→ScriptMapService→LLMClient 无环，5 参 @Autowired 构造 + 4 参旧构造委托 null（防御回落 BSP）。②**新增 SceneMapLlmModeTest 4 用例**——O1 带 theme → LLM 全量（kind=llm/mode=llm/契约 v1 全量元素/校验通过/无兜底）；O2 无 theme（null/空串/空白）→ BSP 确定性零回归（kind=bsp + 同 seed 同输出）；O3 LLM 空输出 → bsp-fallback + fallback 原因含「输出为空」+ 兜底地图契约 v1 自洽；O4 4 参构造（mapService=null）带 theme → 防御回落 BSP 不崩。单跑 SceneMapLlmModeTest 4/0 + SceneBindingTest 5/0（BSP 零回归复验）。③**前端**——剧本编辑弹窗「生成方式」选择（✨ LLM 全量生成需主题 / BSP 默认无主题）+ LLM 主题输入（占位「民国宅邸凶案」），生成后绑定 default_map 逻辑不变，既有 BSP「生成默认地图」按钮保留为 BSP 模式入口；剧本杀设置页地图区（gameSetup 双版本 + rules script tab 两处）theme 暴露为可编辑输入（mapTheme 状态默认剧本名、可改，genScriptMap/genScript chat 自动地图/doResumeScript 均消费）；client.ts sceneMap 改收 body{seed?,theme?}（无参调用向后兼容）。④**构建**——npm run build 通过（tsc 0 错误 + vite 65 modules，index-StVXWN_F.js 1,863.64 kB）+ static 同步（SHA256 dist?static 一致 + index.html 引用更新 + 删除 index-Cx-YssBi.js，CSS 未变 index-BC-6X7pW.css）+ bundle grep 命中（生成方式：/LLM 全量生成/BSP 默认/民国宅邸凶案/LLM 全量输出（契约 v1 校验）/失败自动 BSP 兜底/BSP 确定性生成（契约 v1）/默认剧本名可改/sceneMap body 签名）。⑤**兼容性**——BSP 模式零回归（SceneBindingTest 5/0 全绿 + O2 复验）；禁动文件（RouterService/ArbiterService/审批/狼人杀/剧本杀 Service/SSE 主链路）零改动；ChatPage 零改动；seed 参数双模式均透传。⑥**遗留**——剧本杀设置页 seed/尺寸参数后端已支持（P-0803-J/K），UI 空间不允许未暴露（保持现状，报告说明）；LLM 模式为真实 LLM 调用（成本/延迟与对局地图同档，测试走 mock）；详见 Round 40 / 台账 #100 / DECISION_LOG D-035
 
 > v22 更新（2026-08-02 21:1x，**P-0802-H 狼人杀后端授权批次**（主会话派单指定 P-0802-E 被 C-2 占用 → 顺延 F 与 C-2-A 撞标 → 改登 H），基线 276 → **293 tests / 39 类**）：新增 WerewolfAiPlannerTest 9 用例（狼刀不刀狼/狼队共刀/人类狼不代刀、预言家查验、女巫首夜救被刀者/概率毒（1.0 必毒/0.0 不毒同种子对照）、夜间完成判定、猎人反杀目标（有目标/只剩自己空串）、白天投票（村民随机非己/狼队共投非狼/已投不重复））+ WerewolfGameFixTest 8 用例（parseRole 宽容解析中英文别名/非法回退村民、initGame 别名 customRoles 不抛异常、controller init 返回 session_id+verify router.setWerewolfGame、SSE 事件流（init 玩家·角色→夜间结算→白天讨论→投票→等待真人→真人投票后结算推送，含讨论发言 werewolf_speech 与 transcript）、autoPlay 全 AI 局自动打到 ENDED（winner 非空+game_over 推送）、人类白天发言入讨论引擎 transcript、AI 猎人夜间死亡自动反杀→狼胜终局）；改 WerewolfGameSmokeTest W-5/W-10（原锁定旧 bug 断言改为修复后行为：猎人夜间死亡后可开枪反杀一次、toMap 输出 visible 狼人互认）；后端 8 文件 + 前端 8 文件 + static（index-Bu8YksJU.js + index-aWRy_sYe.css SHA256 一致）；npm run build 通过（tsc 0 错误 + vite 64 modules）；详见 Round 22 / 台账 #71 / DECISION_LOG D-024
 > v23 更新（2026-08-02 21:26-22:0x，**P-0802-G 批次：串行调度开启 + 2D 视图遮盖修复 + 用户在场判定自查**）：mvn 基线 **302/0 全绿（41 类 surefire 汇总）**——serial=true 对测试零影响（测试走 application-test.yml 显式配置 + setSerialRound 显式设值，RouterServiceSerialRoundTest 4/4 仍全绿，LONG-01 PASS 2.858s）；`application.yml` `roleplay.round.serial: false → true`（主人反馈「前端还是并联输出」根因确认即该开关默认 false，现按需求开启串行，注释保留可切回）；2D 视图修复——ScenePage showPhaserSim=true 时整页折叠场景设置区，2D 视图（PhaserSimulationView height=640）占主体，退出恢复原布局，构建产物 index-4rQ391AJ.js 已同步 static （SHA256 dist↔static 一致，取代 index-Bu8YksJU.js）；用户在场判定自查结论：链路正确无需改码（前端 4s 轮询 conversation-status 群组成员含玩家名→在场单轨气泡；玩家仅在主动发言时进 DYAD 组=在场判定真实生效），「晕」主因即串行未开（问题 1 修复后应改善）；详见 Round 23 / 台账 #74 / DECISION_LOG D-027
@@ -533,3 +535,94 @@ pm run build\（tsc -b 0 错误 + vite 64 modules，index-DEFyKJ5G.js 1,840,208B
 - 2026-08-03 20:0x（P-0803-H2 对局找回 + 超时 600s 批次）：mvn compile 0 错（后端仅 ScriptController 1 行 currentSessionId 赋值）；API 闭环验证 resume→status=investigation；前端 build 通过（恢复对局入口 + 6e5 超时）；未跑全量（改前端为主 + 后端 1 行无逻辑分支，待主人确认后补全量）
 
 - 2026-08-03 20:3x（P-0803-H3 2D 模拟对局地图批次）：npm build 通过（ChatPage 渲染分支 + import）；浏览器截图验证对局地图渲染（24×16 BSP + 线索点）；后端未改动
+
+## Round 35 / v35（2026-08-03 22:4x，P-0803-J 剧本杀地图容量扩展批次，coder subagent a45f6830）
+
+- 全量 **390/0 BUILD SUCCESS**（55 类；378 基线 + 本批 12 新用例：ScriptMapSizeExpansionTest 11 + ScriptMapPersistenceTest M9 1，LONG-01 PASS 2.337s）
+- 新增 ScriptMapSizeExpansionTest 11 用例（参数化 + 单元）：
+  - S1 参数化（4 尺寸：64×64 / 48×48 / 100×60 / 128×64）：BSP 大图生成成功 + 尺寸精确 + MapValidator 7 项校验通过 + 热点/出生点全部可通行 + 热点数按面积缩放（≥默认 3、不超房间数、64×64+ ≥5 不空旷）
+  - S1b：scaledZonesCount 缩放曲线（24×16→3 旧行为不变 / 小图下限 3 / 64×64≈10 / 面积更大热点更多）
+  - S2a：ScriptMapService 显式 64×64 + LLM 空输出 → BSP 降级精确按尺寸 + 校验通过
+  - S2b：大图超 LLM token 预算（40×24）→ 跳过 LLM 直接 BSP（fallback 原因含预算说明 + verify LLM 零调用）
+  - S3a：预算内显式尺寸（32×20）仍走 LLM 路径；S3b：buildPrompt 含本次要求尺寸 + 示例 JSON 尺寸同步（旧签名默认提示不变）
+  - S4：ScriptGameService.generateMap 显式 64×64 落对局；regenerate 无显式尺寸保持 64×64（不回落默认）；新对局默认 24×16（对局间尺寸独立）
+  - S5：controller POST /api/script/map 透传 width/height；非法尺寸字符串不崩回落对局已定尺寸
+- ScriptMapPersistenceTest 增 M9：64×64 BSP 大图尺寸随快照持久化（map_width/map_height 落库）→ 新实例 resumeGame 恢复后尺寸保持 + regenerate 无显式尺寸保持 64×64
+- 后端改动：BspMapGenerator（+scaledZonesCount 面积缩放，Options.of zonesCount<0 语义=按面积自动缩放，默认 24×16 下仍=3 旧行为不变）、ScriptMapService（+LLM_MAX_WIDTH/HEIGHT=40/24 预算闸 + generateMap/buildPrompt 尺寸重载，旧签名委托零破坏）、ScriptGameService（+@Value roleplay.game.map.default-width/height + ScriptGame.mapWidth/Height + generateMap 重载 + 快照 map_width/map_height 保存/恢复）、ScriptController（map 端点 body 透传 width/height）、application.yml + application-test.yml（+roleplay.game.map.default-width: 24 / default-height: 16）
+- **大图与 LLM token 预算方案**：LLM 路径上限约 40×24（ground+collision ≈1920 数字 ≈2500-3000 tokens 逼近 4000 上限）；显式尺寸超上限直接走 BSP 确定性路径（精确尺寸、零截断风险）；预算内显式尺寸仍走 LLM（prompt 内嵌本次要求尺寸）
+- 零改动禁动文件（RouterService/ArbiterService/审批/狼人杀/SSE 主链路/static/前端）；未改 BspMapGeneratorTest.structureContract 等锁定默认 24×16 的旧断言；不打包 jar、不重启 8000、未 git commit（统一 gate 未获授权）；8000 重启由主会话负责
+
+## Round 36 / v36（2026-08-03 23:4x，P-0803-K 剧本杀模式多地图切换批次，coder subagent 1c283f43；上一子 agent 断连未验证，本批修复+验证+补台账）
+
+- 全量 **403/0 BUILD SUCCESS**（58 类；390 基线 + 本批 8 新用例：ScriptMapSwitchTest 7（K1-K7）+ ScriptMapSwitchPersistenceTest 1（K8）+ 并行未登记批次 ScriptChatModeTest 5 共存；LONG-01 首轮堆测量 32.5%>30% 为既有脆性（#37/#40/#41 同款），单跑 PASS 后全量复跑 403/0 全绿）
+- 新增 ScriptMapSwitchTest 7 用例（K1-K7 验收）：
+  - K1：多图注册表（init 自动图 map_1 设为当前 / 显式与自动 map_id 注册多图 / 每图独立尺寸 / toMap+status 暴露 current_map_id+map_ids）
+  - K2：door zone 触发切换 happy path（addDoorZone 布门 → 靠近 switchMap → 当前图切换 + zone target 字段解析 + door zone 持久于注册表）
+  - K3：靠近校验（远离 radius+2 拒绝）/ 直切模式（无 door_zone_id 显式 target）/ body target 覆盖 zone target（未注册目标自动生成 map_new）
+  - K4：非法 door 目标容错 8 类（不存在/非 door 型/无目标/目标=当前图/非本局玩家/缺玩家/阶段不符/双缺）
+  - K5：状态迁移（线索/AP/秘密对局级保留；足迹按图隔离：切走暂存、切回恢复；searchedByMap 不互污染）
+  - K6：尺寸联动（24×16 ↔ 64×64 切换后 mapWidth/mapHeight 随目标图更新）
+  - K7：未知目标自动生成（door 可选 width/height → BSP 按尺寸生成）+ controller map/switch/door 端点透传容错
+- ScriptMapSwitchPersistenceTest K8：多图注册表/当前图/每图足迹随快照落库 → 新实例 resumeGame 重启恢复后注册表完好、当前图正确、切图后足迹按图恢复、door 触发链路仍可用
+- 修复 4 失败（2 实现 bug + 2 测试 bug，详见 docs/修改记录.md #97 / DECISION_LOG D-032）：generateMap 补足迹迁移；K7 缺 session_id 用例改显式空串（currentSessionId 兜底设计）；K4 h)双缺用例移至搜证阶段（阶段守卫先于参数校验）；K8 恢复后 Bob 用本人 roleKey
+- 后端改动：ScriptGameService（+maps/mapFallbacks/searchedByMap/currentMapId +switchMap +addDoorZone +generateMap 足迹迁移 +快照 maps/current_map_id/searched_by_map +toMap 新键）、ScriptController（+map/switch +map/door +map 透传 map_id）、ScriptMapService（buildPrompt 预留 door 可选输出）
+- 零改动禁动文件（RouterService/ArbiterService/审批/狼人杀/SSE 主链路/static/前端）；不打包 jar、不重启 8000、未 git commit（统一 gate 未获授权）
+
+## Round 37 / v37（2026-08-03 24:0x，P-0803-L 剧本杀双版本前端批次（原顺延 K 撞标，主会话裁决改签 L）：剧本选择净化 + 剧本杀双版本，coder subagent 5e96fc0e；⚠️ 批标与多地图批次 1c283f43 共用 P-0803-K，已提请主会话知悉）
+
+- 全量 **403/0 BUILD SUCCESS**（58 类；390 基线零破坏 + 并行批次 ScriptChatModeTest 5 / ScriptMapSwitch 8 共存复跑全绿；LONG-01 PASS）——本轮前端改造无新增后端用例，全量复跑验证后端 mode 能力与并行批次共存
+- ScriptChatModeTest 5 用例（本批前端所依赖的简单对话版验收，后端已就位随批验证）：
+  - C-1：initGame(mode=chat) 后 phase==DISCUSSION、mode=="chat"、discussionActive==true、mapData==null、toMap 暴露 mode=chat 且无 map 键、init 响应含 session_id
+  - C-2：简单对话版搜证被阶段守卫拦截（「当前不是搜证阶段」，不下发线索）
+  - C-3：讨论引擎自动驱动 → 结束自动进 VOTE（蓝图 Step3v 降级路径收束），讨论发言记录非空且 toMap 暴露 discussion
+  - C-4：缺省/显式 full 模式零变化（phase==INVESTIGATION、mode=="full"、不自动启动讨论、toMap phase=investigation）
+  - C-5：mode 随快照落库，新实例 resumeGame 从快照恢复仍为 chat（重连后前端仍按简单版渲染）
+- 前端改造（npm run build 通过：tsc 0 错误 + vite 65 modules，index-NSMdVek6.js 1,859.93 kB + index-BC-6X7pW.css）：
+  - client.ts：scriptInit 加可选 mode 参数（body 透传，缺省 full 零破坏，chat 模式无地图 LLM 正常 60s 内返回）
+  - ScenePage.tsx：净化——内嵌角色库栏移除（收敛为仅规则模式显示），剧本选择页只保留「一般模式 / 剧本杀模式」两类页签；一般模式页签 = 一般+狼人杀剧本卡（带 chip）；选中剧本 → 独立设置页（非弹窗内嵌）：角色选择（跟剧本 default_roles 走，charTab 默认切到该剧本，用户角色卡置顶不默认勾选，增删/编辑/新建复用 renderCharGrid）+ 2D 设置（一般「是否 2D」/ 狼人杀「默认 2D」）+ 启动按钮 + 地图预览；剧本杀模式页签 → 双版本设置页（真剧本杀 full / 简单对话版 chat 版本卡 + 提示词 + 角色选择 + 启动分流 genScript(mode) + 恢复对局入口 + 地图区 full 专属）；狼人杀剧本卡归入一般模式页签展示
+  - ChatPage.tsx：ScriptStatePanel 按 scriptState.mode==='chat' 隐藏搜证区/2D 空间讨论区；主 2D 面板 chat 模式不渲染（无地图无 2D）；phase banner 文案区分（简单对话版：直接多人对话讨论，无取证）
+  - global.css：+.script-version-card 双版本卡样式
+- static 同步：SHA256 dist↔static 一致（index-NSMdVek6.js / index-BC-6X7pW.css / index.html 三方），删除被取代旧产物 index-CBCAur3N.js / index-Cm-4mX-J.css / index-Ctpf4Fmo.js；bundle grep 命中（简单对话版 9 / 真剧本杀 4 / 剧本杀模式 2 / 游戏模式 1 / script-version-card 2 / 自由角色卡 2 / 恢复对局 7 / AI 生成剧本 5 / 狼人杀 18 等）
+- 兼容说明：P-0803-H 全部能力保留（角色卡增删/置顶/不默认勾选、剧本绑定默认角色/地图、狼人杀默认 2D、rules 模式角色库零改动）；零改动禁动文件（RouterService/ArbiterService/审批/狼人杀/SSE 主链路）；不打包 jar、不重启 8000、未 git commit（统一 gate 未获授权）；8000 重启由主会话负责
+
+## Round 38 / v38（2026-08-03 23:3x，P-0803-M 简单对话版可选配置地图批次：chat 版「🗺️ 配置地图」开关 + 启动自动生成 + ChatPage 只读地图查看，coder subagent 3b067206；纯前端+static 同步，后端零改动）
+
+- 全量 **403/0 BUILD SUCCESS**（58 类 surefire 汇总；基线零破坏 + 并行批次用例共存复跑全绿；LONG-01 PASS 2.520s）——本批后端零改动（已核实 POST /api/script/map 无 phase/mode 守卫 chat 模式可用），全量复跑为验证性
+- 前端改造（npm run build 通过：tsc 0 错误 + vite 65 modules，index-ChF7_wXr.js 1,862.20 kB + index-BC-6X7pW.css 未变 hash 一致）：
+  - ScriptMapScene.ts：+readOnly 只读模式（构造三参；create 不注册 pointerdown 搜证、E 键搜证 gated、interact 防御性拦截、update 只读提示「🔭 地图浏览（只读 · 氛围展示）」）
+  - PhaserScriptMapView.tsx：+readOnly prop（透传 scene + 头部提示「🔭 只读浏览（氛围展示，无搜证）」+ effect deps 补 readOnly）；缺省 false 全版本行为不变
+  - ScenePage.tsx：+chatMapEnabled 状态（默认 false=保持 P-0803-L chat 无地图基线）；剧本杀设置页 chat 版「🗺️ 配置地图（可选）」开关卡；chat 开启后地图区可用（生成地图/重新生成按钮 + PhaserScriptMapView readOnly 预览）；genScript('chat') 启动链路开启时 init 后自动调 api.scriptMap 生成并携带地图（失败不阻塞进入对局，可手动重试）
+  - ChatPage.tsx：ScriptStatePanel chat 模式有 map 时增「🗺️ 对局地图（氛围展示）」入口（尺寸/热点信息 + 查看按钮 → toggleSimPanel）；chat-main 2D 面板守卫改「chat 且有 map 放行 / 无 map 隐藏」；chat 渲染 PhaserScriptMapView readOnly（只读无搜证）；面板标题区分「对局地图（氛围展示 · 只读）」
+- static 同步：本批首构建 index-ChF7_wXr.js（SHA256 dist?static 一致 + index.html 引用更新），删除被取代旧产物 index-NSMdVek6.js；**并行批次 P-0803-N（subagent fb715635）23:31:31 基于含本批改动的完整源码重构建 index-Cx-YssBi.js**（同改 ScenePage.tsx 不同区域零冲突），最终部署产物 = 本批改动 + P-0803-N 修复，SHA256 dist?static 一致（JS 5D78…C09E9 / CSS E048…C0DB），index.html 已指向新产物；bundle grep 复核命中（配置地图 5 / 氛围展示 10 / 只读浏览 1 / 对局地图（氛围展示 2 / readOnly 10 / 简单对话版 12 / script-version-card 2 / 无取证 4 / 无地图 2 / 生成地图 14）
+- 兼容说明：full 版搜证/地图/2D 讨论区零改动（readOnly 缺省 false 行为逐字节不变）；chat 无地图维持纯对话现状（面板隐藏）；恢复对局（resume）后 chat 地图随快照 map_data 恢复前端轮询可见；已知限制——chat 地图生成与后台讨论引擎并发，saveSnapshot 对 discussionTranscript 的拷贝存在极小概率 CME（失败仅地图请求 500 不损坏对局，前端可重试，P2 可改 CopyOnWriteArrayList）；零改动禁动文件（RouterService/ArbiterService/审批/狼人杀/SSE 主链路/后端）；不打包 jar、不重启 8000、未 git commit（统一 gate 未获授权）；8000 重启由主会话负责
+
+
+## Round 39 / v39（2026-08-03 23:30-24:xx，P-0803-N 点开剧本卡后角色区只剩 me 的修复批次：selectScript/tabChars 空 default_roles 回退 all，coder subagent fb715635；纯前端+static 同步，后端零改动）
+
+- 全量 **403/0 BUILD SUCCESS**（58 类 surefire 汇总；首轮 LONG-01 堆测量 31.1%>30% 为既有堆测量脆性（台账 #37/#40/#41 同款），单跑 PASS（堆增长 10.5%）后全量复跑 403/0 + MAVEN_EXIT_CODE=0 确认；本批后端零改动，403 用例组成不变）
+- 根因复核（与主会话定位一致）：selectScript 点开剧本卡后 `setCharTab(scene.scene_id)` 把角色区切到该剧本 default_roles 分组；tabChars 对某剧本 scene_id 只返回该剧本 default_roles 中的角色；实测 GET /api/scenes 9 个剧本 default_roles 全空 → 分组返回空列表；renderCharGrid 顶部固定渲染 me-char-card（你的角色卡）+ 下面空列表 → 视觉上只剩 me 一张卡，无法自选
+- 前端修复（npm run build 通过：tsc 0 错误 + vite 65 modules，index-Cx-YssBi.js 1,862.23 kB + index-BC-6X7pW.css hash 未变）：
+  - ScenePage.tsx selectScript（约 208-225 行）：`const roles = (scene.default_roles||[]).filter(Boolean)` 后 `setCharTab(roles.length > 0 ? scene.scene_id : 'all')`——剧本无默认角色 → 角色页签保持/回退 'all'（默认展示全部角色卡可自选任意角色）；有默认角色仍切到该剧本分组（分类跟着剧本走语义不变）；自动预选（roles 入 selected 排除 myCharName）原样保留
+  - ScenePage.tsx tabChars（约 150-160 行）：剧本 default_roles 为空（names.size===0）→ 返回全部角色卡——覆盖手动点击空分组 chips 的同类空网格路径（两路径统一回退 'all'），不重构 renderCharGrid
+  - gameSetup 视图复核无同类问题：openGameSetup 已 setCharTab('all')；rules 模式角色库（约 790-830 行区）独立 chips 不受 selectScript 影响
+- static 同步：index-Cx-YssBi.js 已同步（SHA256 dist↔static 一致，JS 5D78…C09E9 / CSS E048…C0DB）+ index.html 引用更新 + 删除被取代旧产物 index-ChF7_wXr.js（P-0803-M 首构建产物）；static/assets 仅剩 2 个生效产物
+- bundle grep 复核：新产物含修复逻辑（selectScript 区 minified `Oi(ot.length>0?$.scene_id:"all")` vs 旧产物 `Oi($.scene_id)`；tabChars 区 `ot.size===0?tr([...g]):tr(g.filter(...))` 回退全部）；关键 UI 串全命中（自由角色卡/全部/已选择剧本/已自动带上/配置地图/氛围展示/剧本杀模式/简单对话版/真剧本杀）；自动预选排除逻辑（St!==ai&&St.add(Rt)）与旧产物逐字一致=既有功能零改动
+- 兼容说明：与 P-0803-M（chat 地图开关）同文件 ScenePage.tsx 不同区域共存（本批 selectScript/tabChars 区 vs M 的 chat 地图开关/启动链路区），构建基于含双方改动的完整源码；置顶/不默认勾选/分类 chips/恢复对局等既有能力零改动；零改动禁动文件（RouterService/ArbiterService/审批/狼人杀/剧本杀 Service/SSE 主链路/后端）；不打包 jar、不重启 8000、未 git commit（统一 gate 未获授权）；8000 重启由主会话负责
+
+## Round 40 / v40（2026-08-03 23:5x-25:0x，P-0803-O 两条地图链路 LLM 全量生成批次：SceneController.generateDefaultMap 双模式 + 剧本编辑弹窗生成方式选择 + 剧本杀设置页地图区 theme 暴露，coder subagent 3e144626）
+
+- 全量 **407/0 BUILD SUCCESS**（58 类 surefire 汇总；403 基线零破坏 + 新增 SceneMapLlmModeTest 4 用例；LONG-01 PASS 2.529s；MAVEN_EXIT_CODE=0）
+- 新增 SceneMapLlmModeTest 4 用例（剧本卡默认地图端点双模式验收）：
+  - O1：body 带 theme → LLM 全量生成（mode=llm / generator.kind=llm / 契约 v1 全量元素：ground+collision 双层数组 + rooms/zones/spawns / validation.ok / fallback 空）
+  - O2：无 theme（null/空串/空白）→ BSP 确定性零回归（generator.kind=bsp + 同 seed 同输出，P-0803-H ⑤ 语义在 controller 层复验）
+  - O3：LLM 空输出（失败路径）→ mode=bsp-fallback + fallback 原因含「输出为空」+ 兜底地图契约 v1 自洽（BspMapGenerator 输出可过校验）
+  - O4：4 参旧构造（mapService=null）带 theme → 防御回落 BSP 确定性（不崩）
+- 单跑 SceneMapLlmModeTest 4/0 + SceneBindingTest 5/0（既有 BSP 端点验收零回归复验）
+- 后端改动（注入可行性核实：ScriptMapService 为 @Service 仅依赖 LLMClient，SceneController→ScriptMapService→LLMClient 无环依赖；5 参 @Autowired 构造 + 4 参旧构造委托 null 供既有调用/测试零破坏）：
+  - SceneController.java：+ScriptMapService 注入；generateDefaultMap 双模式——无 theme → BspMapGenerator 确定性（原行为逐字节不变）；带 theme → mapService.generateMap(theme, [], [], seed)（LLM → MapContract.normalize → MapValidator 契约 v1 校验 → 失败/超预算 BSP 兜底），响应附加 mode（llm / bsp-fallback）+ generator + validation{ok,errors,warnings} + fallback 溯源键
+- 前端改动（npm run build 通过：tsc 0 错误 + vite 65 modules，index-StVXWN_F.js 1,863.64 kB + index-BC-6X7pW.css 未变 hash 一致）：
+  - client.ts：sceneMap 改收 body{seed?,theme?}（无参调用向后兼容，body 恒发 JSON）
+  - ScenePage.tsx：+formMapMode（'bsp'|'llm'）+formMapTheme +mapTheme 状态；剧本编辑弹窗「生成方式」chips（✨ LLM 全量生成 / BSP 默认）+ LLM 主题输入（占位「民国宅邸凶案」，空主题禁用生成）+ genDefaultMap 双模式（LLM 模式响应溯源展示 kind/兜底），生成后绑定 formDefaultMap 逻辑不变，既有 BSP「🗺️ 生成默认地图」按钮保留为 BSP 模式入口；剧本杀设置页地图区（gameSetup 双版本 + rules script tab 两处）theme 暴露为可编辑输入（mapTheme 默认剧本名、可改），genScriptMap / genScript('chat') 自动氛围地图 / doResumeScript 均消费 mapTheme（空回退剧本名）
+- static 同步：index-StVXWN_F.js（SHA256 dist?static 一致，JS + CSS 双哈希）+ index.html 引用更新 + 删除被取代旧产物 index-Cx-YssBi.js（P-0803-N 最终产物）；static/assets 仅剩 2 个生效产物（index-StVXWN_F.js + index-BC-6X7pW.css）
+- bundle grep 命中：生成方式：/LLM 全量生成/BSP 默认/地图主题（LLM 全量生成/民国宅邸凶案/LLM 全量输出（契约 v1 校验）/失败自动 BSP 兜底/BSP 确定性生成（契约 v1）/默认剧本名可改/BSP（兜底）/LLM 全量：/sceneMap body 签名（sceneMap:c=>mt("/api/scenes/map",{...,body:JSON.stringify(c||{})})）
+- 兼容说明：BSP 模式零回归（SceneBindingTest 5/0 全绿 + O2 复验）；链路 2（POST /api/script/map）后端零改动（LLM 全量生成路径本已就绪），仅前端暴露 theme；seed 参数双模式均透传；ChatPage 零改动；遗留——剧本杀设置页 seed/尺寸参数后端已支持（P-0803-J/K）但 UI 空间不允许未暴露（保持现状，报告说明）；零改动禁动文件（RouterService/ArbiterService/审批/狼人杀/剧本杀 Service/SSE 主链路）；不打包 jar、不重启 8000、未 git commit（统一 gate 未获授权）；8000 重启由主会话负责
