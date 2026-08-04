@@ -101,6 +101,29 @@ public class ScriptGameService {
     @Value("${roleplay.game.ap.base:3}")
     private int apBase = 3;
 
+    /** P1（剧本杀可玩性修复，任务 1）：投票超时（毫秒）—— VOTE 阶段超过该时长后，
+     *  resolveVote 将未投票玩家按弃票处理并转为托管（票作废）；默认 60s，可配
+     *  roleplay.game.script.vote-timeout-ms。 */
+    @Value("${roleplay.game.script.vote-timeout-ms:60000}")
+    private long voteTimeoutMs = 60000;
+
+    /** P1：投票超时总开关（默认开启；false=保持旧行为可无限等、无弃票处理）。 */
+    @Value("${roleplay.game.script.vote-timeout-enabled:true}")
+    private boolean voteTimeoutEnabled = true;
+
+    /** P1：投票 quorum 门槛开关（默认开启；false=保持旧行为少数票即可定局）。 */
+    @Value("${roleplay.game.script.quorum-enabled:true}")
+    private boolean quorumEnabled = true;
+
+    /** P1（测试钩子）：运行时切换投票超时（毫秒），对齐 RouterService.setSerialRound 先例。 */
+    public void setVoteTimeoutMs(long ms) { this.voteTimeoutMs = ms; }
+
+    /** P1（测试钩子）：运行时切换投票超时开关。 */
+    public void setVoteTimeoutEnabled(boolean enabled) { this.voteTimeoutEnabled = enabled; }
+
+    /** P1（测试钩子）：运行时切换 quorum 开关。 */
+    public void setQuorumEnabled(boolean enabled) { this.quorumEnabled = enabled; }
+
     /** P-0803-J（地图容量扩展）：剧本杀地图默认宽度（roleplay.game.map.default-width，默认 24 保持既有行为）。 */
     @Value("${roleplay.game.map.default-width:24}")
     private int mapDefaultWidth = 24;
@@ -185,6 +208,21 @@ public class ScriptGameService {
         String winner = "";
         boolean simulationStarted = false;
 
+        // P1（剧本杀可玩性修复）：
+        // ① 投票超时 + quorum —— voteStartedAt=进入 VOTE 的时间戳（0=未进入，超时判定基准，随快照落库）；
+        //    quorumFailCount=quorum 不足清票重投计数（0=首次，1=已重投过一轮；重投仍不足→按已投计+低参与度）；
+        //    lowParticipation=低参与度判定标记（quorum 重投后仍不足时置 true）。
+        // ② 玩家退出/挂机托管 —— trustees=托管玩家集合（退出/断线/投票超时无操作 → AI 代管但标记清楚；
+        //    其票作废、不计入 quorum 在线数）；theme=剧本主题（restart 重开一局复用，随快照落库）。
+        // ③ LLM 降级 —— llmDegraded=generateScript 走了 defaultScript 兜底（无 LLM key / LLM 失败），
+        //    前端 ScriptStatePanel 据此显示「离线模板模式」提示条。
+        long voteStartedAt = 0;
+        int quorumFailCount = 0;
+        volatile boolean lowParticipation = false;
+        final java.util.Set<String> trustees = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        String theme = "";
+        volatile boolean llmDegraded = false;
+
         // GAP-4b: 判定结果缓存（resolveVote 揭晓时写入，ENDED 落库/展示用）
         String murderer = "";
         boolean correctVerdict = false;
@@ -256,6 +294,12 @@ public class ScriptGameService {
             if (playerName != null && !playerName.isBlank()) {
                 m.put("role_key", playerKeys.getOrDefault(playerName, ""));
             }
+            // P1: LLM 降级标记 —— 剧本走了 defaultScript 兜底（无 LLM key / LLM 失败）时为 true，
+            // 前端 ScriptStatePanel 据此显示「当前为离线模板模式，内容为占位剧本」提示条
+            m.put("llm_degraded", llmDegraded);
+            // P1: 托管玩家列表 —— 退出/断线/投票超时无操作的玩家由 AI 代管（标记清楚，投票权作废），
+            // 前端据此展示 🤖 托管标记与 quorum 在线人数感知
+            m.put("trustees", new ArrayList<>(trustees));
             m.put("locations", new ArrayList<>(locations));
             // 阶段 2: 对局地图（已生成时附加；契约 v1，前端 Phaser 渲染）
             if (mapData != null) {
@@ -384,9 +428,16 @@ public class ScriptGameService {
         game.sessionId = sessionId;
         game.players.addAll(playerNames);
 
-        // C1: 统一生成路径 —— 委托 ScriptService.generateScript（Schema v1 输出，宽容解析旧/新格式）
-        Map<String, Object> script = scriptService.generateScript(theme, playerNames);
+        // P1: 剧本主题留档（restart 重开一局复用；随快照落库）
+        game.theme = theme == null ? "" : theme;
+
+        // C1: 统一生成路径 —— 委托 ScriptService.generateScriptChecked（Schema v1 输出，宽容解析旧/新格式）
+        // P1（任务 3）：checked 变体额外返回是否走了 defaultScript 兜底（无 LLM key / LLM 失败）→
+        // 注入 gameState.llmDegraded，前端 ScriptStatePanel 显示「离线模板模式」提示条
+        ScriptService.ScriptGeneration generation = scriptService.generateScriptChecked(theme, playerNames);
+        Map<String, Object> script = generation.schema();
         game.scriptSchema = script;
+        game.llmDegraded = generation.degraded();
 
         game.name = ScriptSchemaV1.title(script);
         game.background = ScriptSchemaV1.background(script);
@@ -471,8 +522,7 @@ public class ScriptGameService {
             } catch (Exception e) {
                 log.warn("Script game {} chat-mode discussion engine setup failed, advancing to VOTE: {}",
                         sessionId, e.getMessage());
-                game.phase = Phase.VOTE;
-                broadcastPhase(game, "vote");
+                enterVotePhase(game);
             }
         } else {
             broadcastPhase(game, "investigation");
@@ -1014,6 +1064,8 @@ public class ScriptGameService {
         ScriptGame game = games.get(sessionId);
         if (game == null) return "游戏不存在";
         if (game.phase != Phase.VOTE) return "当前不是投票阶段";
+        // P1（任务 2a）：托管玩家（退出/断线/投票超时无操作 → AI 代管）票作废 —— 直接拒绝
+        if (game.trustees.contains(voter)) return voter + " 已托管（AI 代管），投票作废";
         if (voter.equals(suspect)) return "不能投自己";
         // D6: 只接受本局玩家名或角色名，杜绝无效/残缺票面导致揭晓误判
         if (suspect == null || suspect.isBlank()) return "投票对象不能为空";
@@ -1044,7 +1096,31 @@ public class ScriptGameService {
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("votes", new LinkedHashMap<>(game.votes));
 
-        // 1) 精确统计：只计合法票（票面嫌疑人归一为规范玩家名，非法票忽略）
+        // ══ P1（任务 1）：投票超时 —— 超过 roleplay.game.script.vote-timeout-ms（默认 60s）后，
+        //    未投票玩家按弃票处理并转为托管（AI 代管，票作废；任务 2a 的“超时无操作→托管”在此落地）。
+        //    惰性判定：resolveVote 被调用时检查（无后台定时器，避免并发/测试 flaky）；
+        //    开关 vote-timeout-enabled=false 时保持旧行为（可无限等）。
+        List<String> abstained = new ArrayList<>();
+        if (voteTimeoutEnabled && game.voteStartedAt > 0
+                && System.currentTimeMillis() - game.voteStartedAt >= voteTimeoutMs) {
+            for (String p : game.players) {
+                if (!game.votes.containsKey(p) && !game.trustees.contains(p)) {
+                    game.trustees.add(p);
+                    abstained.add(p);
+                }
+            }
+            if (!abstained.isEmpty()) {
+                result.put("abstained", abstained);
+                result.put("vote_timeout", true);
+                // C3: 托管标记是状态变更 → 快照（重启恢复后仍保持托管）
+                saveSnapshot(game);
+            }
+        }
+        String timeoutNote = abstained.isEmpty()
+                ? ""
+                : "；投票超时，未投票玩家已按弃票处理并转为托管：" + String.join("、", abstained);
+
+        // 1) 精确统计：只计合法票（票面嫌疑人归一为规范玩家名，非法票忽略；托管玩家票作废）
         Map<String, Integer> voteCount = countValidVotes(game);
         String mostVoted = "";
         int maxVotes = 0;
@@ -1059,29 +1135,64 @@ public class ScriptGameService {
 
         // 2) 无人投票 → 不揭晓，留在投票阶段
         if (game.votes.isEmpty()) {
-            result.put("result", "无人投票，无人被定罪，请先投票再揭晓");
+            result.put("result", "无人投票，无人被定罪，请先投票再揭晓" + timeoutNote);
             result.put("revote", true);
             return result;
         }
         // 票面全为无效值 → 同样不揭晓
         if (voteCount.isEmpty()) {
-            result.put("result", "无有效投票（票面必须为本局玩家或角色名），请重新投票");
+            result.put("result", "无有效投票（票面必须为本局玩家或角色名），请重新投票" + timeoutNote);
             result.put("revote", true);
             return result;
         }
 
-        // 3) 平票 → 清空投票，复用 VOTE 阶段重投（D6：平票不再进入 REVEAL / 误设 winner）
+        // 3) 平票 → 清空投票，复用 VOTE 阶段重投（D6：平票不再进入 REVEAL / 误设 winner；
+        //    平票前置子 quorum 判定，既有平票语义零破坏）
         final int maxVotesFinal = maxVotes; // effectively-final 副本（lambda 引用要求）
         long ties = voteCount.values().stream().filter(c -> c == maxVotesFinal).count();
         if (ties > 1) {
             game.votes.clear();
+            // 重投重新计时（防“等满 60s 才被允许重投”）；quorumFailCount 不清（防平票↔quorum 乒乓死循环）
+            game.voteStartedAt = System.currentTimeMillis();
             // C3: 清票也是状态变更 → 快照（避免重启后恢复出平票前的旧票型）
             saveSnapshot(game);
             result.put("votes", new LinkedHashMap<>());
-            result.put("result", "平票，无人被定罪，已清空投票，请重新投票");
+            result.put("result", "平票，无人被定罪，已清空投票，请重新投票" + timeoutNote);
             result.put("tie", true);
             result.put("revote", true);
             return result;
+        }
+
+        // ══ P1（任务 1）：quorum 门槛 —— 有效票 < ceil(在线玩家数/2) 不判定：
+        //    首次不足 → 清票重投一轮；重投仍不足 → 按已投计并标记「低参与度判定」。
+        //    在线玩家数 = 本局玩家 − 托管玩家（退出/断线/超时的玩家不计入门槛，其票已作废）。
+        if (quorumEnabled) {
+            int online = 0;
+            for (String p : game.players) {
+                if (!game.trustees.contains(p)) online++;
+            }
+            int quorum = (online + 1) / 2; // ceil(n/2)
+            result.put("online_players", online);
+            result.put("quorum", quorum);
+            if (maxVotes < quorum) {
+                if (game.quorumFailCount == 0) {
+                    game.quorumFailCount = 1;
+                    game.votes.clear();
+                    // 重投重新计时
+                    game.voteStartedAt = System.currentTimeMillis();
+                    saveSnapshot(game);
+                    result.put("votes", new LinkedHashMap<>());
+                    result.put("result", "投票人数不足（有效票 " + maxVotes + " / 需 ≥" + quorum
+                            + "，在线 " + online + " 人），已清票重新投票一轮" + timeoutNote);
+                    result.put("revote", true);
+                    result.put("quorum_fail", true);
+                    return result;
+                }
+                // 重投仍不足 → 按已投计，标记低参与度判定（随快照落库）
+                game.lowParticipation = true;
+                result.put("low_participation", true);
+                saveSnapshot(game);
+            }
         }
 
         // 4) 唯一得票最高 → 从真相精确解析真凶（玩家/角色全名，非 contains 子串）
@@ -1097,7 +1208,12 @@ public class ScriptGameService {
         }
 
         // 6) 批准 → 正式进入揭晓阶段（GAP-4b：REVEAL 展示后由 confirmEnded 收尾进 ENDED）
-        result.put("result", verdict);
+        // P1: 超时弃票/低参与度提示追加到揭晓文案（前端 Reveal 面板可见）
+        String verdictNote = timeoutNote;
+        if (game.lowParticipation) {
+            verdictNote += "；低参与度判定（投票人数不足门槛，按已投票计）";
+        }
+        result.put("result", verdict + verdictNote);
         result.put("correct", correct);
         result.put("murderer", murderer.isEmpty() ? "未识别" : murderer);
         result.put("truth", game.truth);
@@ -1175,10 +1291,12 @@ public class ScriptGameService {
     //  D6: 揭晓判定辅助
     // ═══════════════════════════════════════════════════════════
 
-    /** D6: 合法票精确统计 —— 嫌疑人归一为规范玩家名（角色名经 assignments 反查），非法票忽略。 */
+    /** D6: 合法票精确统计 —— 嫌疑人归一为规范玩家名（角色名经 assignments 反查），非法票忽略；
+     *  P1: 托管玩家（退出/断线/超时 → AI 代管）的票作废（castVote 已拒，此处防御性双保险）。 */
     private Map<String, Integer> countValidVotes(ScriptGame game) {
         Map<String, Integer> count = new LinkedHashMap<>();
         for (Map.Entry<String, String> v : game.votes.entrySet()) {
+            if (game.trustees.contains(v.getKey())) continue; // 托管玩家票作废
             String player = normalizeSuspect(game, v.getValue());
             if (player == null) continue;
             count.merge(player, 1, Integer::sum);
@@ -1266,11 +1384,24 @@ public class ScriptGameService {
     public void startVoting(String sessionId) {
         ScriptGame game = games.get(sessionId);
         if (game != null && (game.phase == Phase.INVESTIGATION || game.phase == Phase.DISCUSSION)) {
-            game.phase = Phase.VOTE;
-            // C3: 阶段变更 → 快照
-            saveSnapshot(game);
-            broadcastPhase(game, "vote");
+            enterVotePhase(game);
         }
+    }
+
+    /**
+     * P1（任务 1）：统一进入投票阶段的入口 —— 置 phase=VOTE + 启动投票计时（voteStartedAt，
+     * 超时判定基准）+ 重置 quorum 重投计数 + 快照 + 阶段推送。
+     * 所有进入 VOTE 的路径（startVoting / 讨论引擎结束 / 讨论启动失败降级 / chat 模式讨论失败降级）
+     * 统一走本方法，保证超时与 quorum 的计时基准一致。
+     */
+    private void enterVotePhase(ScriptGame game) {
+        if (game == null) return;
+        game.phase = Phase.VOTE;
+        game.voteStartedAt = System.currentTimeMillis();
+        game.quorumFailCount = 0;
+        // C3: 阶段变更 → 快照
+        saveSnapshot(game);
+        broadcastPhase(game, "vote");
     }
 
     /**
@@ -1292,8 +1423,7 @@ public class ScriptGameService {
             } catch (Exception e) {
                 log.warn("Script game {} discussion engine setup failed, advancing to VOTE: {}",
                         sessionId, e.getMessage());
-                game.phase = Phase.VOTE;
-                broadcastPhase(game, "vote");
+                enterVotePhase(game);
             }
             return true;
         }
@@ -1316,9 +1446,8 @@ public class ScriptGameService {
         ConversationManager cm = discussionConversations.get(game.sessionId);
         WorldDirectorService director = discussionDirectors.get(game.sessionId);
         if (game.players.size() < 2) {
-            // 单人局无讨论对象，直接进投票
-            game.phase = Phase.VOTE;
-            broadcastPhase(game, "vote");
+            // 单人局无讨论对象，直接进投票（统一入口：计时/quorum 重置/快照/推送）
+            enterVotePhase(game);
             return;
         }
 
@@ -1383,11 +1512,8 @@ public class ScriptGameService {
                 log.warn("Script game {} discussion rounds failed: {}", game.sessionId, e.getMessage());
             } finally {
                 game.discussionActive = false;
-                game.phase = Phase.VOTE;
-                // C3: 讨论结束自动进 VOTE，阶段变更 → 快照
-                saveSnapshot(game);
-                // GAP-8: 讨论结束自动进 VOTE，推送阶段变更
-                broadcastPhase(game, "vote");
+                // P1: 统一进 VOTE 入口（投票计时/quorum 重置/快照/阶段推送；GAP-8 A3-3 自动进投票语义不变）
+                enterVotePhase(game);
             }
         });
     }
@@ -1833,9 +1959,58 @@ public class ScriptGameService {
         saveSnapshot(game);
         broadcastPhase(game, "ended");
         broadcastStatus(game);
-        log.info("Script game {} ended (winner={}, killer={}, correct={})",
-                sessionId, game.winner, game.murderer, game.correctVerdict);
+        log.info("Script game {} ended (winner={}, killer={}, correct={}, low_participation={})",
+                sessionId, game.winner, game.murderer, game.correctVerdict, game.lowParticipation);
         return game.toMap(null);
+    }
+
+    /**
+     * P1（任务 2a）：玩家退出对局 —— 角色标记为托管（AI 代管但标记清楚），其已投的票作废、
+     * 不计入 quorum 在线数；此后 castVote 拒绝该玩家。
+     * （断线重连仍可用 roleKey 恢复视图，但恢复后角色保持托管状态；对局结束则拒绝退出。）
+     */
+    public Map<String, Object> leaveGame(String sessionId, String player, String playerKey) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
+        if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
+        if (game.phase == Phase.ENDED) return Map.of("error", "对局已结束，无法退出");
+        // 身份校验（与玩家级端点一致：有 player_key 必须匹配；无 key 向后兼容按玩家名）
+        Map<String, Object> denied = checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return denied;
+        boolean newly = game.trustees.add(player);
+        if (newly) {
+            game.votes.remove(player); // 托管 → 已投的票作废
+            // C3: 状态变更 → 快照（重启恢复后托管状态不丢）
+            saveSnapshot(game);
+            broadcastStatus(game);
+        }
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("ok", true);
+        res.put("player", player);
+        res.put("trusted", true);
+        res.put("result", player + " 已退出对局，角色转为托管（AI 代管，投票权作废）");
+        res.put("trustees", new ArrayList<>(game.trustees));
+        return res;
+    }
+
+    /**
+     * P1（任务 2b）：ENDED 后重开一局 —— 同剧本主题同玩家重开（复用 sessionId：
+     * playerSessions/roomGames/currentSessionId 不变，前端轮询与 SSE 定位自动进入新局）；
+     * 新对局生成全新剧本/角色分配/roleKey/票型，托管与降级标记重置。
+     * 前端「再来一局（同剧本）」按钮调用；「回到剧本选择」为纯前端导航（goToView('scene')）。
+     */
+    public Map<String, Object> restartGame(String sessionId) {
+        ScriptGame old = games.get(sessionId);
+        if (old == null) return Map.of("error", "游戏不存在");
+        if (old.phase != Phase.ENDED) {
+            return Map.of("error", "仅已结束的对局可重开（当前阶段：" + old.phase.name().toLowerCase() + "）");
+        }
+        String theme = old.theme == null || old.theme.isBlank() ? "默认主题" : old.theme;
+        String mode = old.mode;
+        List<String> players = new ArrayList<>(old.players);
+        log.info("Script game {} restart: theme='{}', players={}, mode={}", sessionId, theme, players, mode);
+        return initGame(sessionId, theme, players, mode);
     }
 
     /** GAP-4c + C1: 剧本落库（initGame 剧本生成后调用；A4-3 剧本落库来源）—— 按 Schema v1 存取。 */
@@ -1875,6 +2050,8 @@ public class ScriptGameService {
         content.put("winner", game.winner);
         content.put("votes", new LinkedHashMap<>(game.votes));
         content.put("correct", game.correctVerdict);
+        // P1: 低参与度判定标记落对局结果（复盘/终态展示用；旧结果行无此键）
+        content.put("low_participation", game.lowParticipation);
         content.put("truth", game.truth);
         content.put("discussion_turns", game.discussionTranscript.size());
         content.put("discussion", new ArrayList<>(game.discussionTranscript));
@@ -2160,6 +2337,14 @@ public class ScriptGameService {
         content.put("phase", game.phase.name());
         // P-0803-K: 对局模式随快照落库（简单对话版重连后前端仍按 chat 隐藏搜证 UI；旧快照无此键 → 恢复 full）
         content.put("mode", game.mode);
+        // P1（剧本杀可玩性修复）：主题/LLM 降级标记/投票超时基准/quorum 重投计数/低参与度/托管玩家随快照落库
+        // （旧快照无此键 → 恢复默认值：theme 空/llmDegraded false/voteStartedAt 0=超时判定跳过/quorumFailCount 0/lowParticipation false/trustees 空）
+        content.put("theme", game.theme);
+        content.put("llm_degraded", game.llmDegraded);
+        content.put("vote_started_at", game.voteStartedAt);
+        content.put("quorum_fail_count", game.quorumFailCount);
+        content.put("low_participation", game.lowParticipation);
+        content.put("trustees", new ArrayList<>(game.trustees));
         content.put("name", game.name);
         content.put("background", game.background);
         content.put("truth", game.truth);
@@ -2226,6 +2411,13 @@ public class ScriptGameService {
         game.phase = parsePhase(c.get("phase"));
         // P-0803-K: 对局模式快照恢复（旧快照无此键/非 chat → 真剧本杀，零行为变化）
         game.mode = "chat".equals(str(c.get("mode"))) ? "chat" : "full";
+        // P1: 主题/LLM 降级/投票超时基准/quorum 重投/低参与度/托管恢复（旧快照无此键 → 默认值，零行为变化）
+        game.theme = str(c.get("theme"));
+        game.llmDegraded = boolOf(c.get("llm_degraded"), false);
+        game.voteStartedAt = c.get("vote_started_at") instanceof Number n ? n.longValue() : 0L;
+        game.quorumFailCount = intOf(c.get("quorum_fail_count"), 0);
+        game.lowParticipation = boolOf(c.get("low_participation"), false);
+        game.trustees.addAll(strList(c.get("trustees")));
         game.name = str(c.get("name"));
         game.background = str(c.get("background"));
         game.truth = str(c.get("truth"));

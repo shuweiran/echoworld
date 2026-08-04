@@ -396,6 +396,30 @@ public class ScriptController {
     }
 
     /**
+     * P1（任务 2a）：玩家退出对局 —— 角色标记为托管（AI 代管但标记清楚），其已投的票作废、
+     * 不计入 quorum 在线数。body: player（必填）/ player_key（可选，身份校验）/ session_id（可选）。
+     */
+    @PostMapping("/leave")
+    public ResponseEntity<Map<String, Object>> leave(@RequestBody Map<String, String> body) {
+        String player = body.getOrDefault("player", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        String sessionId = body.getOrDefault("session_id", playerSessions.getOrDefault(player, currentSessionId));
+        return ResponseEntity.ok(scriptGameService.leaveGame(sessionId, player, playerKey));
+    }
+
+    /**
+     * P1（任务 2b）：ENDED 后重开一局 —— 同剧本主题同玩家重开（复用 sessionId，前端轮询/SSE 定位不变）；
+     * 新对局生成全新剧本/角色分配/roleKey/票型，托管与降级标记重置。
+     * 前端 ChatPage 结束面板「再来一局（同剧本）」按钮调用；「回到剧本选择」为纯前端导航。
+     */
+    @PostMapping("/restart")
+    public ResponseEntity<Map<String, Object>> restart(@RequestBody Map<String, String> body) {
+        String sessionId = body.getOrDefault("session_id", currentSessionId);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        return ResponseEntity.ok(scriptGameService.restartGame(sessionId));
+    }
+
+    /**
      * C3: 状态查询 —— 支持 player_key 认证（有 key 校验匹配，无 key 向后兼容）；
      * 仅传 player_key 时可由 key 反查玩家（重连场景）。
      */
