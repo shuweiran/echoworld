@@ -7,16 +7,18 @@
 
 ---
 
-## 📊 当前基线（最新汇总，2026-08-03 25:0x）
+## 📊 当前基线（最新汇总，2026-08-04 13:5x）
 
 | 指标 | 值 |
 |---|---|
 | 测试类 | **58** |
-| 测试用例 | **407（403 基线零破坏 + 新增 SceneMapLlmModeTest 4 用例：LLM 模式成功/无 theme BSP 零回归/LLM 失败 BSP 兜底/4 参构造防御）** |
+| 测试用例 | **412（407 基线零破坏 + MovementConstraintTest GroupAnchor 新增 2 + LongSimulationConcurrentTest LONG-04 新增 3）** |
 | Failures / Errors | **0 / 0** |
-| 最后全量执行 | 2026-08-03 24:5x（**P-0803-O 两条地图链路 LLM 全量生成批次：全量 407/0 BUILD SUCCESS**，58 类 surefire 汇总，LONG-01 PASS 2.529s；后端 SceneController.generateDefaultMap 双模式 + 前端剧本编辑弹窗生成方式选择 + 剧本杀设置页地图区 theme 暴露；详见 Round 40） |
+| 最后全量执行 | 2026-08-04 13:4x（**P-0804-A 授权批次：全量 412/0 BUILD SUCCESS**，58 类 surefire 汇总；首轮 LONG-01 堆 32.3%>30% 为既有脆性 #37/#40/#41 同款，单跑 PASS 后复跑全绿；GroupAnchor leader+follow slot 完整实现 + BSP seed 配置化 + LONG-04 并发稳定性；详见 v41） |
 | 环境 | H2 mem + mock LLM（application-test.yml） |
 | 真机验证 | **merged 正式版 7 项 PASS**（2026-08-01 13:05，台账 #47）；**P1 剧本生成 maxTokens 修复 4/4 完整生成 PASS**（2026-08-01 18:45，台账 #57：真实 LLM 生成完整 schema v1 剧本 4/4 次，不再走 defaultScript 兜底；讨论自动进 VOTE 且发言多样）；**Phaser 阶段2 已通过未衡终审（2026-08-01 20:4x，三阶段全闭环，8000 重启生效 PID 25760，见 v15）** |
+
+> v41 更新（2026-08-04 13:5x，**P-0804-A 授权批次**），基线 407 → **412 tests / 58 类**：①**后端**——`MovementConstraint` GroupAnchor 完整实现（MERGED 组 leader=字典序最小名 + follow slot 直线队形 SLOT_SPACING=16，leader 收敛组质心、移动后槽位重算；MovementConstraintTest 11→13 用例改写/新增，WEAK/ISOLATED 零改动）；`ScriptMapService` bsp-seed @Value 注入（yml 双份 roleplay.game.map.bsp-seed，缺省回退 DEFAULT_BSP_SEED=20260801 零行为变化）；新增 `stability/LongSimulationConcurrentTest`（LONG-04 并发模拟稳定性 3 用例：2D 世界定时 tick + 8 线程并发 compute/apply 1000 迭代，断言坐标有限有界/无死锁/无丢任务）。②**前端**——useSSE 断线补发（重连成功后 announcementRecent(since) 拉取重放，P3 关闭）、scriptInit +roomCode 联机房剧本杀接线、scriptMap +width/height + 剧本杀设置页地图区 宽/高/seed UI 暴露（D-031/D-035 关闭）、SILENCE_MARKER 静默渲染（utils/silenceMarker.tsx + 狼人杀讨论面板/2D 侧列表灰色斜体，D-022 关闭）、删除 ChatPage.tsx.bak。③**⚠️ 事故修复**——本批误用 PowerShell `Set-Content -NoNewline` 处理导致 ChatPage.tsx / PhaserSimulationView.tsx UTF-8 中文编码损坏（非法 GBK 对→`?` 有损，丢失中文字符尾字节+后续 ASCII 引号/`$`/`<`/换行），已从 static bundle（index-StVXWN_F.js，含全部原始 UI 串）逐处匹配恢复全部中文字符串 + 逐行修复结构（缺失引号/`}`/`</`/`$`/换行 40+ 处）→ **tsc -b 全绿 exit 0**；npm run build 66 modules → static 同步 index-Bdi8t8bk.js + index-CpI7G5E6.css（SHA256 dist↔static 一致，index.html 引用更新，删除旧产物）。④**验证**——全量 mvn 412/0（首轮 LONG-01 堆 32.3%>30% 为既有脆性 #37/#40/#41 同款，单跑 PASS 后复跑全绿）；禁动文件（RouterService/ArbiterService/审批/狼人杀/剧本杀 Service/SSE 主链路）零改动；详见 Round 41 / 台账 #101 / DECISION_LOG D-036
 
 > v40 更新（2026-08-03 24:5x，**P-0803-O 两条地图链路 LLM 全量生成批次**（主人需求「都加上 llm全量生成」），基线 403 → **407 tests / 58 类**）：①**后端 SceneController.generateDefaultMap 双模式**——POST /api/scenes/map body 可选 theme：非空 → ScriptMapService LLM 全量生成统一路径（LLM 完整输出 ground+collision 双层数组 + rooms/zones/spawns → 契约 v1 校验 → 失败/超预算 BSP 兜底），响应附加 mode/generator/validation/fallback 溯源键；空/缺省 → P-0803-H BSP 确定性零回归。注入可行性已核实：ScriptMapService 为 @Service 仅依赖 LLMClient，SceneController→ScriptMapService→LLMClient 无环，5 参 @Autowired 构造 + 4 参旧构造委托 null（防御回落 BSP）。②**新增 SceneMapLlmModeTest 4 用例**——O1 带 theme → LLM 全量（kind=llm/mode=llm/契约 v1 全量元素/校验通过/无兜底）；O2 无 theme（null/空串/空白）→ BSP 确定性零回归（kind=bsp + 同 seed 同输出）；O3 LLM 空输出 → bsp-fallback + fallback 原因含「输出为空」+ 兜底地图契约 v1 自洽；O4 4 参构造（mapService=null）带 theme → 防御回落 BSP 不崩。单跑 SceneMapLlmModeTest 4/0 + SceneBindingTest 5/0（BSP 零回归复验）。③**前端**——剧本编辑弹窗「生成方式」选择（✨ LLM 全量生成需主题 / BSP 默认无主题）+ LLM 主题输入（占位「民国宅邸凶案」），生成后绑定 default_map 逻辑不变，既有 BSP「生成默认地图」按钮保留为 BSP 模式入口；剧本杀设置页地图区（gameSetup 双版本 + rules script tab 两处）theme 暴露为可编辑输入（mapTheme 状态默认剧本名、可改，genScriptMap/genScript chat 自动地图/doResumeScript 均消费）；client.ts sceneMap 改收 body{seed?,theme?}（无参调用向后兼容）。④**构建**——npm run build 通过（tsc 0 错误 + vite 65 modules，index-StVXWN_F.js 1,863.64 kB）+ static 同步（SHA256 dist?static 一致 + index.html 引用更新 + 删除 index-Cx-YssBi.js，CSS 未变 index-BC-6X7pW.css）+ bundle grep 命中（生成方式：/LLM 全量生成/BSP 默认/民国宅邸凶案/LLM 全量输出（契约 v1 校验）/失败自动 BSP 兜底/BSP 确定性生成（契约 v1）/默认剧本名可改/sceneMap body 签名）。⑤**兼容性**——BSP 模式零回归（SceneBindingTest 5/0 全绿 + O2 复验）；禁动文件（RouterService/ArbiterService/审批/狼人杀/剧本杀 Service/SSE 主链路）零改动；ChatPage 零改动；seed 参数双模式均透传。⑥**遗留**——剧本杀设置页 seed/尺寸参数后端已支持（P-0803-J/K），UI 空间不允许未暴露（保持现状，报告说明）；LLM 模式为真实 LLM 调用（成本/延迟与对局地图同档，测试走 mock）；详见 Round 40 / 台账 #100 / DECISION_LOG D-035
 

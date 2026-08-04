@@ -58,8 +58,8 @@
 - [x] **Phaser 迁移阶段 2（LLM 生成地图接入，2026-08-01，三阶段全闭环）**：后端 POST /api/script/map（session_id/theme/seed/regenerate → LLM 生成 → 契约 v1 宽容解析 → Java 校验器 MapValidator 7 项检查 → 失败降级 BSP）+ `simulation/map/` 包 3 类（MapContract/MapValidator/BspMapGenerator）+ `service/ScriptMapService.java`（缓存命中/regenerate 强制重生成 + map_data 随对局快照落库）；测试 4 类 37 用例，全量 mvn **254/0**；前端 `phaser/` 地图三件（mapData.ts/ScriptMapScene.ts/PhaserScriptMapView.tsx）+ ScenePage 剧本杀 Tab「生成地图」入口 + 搜证联动（zones.clue_location ↔ clues.location，搜证成功热点变绿 markZoneSearched）；npm build 63 modules → index-Ccc-CMzG.js 已同步 static，**8000 重启生效（PID 25760）**；已通过未衡终审，遗留 P2 两项见「未完成」——见 DECISION_LOG D-020 / docs/Phaser迁移计划.md
 
 ## 未完成（按优先级）
-- [ ] 演讲/广播断线补发前端接线（GET /api/announcements/recent 已就绪，useSSE 重连后自动补拉未接，P3）
-- [ ] **Phaser 阶段2 终审遗留 P2（非阻塞）①**：BSP 降级 seed 硬编码 `DEFAULT_BSP_SEED=20260801`（ScriptMapService 常量，注释已指向 `roleplay.game.map.bsp-seed` 但未 @Value 注入 / yml 键未落地，建议后续配置化，对齐 D-004「阈值勿 hardcode」纪律）
+- [x] ~~演讲/广播断线补发前端接线（GET /api/announcements/recent 已就绪，useSSE 重连后自动补拉未接，P3）~~（已解决 2026-08-04，P-0804-A：useSSE 重连成功后续拉 announcementRecent(since) 重放）
+- [x] ~~**Phaser 阶段2 终审遗留 P2（非阻塞）①**：BSP 降级 seed 硬编码 DEFAULT_BSP_SEED=20260801~~（已解决 2026-08-04，P-0804-A：ScriptMapService @Value 注入 roleplay.game.map.bsp-seed，yml 双份）
 - [ ] **Phaser 阶段2 终审遗留 P2（非阻塞）②**：地图数据不在对局 `toMap` 的 `your_secret` 同级暴露（地图经 POST /api/script/map 生成响应 + 快照 map_data 获取，前端已消费；实现选择，非缺陷，如需随对局状态下发可后续补充）
 - [x] ~~演讲 demo 需服务端重启生效~~（已解决 2026-08-01，台账 #47：mvn package 重新打包 + 8000 实例重启（java -jar，pid 22664）加载 merged 正式版，static 产物随 jar 生效）
 - [x] ~~D1 中断系统包（InterruptManager/AgentTaskManager 缺失）~~（已实现 2026-07-31，台账 #18：interrupt 包 11 文件——InterruptManager 335 行 / AgentTaskManager / CancellationToken / AgentTask / AgentTaskStatus / WorldEventBus / GameEvent / TrackChangeEvent / StopType / TaskType / TaskCancelledException + 全链路接线 AgentExecutor/Agent/LLMClient/RouterService/SessionController/ConversationManager/SimulationService/SimulationOrchestrator，29 项逻辑自测 PASS；D22 FAILED 终态补充见台账 #23）
