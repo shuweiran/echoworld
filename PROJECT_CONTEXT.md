@@ -69,7 +69,7 @@
 ## 当前最大问题
 1. **G1 LLM 401 — ✅ 已解除（2026-07-31 21:35，台账 #28/#32）**：根因 D25（AppConfig 无配置绑定注解，yml 环境变量占位符从不生效）已修复——AppConfig 加 `@ConfigurationProperties(prefix="roleplay")` 绑定 + 补全 setter 后，启动自动读环境变量 `ROLEPLAY_LLM_API_KEY`，`configured=True`，不再需要运行时注入；131/0 测试全绿 + 启动 configured=True + 真实对话 14.3s 真机验证 PASS。依赖真实 LLM 的用例现可运行（问题清单 G1 已标 ✅ 已解除）
 2. **并行工作流**：另一主会话在改同一批文件（ScriptGameService 已改 D5 secrets）→ **任何派单前先 git diff 确认基线**
-3. **剧本杀约 95% 完成**：前端已实装——ScenePage 剧本杀 Tab + 状态面板、script API 全部封装、14 项玩家功能完整可玩（AI 开局/搜证/讨论/投票/揭晓/2D 模拟，3 秒轮询刷新）；后端已闭环——ENDED 终态 + saveScript 双点落库（批次B）、script SSE 推送（批次B）、剧本 Schema v1 + 双生成器统一（批次C1）、AP 行动点 + 线索转交（批次C2）、断线重连与会话恢复 roleKey+快照（批次C3）、**DM 主持人面板 + 重连 UI（批次C4）**；剩余缺口：无退出/重开对局、私聊后端有前端无、ScenePage.tsx.bak 残留、联机房（/api/rooms/*）仅狼人杀 Tab 接入剧本杀未接（room_code 绑定入口已备，前端接续）、剧本杀历史体系未接 RouterService（P2）
+3. **剧本杀约 95% 完成**：前端已实装——ScenePage 剧本杀 Tab + 状态面板、script API 全部封装、14 项玩家功能完整可玩（AI 开局/搜证/讨论/投票/揭晓/2D 模拟，3 秒轮询刷新）；后端已闭环——ENDED 终态 + saveScript 双点落库（批次B）、script SSE 推送（批次B）、剧本 Schema v1 + 双生成器统一（批次C1）、AP 行动点 + 线索转交（批次C2）、断线重连与会话恢复 roleKey+快照（批次C3）、**DM 主持人面板 + 重连 UI（批次C4）**、**投票超时+quorum+退出托管+ENDED 重开+LLM 降级提示（P-0804-B，2026-08-04，见 D-037）**；剩余缺口：私聊后端有前端无、联机房（/api/rooms/*）仅狼人杀 Tab 接入剧本杀未接（room_code 绑定入口已备，前端接续）、剧本杀历史体系未接 RouterService（P2）
 
 ## 关键文件索引
 | 文件 | 内容 |
