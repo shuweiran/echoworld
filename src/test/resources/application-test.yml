@@ -51,6 +51,8 @@ roleplay:
       # 大图（超 LLM token 预算 40×24）直接走 BSP 确定性生成（ScriptMapService 预算闸）
       default-width: 24
       default-height: 16
+      # BSP 降级种子（与主 yml 同步默认值；测试走显式 seed 时不受影响）
+      bsp-seed: 20260801
     discussion:
       # 批次 D 发言门控：与主 yml 同步默认值（silence-floor=0.15 / priority-decay-rounds=3 / wait-bias=0.5 / cold-break=true）
       max-rounds: 2
@@ -58,6 +60,11 @@ roleplay:
       priority-decay-rounds: 3
       wait-bias: 0.5
       cold-break: true
+    script:
+      # P1 剧本杀可玩性修复（与主 yml 同步；测试直构服务不经 Spring，@Value 默认值生效）
+      vote-timeout-ms: 60000
+      vote-timeout-enabled: true
+      quorum-enabled: true
     werewolf:
       # P-0802-F 狼人杀自动推进（与主 yml 同步；测试直构服务不经 Spring，@Value 默认值生效）
       ai-night-actions: true

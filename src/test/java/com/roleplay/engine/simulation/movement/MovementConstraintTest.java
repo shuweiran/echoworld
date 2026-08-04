@@ -16,13 +16,14 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static com.roleplay.engine.simulation.movement.MovementConstraint.SLOT_SPACING;
 
 /**
  * Tests for {@link MovementConstraint} — Phase 4 轨道 → 运动约束（纯规则，零 LLM）。
  *
  * <p>覆盖需求文档第九条三种轨道的运动：
  * <ul>
- *   <li>MERGED 群组成员 → 组质心 ± 偏移（GroupAnchor 雏形）</li>
+ *   <li>MERGED 群组成员 → GroupAnchor（leader + follow slot 队形跟随）</li>
  *   <li>WEAK 监听者 → 听觉带 [hearRange*0.5, hearRange]（太近拉远 / 太远靠近）</li>
  *   <li>ISOLATED → 距 secretAgents ≥ 安全距离（过近避让）</li>
  *   <li>优先级：ISOLATED 避让 &gt; WEAK &gt; MERGED（秘密成员即使分配为 MERGED 也避让）</li>
@@ -64,30 +65,65 @@ class MovementConstraintTest {
         return Math.sqrt((x1 - x2) * (x1 - x2) + (y1 - y2) * (y1 - y2));
     }
 
-    // ── MERGED：跟随/聚集 ──────────────────────────────────────
+    // ── MERGED：GroupAnchor（leader + follow slot）──────────────
 
     @Test
-    @DisplayName("MERGED 群组成员 → 目标位于组质心±偏移（GroupAnchor 雏形）")
-    void mergedGroupFollowsCentroid() {
+    @DisplayName("MERGED：leader=字典序最小名，收敛到组质心；其余成员占 follow slot 排成直线")
+    void mergedGroupUsesLeaderFollowSlots() {
         AgentState a = agent("A", 100, 100);
         AgentState b = agent("B", 120, 100);
         AgentState c = agent("C", 110, 140);
 
         Map<String, MovementTarget> targets = constraint.compute(
-                List.of(a, b, c), mergedGroup("A", "B", "C"), Set.of());
+                List.of(c, b, a), mergedGroup("A", "B", "C"), Set.of());
 
         assertEquals(3, targets.size());
         MovementTarget ta = targets.get("A");
+        MovementTarget tb = targets.get("B");
+        MovementTarget tc = targets.get("C");
         assertNotNull(ta);
-        assertTrue(ta.reason().contains("MERGED"));
-        assertTrue(ta.reason().contains("组质心"), "理由应含质心说明，实际=" + ta.reason());
+        assertNotNull(tb);
+        assertNotNull(tc);
+        assertTrue(ta.reason().contains("锚点"), "leader 应聚向组质心，实际=" + ta.reason());
+        assertTrue(tb.reason().contains("槽位#1"), "B 应为队首槽位，实际=" + tb.reason());
+        assertTrue(tc.reason().contains("槽位#2"), "C 应为队尾槽位，实际=" + tc.reason());
 
-        // 组质心 = (110, 113.33)；目标应在质心 ± MERGED_GROUP_RADIUS(20) 内。
-        double centroidDist = dist(ta.targetX(), ta.targetY(), 110, 340.0 / 3.0);
-        assertTrue(centroidDist <= MovementConstraint.MERGED_GROUP_RADIUS + EPS,
-                "目标应在质心圆周上，实际距离=" + centroidDist);
-        assertTrue(centroidDist >= MovementConstraint.MERGED_GROUP_RADIUS - EPS - 0.01,
-                "目标应偏离质心（±偏移），实际距离=" + centroidDist);
+        // 组质心 = (110, 113.33)；leader A 目标应为其质心。
+        assertEquals(110.0, ta.targetX(), EPS, "leader A 应聚向质心 x=110");
+        assertEquals(340.0 / 3.0, ta.targetY(), EPS, "leader A 应聚向质心 y=113.33");
+
+        // 跟随者按 slot 排在 leader 后方直线：B 距 A = 1×SLOT_SPACING，C = 2×SLOT_SPACING。
+        double dir = slotAngle("A");
+        assertEquals(SLOT_SPACING, dist(tb.targetX(), tb.targetY(), 100, 100), EPS,
+                "B 槽位#1 应距 leader A 一个 SLOT_SPACING");
+        assertEquals(SLOT_SPACING * 2, dist(tc.targetX(), tc.targetY(), 100, 100), EPS,
+                "C 槽位#2 应距 leader A 两个 SLOT_SPACING");
+        // B/C 在 leader 后方的同一直线上（方向 = formationAngle(leader)）。
+        assertEquals(Math.cos(dir), (tb.targetX() - 100) / SLOT_SPACING, 1e-6);
+        assertEquals(Math.sin(dir), (tb.targetY() - 100) / SLOT_SPACING, 1e-6);
+        assertEquals(Math.cos(dir), (tc.targetX() - 100) / (SLOT_SPACING * 2), 1e-6);
+        assertEquals(Math.sin(dir), (tc.targetY() - 100) / (SLOT_SPACING * 2), 1e-6);
+    }
+
+    /** GroupAnchor 队形方向的确定性角度（与实现 angleFor 同规则）。 */
+    private static double slotAngle(String leaderName) {
+        int h = leaderName == null ? 0 : leaderName.hashCode() & 0x7fffffff;
+        return (h % 360) * Math.PI / 180.0;
+    }
+
+    @Test
+    @DisplayName("MERGED leader 确定性与名称序无关（B,A,C 输入仍选 A 为 leader）")
+    void leaderSelectionIsDeterministicByName() {
+        AgentState a = agent("A", 100, 100);
+        AgentState b = agent("B", 120, 100);
+        AgentState c = agent("C", 110, 140);
+
+        Map<String, MovementTarget> targets = constraint.compute(
+                List.of(b, a, c), mergedGroup("A", "B", "C"), Set.of());
+
+        assertTrue(targets.get("A").reason().contains("锚点"), "字典序最小名 A 恒为 leader");
+        assertTrue(targets.get("B").reason().contains("跟随 leader(A)"));
+        assertTrue(targets.get("C").reason().contains("跟随 leader(A)"));
     }
 
     @Test
@@ -103,25 +139,50 @@ class MovementConstraintTest {
     }
 
     @Test
-    @DisplayName("MERGED 已处于期望位置附近 → 不重设目标（防抖动）")
+    @DisplayName("MERGED 已处于期望位置（leader 在质心 / 跟随者在槽位）→ 不重设目标（防抖动）")
     void mergedAlreadyAtAnchorNoTarget() {
-        // 构造固定点：让 A 恰好位于其期望位置（质心+偏移）。
-        // A = C0 + off，B+C = 2A − 3off → 质心 = C0，A 的期望点 = C0+off = A。
-        int h = "A".hashCode() & 0x7fffffff;
-        double angle = (h % 360) * Math.PI / 180.0;
-        double ox = Math.cos(angle) * MovementConstraint.MERGED_GROUP_RADIUS;
-        double oy = Math.sin(angle) * MovementConstraint.MERGED_GROUP_RADIUS;
-        double ax = 200 + ox, ay = 100 + oy;
-        AgentState a = agent("A", ax, ay);
-        AgentState b = agent("B", ax - 1.5 * ox + 10, ay - 1.5 * oy);
-        AgentState c = agent("C", ax - 1.5 * ox - 10, ay - 1.5 * oy);
+        // A(leader) 置于质心；B 置于其槽位#1；C 偏离其槽位#2 → 仅 C 需移动。
+        double dir = slotAngle("A");
+        double dx = Math.cos(dir) * SLOT_SPACING;
+        double dy = Math.sin(dir) * SLOT_SPACING;
+        AgentState a = agent("A", 200, 100);            // 质心（B、C 对称摆放）
+        AgentState b = agent("B", 200 + dx, 100 + dy);   // 恰在槽位#1
+        AgentState c = agent("C", 200 - dx, 100 - dy);   // 偏离槽位#2（应在 200+2dx, 100+2dy）
 
         Map<String, MovementTarget> targets = constraint.compute(
                 List.of(a, b, c), mergedGroup("A", "B", "C"), Set.of());
 
-        assertNull(targets.get("A"), "A 已在期望位置（质心+偏移），不应重设目标");
-        assertNotNull(targets.get("B"));
-        assertNotNull(targets.get("C"));
+        assertNull(targets.get("A"), "leader A 已在质心，不应重设目标");
+        assertNull(targets.get("B"), "跟随者 B 已在槽位#1，不应重设目标");
+        assertNotNull(targets.get("C"), "跟随者 C 偏离槽位#2，应重设目标");
+    }
+
+    @Test
+    @DisplayName("MERGED 跟随语义：leader 移动后，跟随者槽位相对新 leader 位置重算")
+    void followersRefollowWhenLeaderMoves() {
+        double dir = slotAngle("A");
+        double dx1 = Math.cos(dir) * SLOT_SPACING;
+        double dy1 = Math.sin(dir) * SLOT_SPACING;
+        AgentState a = agent("A", 100, 100);
+        AgentState b = agent("B", 100 + dx1, 100 + dy1);    // 恰在槽位#1
+        AgentState c = agent("C", 100 + dx1 * 2, 100 + dy1 * 2); // 恰在槽位#2
+
+        Map<String, MovementTarget> first = constraint.compute(
+                List.of(a, b, c), mergedGroup("A", "B", "C"), Set.of());
+        assertNull(first.get("B"), "leader 未移动时 B 在槽位，无需移动");
+        assertNull(first.get("C"));
+
+        // leader 移动后：B/C 槽位应随 A 新位置重算。
+        a.setX(300);
+        a.setY(200);
+        Map<String, MovementTarget> second = constraint.compute(
+                List.of(a, b, c), mergedGroup("A", "B", "C"), Set.of());
+        assertEquals(300 + Math.cos(dir) * SLOT_SPACING, second.get("B").targetX(), EPS,
+                "B 槽位应随 leader 新位置重算");
+        assertEquals(200 + Math.sin(dir) * SLOT_SPACING, second.get("B").targetY(), EPS);
+        assertEquals(300 + Math.cos(dir) * SLOT_SPACING * 2, second.get("C").targetX(), EPS,
+                "C 槽位应随 leader 新位置重算");
+        assertEquals(200 + Math.sin(dir) * SLOT_SPACING * 2, second.get("C").targetY(), EPS);
     }
 
     // ── WEAK：保持听觉范围 ─────────────────────────────────────
@@ -278,7 +339,7 @@ class MovementConstraintTest {
         if (ta != null) {
             assertNotEquals(ta.targetX(), a.getTargetX(), 0.001);
         }
-        // B 应获得约束目标（质心 (200,100) ± 偏移）。
+        // B 应获得约束目标（GroupAnchor：跟随 leader A 的槽位）。
         MovementTarget tb = targets.get("B");
         assertNotNull(tb);
         assertTrue(b.isHasTarget());

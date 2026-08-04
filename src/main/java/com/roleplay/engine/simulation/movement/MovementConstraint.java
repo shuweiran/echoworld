@@ -10,6 +10,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -19,8 +20,10 @@ import java.util.Set;
  * <p>输入 Track 分配（TrackDirector 产物），输出每个角色的期望位置
  * {@link MovementTarget}，规则表：
  * <ul>
- *   <li><b>MERGED</b>   → 跟随/聚集：目标 = 同组成员质心 ± 偏移（GroupAnchor 雏形；
- *       同组成员分散在质心圆周上，避免叠点）</li>
+ *   <li><b>MERGED</b>   → 跟随/聚集：GroupAnchor（leader + follow slot）。leader = 组内
+ *       字典序最小名的成员（确定性锚点），收敛到组质心保持凝聚；其余成员按名称序占
+ *       follow slot（k=1,2,…），排列在 leader 后方一条直线上（间隔 {@link #SLOT_SPACING}）。
+ *       leader 移动时成员随槽位重算跟随——需求文档 §九-十「群体移动系统」。</li>
  *   <li><b>WEAK</b>     → 保持听觉范围：期望距离 ∈ [hearRange*0.5, hearRange]
  *       （太近 → 拉远到 0.7·hearRange 避免贴脸偷听；太远 → 靠近到 0.8·hearRange 避免跟丢）</li>
  *   <li><b>ISOLATED</b> → 主动保持距离：距 secretAgents/指定避让目标 ≥ 60 格
@@ -46,8 +49,8 @@ public class MovementConstraint {
     public static final double WEAK_TARGET_FACTOR_CLOSE = 0.7;
     /** WEAK：太远时的目标距离因子（靠近到 hearRange×0.8）。 */
     public static final double WEAK_TARGET_FACTOR_FAR = 0.8;
-    /** MERGED：组质心分散半径（角色分布在质心圆周上）。 */
-    public static final double MERGED_GROUP_RADIUS = 20.0;
+    /** GroupAnchor：leader 后方 follow slot 的间隔（格）。 */
+    public static final double SLOT_SPACING = 16.0;
     /** 距期望位置小于该值时不再输出目标（防抖动）。 */
     public static final double ARRIVAL_EPSILON = 8.0;
 
@@ -142,11 +145,20 @@ public class MovementConstraint {
         }
     }
 
-    // ── MERGED：跟随/聚集 ─────────────────────────────────────
+    // ── MERGED：GroupAnchor（leader + follow slot）──────────────
 
     /**
-     * MERGED 群组成员 → 组质心 ± 偏移（GroupAnchor 雏形）。
+     * MERGED 群组成员 → GroupAnchor 队形。
      * 成员集合 = 自己 + assignment.visibleAgents（同组可见伙伴）。
+     *
+     * <p>需求文档 §九-十「群体移动系统」：组内选定 leader 作为移动锚点，其余成员占
+     * follow slot 形成队形，leader 移动时成员跟随。
+     * <ul>
+     *   <li><b>leader</b> = 组内字典序最小名的成员（确定性，跨 tick 稳定）→ 收敛到组质心
+     *       （保持凝聚，同时作为其余成员的跟随锚点）</li>
+     *   <li><b>follow slot</b> = 其余成员按名称序 k=1,2,…，目标 = leader 位置 +
+     *       {formationAngle(leader)} × SLOT_SPACING × k（一条直线队形，避免叠点）</li>
+     * </ul>
      */
     private MovementTarget computeMerged(AgentState self, Map<String, AgentState> byName,
                                          TrackAssignment ta) {
@@ -156,24 +168,45 @@ public class MovementConstraint {
             AgentState s = byName.get(v);
             if (s != null && s != self) members.add(s);
         }
-        if (members.size() < 2) return null; // 无同伴 → 无需聚集
+        if (members.size() < 2) return null; // 无同伴 → 无需队形
 
-        double cx = 0, cy = 0;
-        for (AgentState m : members) {
-            cx += m.getX();
-            cy += m.getY();
+        String leaderName = members.stream()
+                .map(AgentState::getAgentName)
+                .filter(Objects::nonNull)
+                .min(String::compareTo)
+                .orElse(null);
+        if (leaderName == null) return null;
+        AgentState leader = byName.get(leaderName);
+        if (leader == null) return null;
+
+        // leader：收敛到组质心（锚点；成员以它为参照跟队）。
+        if (leaderName.equals(self.getAgentName())) {
+            double cx = 0, cy = 0;
+            for (AgentState m : members) {
+                cx += m.getX();
+                cy += m.getY();
+            }
+            cx /= members.size();
+            cy /= members.size();
+            if (distance(self, cx, cy) < ARRIVAL_EPSILON) return null;
+            return new MovementTarget(self.getAgentName(), clamp(cx), clamp(cy),
+                    "MERGED 群组锚点（leader 聚向组质心）");
         }
-        cx /= members.size();
-        cy /= members.size();
 
-        // 确定性偏移：每个角色分布在质心圆周上，避免全部叠在同一点。
-        double angle = angleFor(self.getAgentName());
-        double tx = clamp(cx + Math.cos(angle) * MERGED_GROUP_RADIUS);
-        double ty = clamp(cy + Math.sin(angle) * MERGED_GROUP_RADIUS);
+        // 跟随者：按名称序占 follow slot，排列在 leader 后方直线队形。
+        List<String> followerNames = members.stream()
+                .map(AgentState::getAgentName)
+                .filter(n -> n != null && !n.equals(leaderName))
+                .sorted()
+                .toList();
+        int k = followerNames.indexOf(self.getAgentName()) + 1;
+        double dir = angleFor(leaderName);
+        double tx = leader.getX() + Math.cos(dir) * SLOT_SPACING * k;
+        double ty = leader.getY() + Math.sin(dir) * SLOT_SPACING * k;
 
         if (distance(self, tx, ty) < ARRIVAL_EPSILON) return null;
-        return new MovementTarget(self.getAgentName(), tx, ty,
-                "MERGED 跟随群组（组质心±偏移）");
+        return new MovementTarget(self.getAgentName(), clamp(tx), clamp(ty),
+                "MERGED 跟随 leader(" + leaderName + ") 槽位#" + k);
     }
 
     // ── WEAK：保持听觉范围 ────────────────────────────────────

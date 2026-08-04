@@ -71,6 +71,8 @@ roleplay:
       # （BspMapGenerator.scaledZonesCount：24×16=384 格 → 3 个，64×64 → ≈10 个）。
       default-width: 24
       default-height: 16
+      # BSP 降级种子（ScriptMapService 读取；缺省用 DEFAULT_BSP_SEED=20260801，同 seed 同输出确定性）
+      bsp-seed: 20260801
     discussion:
       # 讨论引擎（GAP-3 批次 A + 批次 D 发言门控）：
       #   max-rounds=轮数（默认 2）；
@@ -83,6 +85,16 @@ roleplay:
       priority-decay-rounds: 3
       wait-bias: 0.5
       cold-break: true
+    script:
+      # 剧本杀 P1 可玩性修复（2026-08-04，见 DECISION_LOG D-036）：
+      #   vote-timeout-ms=投票超时（毫秒，默认 60000=60s）—— VOTE 阶段超过该时长后 resolveVote
+      #     将未投票玩家按弃票处理并转为托管（AI 代管，票作废；任务 1/2a）
+      #   vote-timeout-enabled=投票超时开关（默认 true；false=保持旧行为可无限等）
+      #   quorum-enabled=有效票门槛开关（默认 true）—— 有效票 < ceil(在线玩家数/2) 时
+      #     清票重投一轮，重投仍不足按已投计并标记「低参与度判定」；false=少数票即可定局（旧行为）
+      vote-timeout-ms: 60000
+      vote-timeout-enabled: true
+      quorum-enabled: true
     werewolf:
       # 狼人杀自动推进（P-0802-F，主人授权后端批次）：
       #   ai-night-actions=AI 角色夜间自动决策（狼刀/预言家验/女巫救毒/猎人反杀）

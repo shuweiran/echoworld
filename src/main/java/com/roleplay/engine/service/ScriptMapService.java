@@ -6,6 +6,7 @@ import com.roleplay.engine.simulation.map.MapContract;
 import com.roleplay.engine.simulation.map.MapValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -33,11 +34,15 @@ public class ScriptMapService {
 
     private final LLMClient llmClient;
 
+    /** 配置化的 BSP 降级种子（roleplay.game.map.bsp-seed，默认 0=未配置回退 {@link #DEFAULT_BSP_SEED}）。 */
+    @Value("${roleplay.game.map.bsp-seed:0}")
+    private long configuredBspSeed;
+
     public ScriptMapService(LLMClient llmClient) {
         this.llmClient = llmClient;
     }
 
-    /** LLM 失败/超时/输出不合法时的 BSP 降级种子（可配置，勿 hardcode 纪律——见 yml roleplay.game.map.bsp-seed）。 */
+    /** LLM 失败/超时/输出不合法时的 BSP 降级种子兜底（未配置 roleplay.game.map.bsp-seed 时使用）。 */
     public static final long DEFAULT_BSP_SEED = 20260801L;
 
     /**
@@ -138,7 +143,7 @@ public class ScriptMapService {
         }
 
         // ── 路径 2：BSP 降级（确定性兜底，校验器保证可通过；显式尺寸 + 热点数按面积自动缩放） ──
-        long effectiveSeed = seed <= 0 ? DEFAULT_BSP_SEED : seed;
+        long effectiveSeed = seed <= 0 ? (configuredBspSeed > 0 ? configuredBspSeed : DEFAULT_BSP_SEED) : seed;
         Map<String, Object> bsp = BspMapGenerator.generate(BspMapGenerator.Options.of(effectiveSeed, effW, effH, -1));
         fallbackReasons.add("降级：BSP 生成器兜底（seed=" + effectiveSeed + "，尺寸 " + effW + "×" + effH + "）");
         MapValidator.Result v = MapValidator.validateMap(bsp);
