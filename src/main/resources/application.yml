@@ -69,8 +69,8 @@ roleplay:
       # LLM 路径 token 预算上限约 40×24（ScriptMapService.LLM_MAX_WIDTH/HEIGHT）——显式请求尺寸超上限
       # （如 64×64）直接走 BSP 确定性生成（大图路径，精确尺寸零截断）；热点数按面积自动缩放
       # （BspMapGenerator.scaledZonesCount：24×16=384 格 → 3 个，64×64 → ≈10 个）。
-      default-width: 24
-      default-height: 16
+      default-width: 40
+      default-height: 24
       # BSP 降级种子（ScriptMapService 读取；缺省用 DEFAULT_BSP_SEED=20260801，同 seed 同输出确定性）
       bsp-seed: 20260801
     discussion:

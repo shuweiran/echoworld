@@ -7,6 +7,7 @@ import com.roleplay.engine.db.repository.*;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -29,20 +30,37 @@ public class DatabaseService {
     private final WorldSnapshotRepository worldSnapshotRepo;
     private final ScriptRepository scriptRepo;
     private final GameSessionRepository gameSessionRepo;
+    private final AssetRepository assetRepo;
     private final ObjectMapper mapper;
 
+    /**
+     * P-0804-C：旧六参构造保留（委托新七参，assetRepo=null）——既有测试直构调用点（WerewolfRoleKeyTest/
+     * WerewolfStage1Test 等）零改动；素材方法在 assetRepo==null 时防御性返回空结果（生产走 @Autowired 七参）。
+     */
     public DatabaseService(CharacterRepository characterRepo,
                            SceneRepository sceneRepo,
                            ConversationLogRepository conversationLogRepo,
                            WorldSnapshotRepository worldSnapshotRepo,
                            ScriptRepository scriptRepo,
                            GameSessionRepository gameSessionRepo) {
+        this(characterRepo, sceneRepo, conversationLogRepo, worldSnapshotRepo, scriptRepo, gameSessionRepo, null);
+    }
+
+    @Autowired
+    public DatabaseService(CharacterRepository characterRepo,
+                           SceneRepository sceneRepo,
+                           ConversationLogRepository conversationLogRepo,
+                           WorldSnapshotRepository worldSnapshotRepo,
+                           ScriptRepository scriptRepo,
+                           GameSessionRepository gameSessionRepo,
+                           AssetRepository assetRepo) {
         this.characterRepo = characterRepo;
         this.sceneRepo = sceneRepo;
         this.conversationLogRepo = conversationLogRepo;
         this.worldSnapshotRepo = worldSnapshotRepo;
         this.scriptRepo = scriptRepo;
         this.gameSessionRepo = gameSessionRepo;
+        this.assetRepo = assetRepo;
         this.mapper = new ObjectMapper();
         mapper.findAndRegisterModules();
     }
@@ -340,6 +358,75 @@ public class DatabaseService {
         return gameSessionRepo.findById(id).map(this::entityToMap);
     }
 
+    // ── Assets（P-0804-C 素材库）────────────────────────────────
+
+    /**
+     * P-0804-C：素材登记（导入 = 登记元数据 + 文件路径引用；文件实体由调用方预先放置到 static/assets/ 下）。
+     * 重名（name 唯一键）→ 更新既有行（幂等导入）；否则新建。
+     */
+    @Transactional
+    public Map<String, Object> saveAsset(String name, String assetType, String characterName,
+                                          String sceneId, String filePath, String metaJson) {
+        if (assetRepo == null) return Map.of("error", "asset_repo_unavailable");
+        name = truncateName(name, 200);
+        AssetEntity entity = assetRepo.findByName(name)
+                .orElse(new AssetEntity(name, assetType, characterName, sceneId, filePath, metaJson));
+        entity.setName(name);
+        entity.setAssetType(assetType);
+        entity.setCharacterName(characterName);
+        entity.setSceneId(sceneId);
+        entity.setFilePath(filePath != null ? filePath : "");
+        entity.setMetaJson(metaJson);
+        if (entity.getCreatedAt() == null) {
+            entity.setCreatedAt(LocalDateTime.now());
+        }
+        entity.preUpdate();
+        assetRepo.save(entity);
+        return entityToMap(entity);
+    }
+
+    /**
+     * P-0804-C：素材列表（按 assetType/characterName/sceneId 组合过滤；全空 = 全量）。
+     * 过滤值非空才参与查询（JPA 派生查询不传 null，避免 null 匹配语义错误）。
+     */
+    public List<Map<String, Object>> findAssets(String assetType, String characterName, String sceneId) {
+        if (assetRepo == null) return List.of();
+        List<AssetEntity> list;
+        if (isBlank(assetType) && isBlank(characterName) && isBlank(sceneId)) {
+            list = assetRepo.findAll();
+        } else if (isBlank(characterName) && isBlank(sceneId)) {
+            list = assetRepo.findByAssetType(assetType);
+        } else if (isBlank(assetType) && isBlank(sceneId)) {
+            list = assetRepo.findByCharacterName(characterName);
+        } else if (isBlank(assetType) && isBlank(characterName)) {
+            list = assetRepo.findBySceneId(sceneId);
+        } else if (isBlank(sceneId)) {
+            list = assetRepo.findByAssetTypeAndCharacterName(assetType, characterName);
+        } else if (isBlank(characterName)) {
+            list = assetRepo.findByAssetTypeAndSceneId(assetType, sceneId);
+        } else if (isBlank(assetType)) {
+            list = assetRepo.findByCharacterNameAndSceneId(characterName, sceneId);
+        } else {
+            list = assetRepo.findByAssetTypeAndCharacterNameAndSceneId(assetType, characterName, sceneId);
+        }
+        return list.stream().map(this::entityToMap).collect(Collectors.toList());
+    }
+
+    public Optional<Map<String, Object>> findAssetById(Long id) {
+        if (assetRepo == null || id == null) return Optional.empty();
+        return assetRepo.findById(id).map(this::entityToMap);
+    }
+
+    @Transactional
+    public void deleteAsset(Long id) {
+        if (assetRepo == null || id == null) return;
+        assetRepo.findById(id).ifPresent(assetRepo::delete);
+    }
+
+    private static boolean isBlank(String s) {
+        return s == null || s.isBlank();
+    }
+
     // ── Helpers ────────────────────────────────────────────────
 
     private Map<String, Object> entityToMap(CharacterEntity e) {
@@ -469,6 +556,20 @@ public class DatabaseService {
         } catch (JsonProcessingException ex) {
             map.put("content", e.getContentJson());
         }
+        return map;
+    }
+
+    private Map<String, Object> entityToMap(AssetEntity e) {
+        Map<String, Object> map = new LinkedHashMap<>();
+        map.put("id", e.getId());
+        map.put("name", e.getName());
+        map.put("asset_type", e.getAssetType());
+        map.put("character_name", e.getCharacterName());
+        map.put("scene_id", e.getSceneId());
+        map.put("file_path", e.getFilePath());
+        map.put("meta_json", e.getMetaJson());
+        map.put("created_at", e.getCreatedAt() != null ? e.getCreatedAt().toString() : null);
+        map.put("updated_at", e.getUpdatedAt() != null ? e.getUpdatedAt().toString() : null);
         return map;
     }
 

@@ -125,12 +125,12 @@ public class ScriptGameService {
     public void setQuorumEnabled(boolean enabled) { this.quorumEnabled = enabled; }
 
     /** P-0803-J（地图容量扩展）：剧本杀地图默认宽度（roleplay.game.map.default-width，默认 24 保持既有行为）。 */
-    @Value("${roleplay.game.map.default-width:24}")
-    private int mapDefaultWidth = 24;
+    @Value("${roleplay.game.map.default-width:40}")
+    private int mapDefaultWidth = 40;
 
     /** P-0803-J（地图容量扩展）：剧本杀地图默认高度（roleplay.game.map.default-height，默认 16 保持既有行为）。 */
-    @Value("${roleplay.game.map.default-height:16}")
-    private int mapDefaultHeight = 16;
+    @Value("${roleplay.game.map.default-height:24}")
+    private int mapDefaultHeight = 24;
 
     /** P-0803-K（多地图切换）：door 靠近校验容差（格）——玩家上报坐标距 door 中心曼哈顿距离
      *  ≤ radius + 容差 视为靠近（服务端不持有玩家权威位置，坐标由客户端上报，尽力校验；缺坐标跳过）。 */

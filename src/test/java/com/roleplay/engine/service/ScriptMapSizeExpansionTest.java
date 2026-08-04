@@ -229,10 +229,10 @@ class ScriptMapSizeExpansionTest {
         String sid = "size-s4";
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
 
-        // init 自动地图为默认尺寸（LLM 空输出 → BSP 24×16，旧行为不变）
+        // init 自动地图为默认尺寸（P-0804-H 续：默认 40×24 大地图；LLM 空输出 → BSP 精确尺寸）
         Map<String, Object> init = svc.getGame(sid).toMap("Alice");
-        assertEquals(24, ((Map<?, ?>) init.get("map")).get("width"));
-        assertEquals(16, ((Map<?, ?>) init.get("map")).get("height"));
+        assertEquals(40, ((Map<?, ?>) init.get("map")).get("width"));
+        assertEquals(24, ((Map<?, ?>) init.get("map")).get("height"));
 
         // 显式 64×64 重生成 → BSP 精确尺寸
         Map<String, Object> r = svc.generateMap(sid, "", 0, true, 64, 64);
@@ -245,12 +245,12 @@ class ScriptMapSizeExpansionTest {
         assertEquals(64, ((Map<?, ?>) r2.get("map")).get("width"));
         assertEquals(64, ((Map<?, ?>) r2.get("map")).get("height"));
 
-        // 新对局不传尺寸 → 默认 24×16（对局间尺寸独立，不串）
+        // 新对局不传尺寸 → 默认 40×24（P-0804-H 续；对局间尺寸独立，不串）
         String sid2 = "size-s4b";
         svc.initGame(sid2, "庄园", List.of("Alice", "Bob"));
         Map<String, Object> r3 = svc.generateMap(sid2, "", 0, true);
-        assertEquals(24, ((Map<?, ?>) r3.get("map")).get("width"));
-        assertEquals(16, ((Map<?, ?>) r3.get("map")).get("height"));
+        assertEquals(40, ((Map<?, ?>) r3.get("map")).get("width"));
+        assertEquals(24, ((Map<?, ?>) r3.get("map")).get("height"));
     }
 
     // ═══════════════════════════════════════════════════════════

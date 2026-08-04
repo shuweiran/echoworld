@@ -73,8 +73,8 @@ class ScriptMapSwitchTest {
         // init 自动图 = map_1（BSP 默认 24×16）
         assertEquals("map_1", svc.getCurrentMapId(sid));
         assertEquals(List.of("map_1"), svc.getRegisteredMapIds(sid));
-        assertEquals(24, svc.getGame(sid).mapWidth);
-        assertEquals(16, svc.getGame(sid).mapHeight);
+        assertEquals(40, svc.getGame(sid).mapWidth);
+        assertEquals(24, svc.getGame(sid).mapHeight);
         // 第二张图（显式 map_id + 大图 64×64 → BSP）
         Map<String, Object> r2 = svc.generateMap(sid, "地下室", 0, true, 64, 64, "map_2");
         assertEquals("map_2", svc.getCurrentMapId(sid));
@@ -86,7 +86,7 @@ class ScriptMapSwitchTest {
         assertEquals(48, ((Map<?, ?>) r3.get("map")).get("width"));
         // 注册表 3 图、尺寸各自独立（多图各自带独立尺寸）
         assertEquals(List.of("map_1", "map_2", "map_3"), svc.getRegisteredMapIds(sid));
-        assertEquals(24, ((Map<?, ?>) svc.getGame(sid).maps.get("map_1")).get("width"));
+        assertEquals(40, ((Map<?, ?>) svc.getGame(sid).maps.get("map_1")).get("width"));
         assertEquals(64, ((Map<?, ?>) svc.getGame(sid).maps.get("map_2")).get("width"));
         assertEquals(48, ((Map<?, ?>) svc.getGame(sid).maps.get("map_3")).get("width"));
         // toMap 暴露 current_map_id + map_ids（附加键不破坏既有契约）
@@ -119,7 +119,7 @@ class ScriptMapSwitchTest {
         assertEquals("map_2", sw.get("from_map_id"));
         assertEquals("map_1", sw.get("to_map_id"));
         assertEquals("map_1", svc.getCurrentMapId(sid));
-        assertEquals(24, ((Map<?, ?>) sw.get("map")).get("width"));
+        assertEquals(40, ((Map<?, ?>) sw.get("map")).get("width"));
         assertEquals("map_1", ((Map<?, ?>) sw.get("map")).get("map_id"), "目标图 map_id 归一为注册表键");
         // door zone 已落到注册表数据（切回可用）
         List<?> zones = (List<?>) svc.getGame(sid).maps.get("map_2").get("zones");
@@ -251,8 +251,8 @@ class ScriptMapSwitchTest {
         assertEquals(64, svc.getGame(sid).mapWidth);
         assertEquals(64, svc.getGame(sid).mapHeight);
         svc.switchMap(sid, "Alice", "", null, null, null, "map_1");
-        assertEquals(24, svc.getGame(sid).mapWidth);
-        assertEquals(16, svc.getGame(sid).mapHeight);
+        assertEquals(40, svc.getGame(sid).mapWidth);
+        assertEquals(24, svc.getGame(sid).mapHeight);
         svc.switchMap(sid, "Alice", "", null, null, null, "map_2");
         assertEquals(64, svc.getGame(sid).mapWidth);
         assertEquals(64, svc.getGame(sid).mapHeight);

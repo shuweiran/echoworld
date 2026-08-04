@@ -265,6 +265,13 @@ public class LLMClient {
         requestBody.put("max_tokens", maxTokens);
         requestBody.put("temperature", temperature);
         if (stream) requestBody.put("stream", true);
+        // P-0804-F（2026-08-04）：deepseek-v4-flash 为推理模型（reasoning_content 思考吃满
+        // max_tokens 导致 content 恒空、finish=length，地图/剧本长 JSON 生成全走 BSP 兜底）。
+        // 显式关闭思考（实测 thinking.type=disabled 后 12.4s 完整输出 24×16 地图 JSON，
+        // reasoning=0 / finish=stop；deepseek-chat 等非推理模型不受影响）。
+        if (modelName != null && modelName.toLowerCase().contains("v4-flash")) {
+            requestBody.put("thinking", Map.of("type", "disabled"));
+        }
 
         return mapper.writeValueAsString(requestBody);
     }

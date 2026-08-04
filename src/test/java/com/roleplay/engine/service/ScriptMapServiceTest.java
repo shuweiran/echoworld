@@ -3,6 +3,7 @@ package com.roleplay.engine.service;
 import com.roleplay.engine.approval.ApprovalService;
 import com.roleplay.engine.controller.ScriptController;
 import com.roleplay.engine.llm.LLMClient;
+import com.roleplay.engine.simulation.map.MapContract;
 import com.roleplay.engine.simulation.map.MapValidator;
 import com.roleplay.engine.simulation.SimulationService;
 import org.junit.jupiter.api.DisplayName;
@@ -121,14 +122,55 @@ class ScriptMapServiceTest {
     }
 
     @Test
-    @DisplayName("M2: LLM 输出不合法（热点埋墙）→ 重试仍不合法 → BSP 降级 + fallback 原因")
+    @DisplayName("M2: LLM 输出热点埋墙 → 坐标宽容修正（P-0804-G）→ 使用 LLM 地图不降级")
     void llmInvalidFallsBackToBsp() {
         ScriptMapService svc = new ScriptMapService(invalidLlm());
         ScriptMapService.MapResult r = svc.generateMap("民国", List.of("客厅", "书房"), List.of("客厅", "书房"), 7L);
-        assertTrue(r.usedBsp(), "必须降级 BSP");
-        assertTrue(r.fallbackReasons().stream().anyMatch(s -> s.contains("校验失败")), "fallback 原因含校验失败");
-        assertTrue(r.map().get("generator") instanceof Map<?, ?> g && "bsp".equals(g.get("kind")));
-        assertTrue(r.validation().ok(), "BSP 输出自洽");
+        assertFalse(r.usedBsp(), "埋墙热点被宽容修正后不应降级");
+        assertTrue(r.map().get("generator") instanceof Map<?, ?> g && "llm".equals(g.get("kind")), "generator 应为 llm");
+        assertTrue(r.validation().ok(), "修复后校验通过 errors=" + r.validation().errors());
+        // 埋墙热点已挪出 (0,0) 墙角至可通行格
+        Object z0 = ((List<?>) r.map().get("zones")).get(0);
+        assertTrue(z0 instanceof Map<?, ?> zm && "z_bad".equals(zm.get("id")) && !(0 == ((Number) zm.get("x")).intValue() && 0 == ((Number) zm.get("y")).intValue()),
+                "埋墙热点应被微调出不可通行格");
+        // generator note 记录修正事实（P-0804-G）
+        assertTrue(r.map().get("generator") instanceof Map<?, ?> g2
+                && String.valueOf(g2.get("note")).contains("坐标宽容修正"), "generator note 应记录坐标宽容修正");
+    }
+
+    @Test
+    @DisplayName("M2b: LLM 输出 ground 行数不符（声明式可修复）→ 自动补空白地网格 → 不降级且房间围合")
+    void llmStructuralInvalidFallsBackToBsp() {
+        LLMClient llm = mock(LLMClient.class);
+        Map<String, Object> m = validLlmMap();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> layers = new java.util.LinkedHashMap<>((Map<String, Object>) m.get("layers"));
+        layers.put("ground", List.of(List.of(1, 1), List.of(2, 2))); // 行数 2 ≠ height（声明式下自动修复）
+        m.put("layers", layers);
+        when(llm.callJson(anyString(), anyInt())).thenReturn(m);
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(m);
+        ScriptMapService svc = new ScriptMapService(llm);
+        ScriptMapService.MapResult r = svc.generateMap("民国", List.of("客厅"), List.of("客厅"), 7L);
+        assertFalse(r.usedBsp(), "声明式：layers 无效自动补空白地网格（程序生成墙体），不降级");
+        assertTrue(r.map().get("generator") instanceof Map<?, ?> g && "llm".equals(g.get("kind")), "保持 LLM 结果");
+        assertTrue(r.validation().ok(), "修复后输出自洽");
+        // 围合后房间四边有墙（厚度削薄后仍保留 1 层）
+        Map<String, Object> out = r.map();
+        @SuppressWarnings("unchecked")
+        java.util.List<java.util.List<Integer>> col =
+                (java.util.List<java.util.List<Integer>>) ((Map<String, Object>) out.get("layers")).get("collision");
+        @SuppressWarnings("unchecked")
+        java.util.List<Map<String, Object>> rooms = (java.util.List<Map<String, Object>>) out.get("rooms");
+        boolean anyWall = false;
+        for (Map<String, Object> room : rooms) {
+            int rx = MapContract.intOf(room.get("x"), -1), ry = MapContract.intOf(room.get("y"), -1);
+            int rw = MapContract.intOf(room.get("w"), -1), rh = MapContract.intOf(room.get("h"), -1);
+            if (rx < 0 || ry < 0) continue;
+            for (int x = Math.max(1, rx); x < Math.min(rx + rw, col.get(0).size() - 1); x++) {
+                if (col.get(ry - 1 >= 0 ? ry - 1 : ry).get(x) == 1) anyWall = true;
+            }
+        }
+        assertTrue(anyWall, "房间四边应有程序生成的墙");
     }
 
     @Test

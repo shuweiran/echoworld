@@ -96,8 +96,8 @@ class ScriptMapPersistenceTest {
             Map.of("id", "sp1", "type", "player", "x", 2, "y", 2),
             Map.of("id", "sp2", "type", "npc", "x", 6, "y", 2)));
         m.put("generator", Map.of("kind", "llm", "model", "mock"));
-        when(llmClient.callJson(anyString(), eq(4000))).thenReturn(m);
-        when(llmClient.callJson(anyString(), eq(4000), anyInt())).thenReturn(m);
+        when(llmClient.callJson(anyString(), eq(8000))).thenReturn(m);
+        when(llmClient.callJson(anyString(), eq(8000), anyInt())).thenReturn(m);
     }
 
     @Test

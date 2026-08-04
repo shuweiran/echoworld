@@ -92,6 +92,14 @@ public class SceneController {
         Object dm = body.get("default_map");
         // 空串 = 清除（不落库不暴露）；null = 无地图
         scene.put("default_map", (dm instanceof String s && s.isBlank()) ? null : dm);
+        // P-0804-G：default_map 统一为对象（对齐 update 端点与 DB 加载行为，前端直接消费）
+        if (scene.get("default_map") instanceof String s2 && !s2.isBlank()) {
+            try {
+                scene.put("default_map", MAPPER.readValue(s2, Map.class));
+            } catch (Exception ex) {
+                System.err.println("SceneController: create default_map parse failed: " + ex.getMessage());
+            }
+        }
         scenes.add(scene);
         persistScene(scene);
         return ResponseEntity.ok(scene);
@@ -103,6 +111,16 @@ public class SceneController {
             if (id.equals(scenes.get(i).get("scene_id"))) {
                 Map<String, Object> updated = new LinkedHashMap<>(scenes.get(i));
                 body.forEach((k, v) -> { if (v != null) updated.put(k, v); });
+                // P-0804-G：default_map 运行时统一为对象（对齐 DB 加载 parseJsonMap 行为）——
+                // 前端 ScenePage 直接把 default_map 传给 PhaserScriptMapView，字符串会导致 map.zones
+                // undefined → render 读 .length 崩溃 → React 白屏（仅在 PUT 后未重启时暴露）。
+                if (updated.get("default_map") instanceof String s && !s.isBlank()) {
+                    try {
+                        updated.put("default_map", MAPPER.readValue(s, Map.class));
+                    } catch (Exception ex) {
+                        System.err.println("SceneController: default_map parse failed: " + ex.getMessage());
+                    }
+                }
                 scenes.set(i, updated);
                 String newId = str(updated.get("scene_id"));
                 if (!id.equals(newId)) {
@@ -270,6 +288,7 @@ public class SceneController {
     public ResponseEntity<Map<String, Object>> generateDefaultMap(@RequestBody(required = false) Map<String, Object> body) {
         long seed = 0;
         String theme = "";
+        int width = 0, height = 0;
         if (body != null) {
             if (body.get("seed") instanceof Number n) {
                 seed = n.longValue();
@@ -277,6 +296,13 @@ public class SceneController {
             Object t = body.get("theme");
             if (t != null) {
                 theme = String.valueOf(t).trim();
+            }
+            // P-0804-G：显式尺寸透传（单张大地图生成；≤0 = 默认 24×16；超 LLM 上限自动走 BSP）
+            if (body.get("width") instanceof Number nw) {
+                width = nw.intValue();
+            }
+            if (body.get("height") instanceof Number nh) {
+                height = nh.intValue();
             }
         }
         // 4 参构造（无 ScriptMapService）防御：主题请求回落 BSP 确定性
@@ -290,7 +316,7 @@ public class SceneController {
             return ResponseEntity.ok(Map.of("map", bsp));
         }
         // LLM 全量生成模式（带主题）：统一路径 → 契约 v1 校验 → 失败/超预算 BSP 兜底
-        ScriptMapService.MapResult result = mapService.generateMap(theme, List.of(), List.of(), seed);
+        ScriptMapService.MapResult result = mapService.generateMap(theme, List.of(), List.of(), seed, width, height);
         Map<String, Object> validation = new LinkedHashMap<>();
         validation.put("ok", result.validation().ok());
         validation.put("errors", result.validation().errors());
