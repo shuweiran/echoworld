@@ -65,6 +65,10 @@ roleplay:
       vote-timeout-ms: 60000
       vote-timeout-enabled: true
       quorum-enabled: true
+      max-revotes: 3
+      game-ttl-ms: 43200000
+      web-search-enabled: false
+      phase-timeout-ms: 0
     werewolf:
       # P-0802-F 狼人杀自动推进（与主 yml 同步；测试直构服务不经 Spring，@Value 默认值生效）
       ai-night-actions: true

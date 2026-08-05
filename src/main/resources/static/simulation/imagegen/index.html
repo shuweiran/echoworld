@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>🎨 生图管线 Demo — Roleplay Engine</title>
+  <style>
+    :root {
+      --bg: #0f172a; --panel: #1e293b; --line: #334155; --fg: #e2e8f0; --muted: #94a3b8;
+      --accent: #38bdf8; --ok: #3ddc84; --warn: #fbbf24; --err: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--fg); font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
+    header { padding: 16px 24px; background: linear-gradient(90deg, #1e3a8a, #312e81); border-bottom: 1px solid var(--line); }
+    header h1 { margin: 0; font-size: 20px; }
+    header p { margin: 4px 0 0; color: #c7d2fe; font-size: 13px; }
+    .wrap { padding: 20px 24px; display: flex; gap: 20px; flex-wrap: wrap; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+    .panel h2 { margin: 0 0 12px; font-size: 15px; border-bottom: 1px solid var(--line); padding-bottom: 8px; }
+    .col-left { flex: 0 0 380px; display: flex; flex-direction: column; gap: 16px; }
+    .col-right { flex: 1; min-width: 420px; }
+    label { font-size: 12px; color: var(--muted); display: block; margin: 8px 0 4px; }
+    input[type=text], input[type=password], textarea, select {
+      width: 100%; background: #0f172a; border: 1px solid var(--line); color: var(--fg);
+      border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit;
+    }
+    textarea { min-height: 170px; resize: vertical; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+    button {
+      background: var(--accent); color: #062033; border: none; border-radius: 8px; padding: 9px 14px;
+      font-size: 13px; font-weight: 600; cursor: pointer; margin-top: 10px;
+    }
+    button.secondary { background: #475569; color: #fff; }
+    button:hover { opacity: 0.9; }
+    .row { display: flex; gap: 8px; }
+    .hint { font-size: 12px; color: var(--muted); margin-top: 8px; }
+    #styleHint { color: var(--warn); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-top: 12px; }
+    .card { background: #0f172a; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+    .card-head { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+    .kind-badge { font-size: 10px; border-radius: 4px; padding: 2px 6px; font-weight: 700; }
+    .kind-character { background: #7c3aed33; color: #c4b5fd; }
+    .kind-scene { background: #0ea5e933; color: #7dd3fc; }
+    .kind-clue { background: #f59e0b33; color: #fcd34d; }
+    .kind-tile_style { background: #64748b33; color: #cbd5e1; }
+    .card-title { font-size: 13px; flex: 1; }
+    .usage { font-size: 10px; color: var(--muted); }
+    .img-wrap { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 150px; background: #0b1220; }
+    .gen-img { max-width: 100%; max-height: 260px; display: block; }
+    .gen-img.fallback { outline: 2px dashed var(--warn); outline-offset: -2px; border-radius: 6px; }
+    .status { font-size: 12px; padding: 6px 10px; color: var(--ok); }
+    .meta { font-size: 11px; color: var(--muted); padding: 0 10px 10px; }
+    pre { background: #0f172a; border: 1px solid var(--line); border-radius: 8px; padding: 10px; font-size: 11px; overflow: auto; max-height: 220px; }
+    #integrateList li { font-size: 13px; line-height: 1.9; }
+    #integrateList code { background: #0f172a; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; font-size: 12px; }
+    .count { color: var(--warn); font-weight: 700; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🎨 生图管线 Demo（阶段一 · 独立验证页）</h1>
+    <p>LLM/规则产出结构化 <code>image_spec</code> → 生图 provider（真实 API 可配 / 离线占位降级）→ 渲染展示 → 接入路径映射。零后端零成本，file:// 双击即开。</p>
+  </header>
+
+  <div class="wrap">
+    <div class="col-left">
+      <div class="panel">
+        <h2>① 输入</h2>
+        <label>剧本主题（驱动全局风格锚点）</label>
+        <input id="theme" type="text" value="民国宅邸凶案"/>
+        <div class="hint" id="styleHint"></div>
+        <label>剧本 JSON（对齐剧本 schema v1，可选；留空则纯主题驱动）</label>
+        <textarea id="scriptInput"></textarea>
+        <div class="row">
+          <button id="useDemo" class="secondary" type="button">填入演示剧本</button>
+          <button id="btnSynthesize" type="button">② 合成 image_spec</button>
+        </div>
+        <div class="hint" id="specSummary"></div>
+      </div>
+
+      <div class="panel">
+        <h2>③ 生图 Provider 配置 <span style="color:var(--muted);font-weight:400">(localStorage 保存)</span></h2>
+        <label>Provider</label>
+        <select id="provider">
+          <option value="offline">offline（程序化占位，离线演示）</option>
+          <option value="openai_image">openai_image（/images/generations 兼容）</option>
+          <option value="sd_webui">sd_webui（SD WebUI /txt2img）</option>
+        </select>
+        <label>图片 API URL（provider 非 offline 时必填）</label>
+        <input id="p_url" type="text" placeholder="https://.../images/generations 或 http://127.0.0.1:7860/sdapi/v1/txt2img"/>
+        <label>API Key（openai_image 必填）</label>
+        <input id="p_key" type="password" placeholder="sk-..."/>
+        <label>模型</label>
+        <input id="p_model" type="text" placeholder="gpt-image-1 / 空=默认"/>
+        <label>可选 LLM 扩写（风格统一锚点注入，OpenAI 兼容 chat/completions）</label>
+        <div class="row">
+          <input id="p_llm_url" type="text" placeholder="https://api.deepseek.com/v1/chat/completions"/>
+          <input id="p_llm_key" type="password" placeholder="sk-..."/>
+        </div>
+        <div class="row">
+          <input id="p_llm_model" type="text" placeholder="deepseek-chat"/>
+          <label style="display:flex;align-items:center;gap:6px;margin:0;white-space:nowrap">
+            <input id="p_style_extend" type="checkbox" style="width:auto"/> 启用扩写
+          </label>
+        </div>
+        <button id="btnSaveCfg" class="secondary" type="button">保存配置</button>
+      </div>
+    </div>
+
+    <div class="col-right">
+      <div class="panel">
+        <h2>④ 生成与渲染 <span class="count" id="count"></span></h2>
+        <button id="btnGenerate" type="button">🚀 批量生图（串行）</button>
+        <div class="grid" id="grid"></div>
+      </div>
+      <div class="panel" style="margin-top:16px">
+        <h2>⑤ 后端接入路径（整合阶段映射）</h2>
+        <ul id="integrateList"></ul>
+        <h2 style="margin-top:14px">当前 image_spec（契约 v1）</h2>
+        <pre id="specJson"></pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="js/image_spec.js"></script>
+  <script src="js/providers.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

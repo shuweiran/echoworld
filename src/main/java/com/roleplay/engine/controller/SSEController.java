@@ -303,6 +303,15 @@ public class SSEController implements SseBroadcaster {
         broadcastToSession(sessionId, "script_reveal", payload);
     }
 
+    /** P-0805-C（私聊 SSE）：script_private → {session_id, from, to, message, reply, guarded, ts}
+     *  会话定向推送（该对局所有连接收到，前端按本人 player 过滤——私聊双方才展示，对齐 script_status 通道）。 */
+    public void broadcastScriptPrivate(String sessionId, Map<String, Object> data) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (data != null) payload.putAll(data);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcastToSession(sessionId, "script_private", payload);
+    }
+
     public int getConnectionCount() {
         return emitters.size();
     }

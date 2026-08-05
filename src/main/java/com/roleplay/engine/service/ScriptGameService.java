@@ -115,8 +115,63 @@ public class ScriptGameService {
     @Value("${roleplay.game.script.quorum-enabled:true}")
     private boolean quorumEnabled = true;
 
+    /** P-0805-A（B4）：平票/审批驳回重投次数上限（默认 3；超过则按「无人被定罪」结束投票，防无限循环）。 */
+    @Value("${roleplay.game.script.max-revotes:3}")
+    private int maxRevotes = 3;
+
     /** P1（测试钩子）：运行时切换投票超时（毫秒），对齐 RouterService.setSerialRound 先例。 */
     public void setVoteTimeoutMs(long ms) { this.voteTimeoutMs = ms; }
+
+    /** P-0805-A（B4，测试钩子）：运行时切换重投次数上限。 */
+    public void setMaxRevotes(int n) { this.maxRevotes = Math.max(0, n); }
+
+    /** P-0805-B（WebSearch 搜证）：搜证时是否自动联网检索线索相关背景（默认关，避免每局都打 DuckDuckGo）。 */
+    @Value("${roleplay.game.script.web-search-enabled:false}")
+    private boolean webSearchEnabled = false;
+
+    /** P-0805-B（WebSearch 搜证）：运行时切换开关（测试钩子）。 */
+    public void setWebSearchEnabled(boolean on) { this.webSearchEnabled = on; }
+
+    /** P-0805-C（阶段倒计时）：单阶段最长停留毫秒（默认 0=禁用；>0 时惰性推进 INVESTIGATION→DISCUSSION→VOTE，VOTE 复用投票超时/弃票）。 */
+    @Value("${roleplay.game.script.phase-timeout-ms:0}")
+    private long phaseTimeoutMs = 0L;
+
+    /** P-0805-C（阶段倒计时，测试钩子）：运行时切换。 */
+    public void setPhaseTimeoutMs(long ms) { this.phaseTimeoutMs = Math.max(0, ms); }
+
+    /**
+     * P-0805-C（阶段倒计时）：惰性超时推进 —— 任一玩家轮询状态时检测当前阶段停留时长，
+     * 超过 phase-timeout-ms 自动推进（零定时器，对齐投票超时惰性判定先例）。
+     * INVESTIGATION→DISCUSSION（自动启动讨论引擎）；DISCUSSION→VOTE（enterVotePhase 统一计时/quorum 重置）。
+     * VOTE 阶段不在此推进（超时弃票已由 resolveVote 惰性处理，避免未经审批直接揭晓）。
+     */
+    private void maybeAdvanceOnTimeout(ScriptGame game) {
+        if (game == null || game.phaseTimeoutMs <= 0) return;
+        if (game.phase == Phase.ENDED || game.phase == Phase.REVEAL || game.phase == Phase.VOTE) return;
+        long elapsed = System.currentTimeMillis() - game.phaseStartedAt;
+        if (elapsed < game.phaseTimeoutMs) return;
+        try {
+            if (game.phase == Phase.INVESTIGATION) {
+                log.info("Script game {} phase INVESTIGATION timed out ({}ms), auto advancing to DISCUSSION",
+                        game.sessionId, game.phaseTimeoutMs);
+                startDiscussion(game.sessionId);
+            } else if (game.phase == Phase.DISCUSSION) {
+                log.info("Script game {} phase DISCUSSION timed out ({}ms), auto advancing to VOTE",
+                        game.sessionId, game.phaseTimeoutMs);
+                enterVotePhase(game);
+            }
+        } catch (Exception e) {
+            log.warn("Script game {} phase timeout advance failed: {}", game.sessionId, e.getMessage());
+        }
+    }
+
+    /** P-0805-B：WebSearch 服务（无参构造的独立 @Service；懒创建，未开启时不消耗）。 */
+    private WebSearchService webSearchService;
+
+    private WebSearchService webSearch() {
+        if (webSearchService == null) webSearchService = new WebSearchService();
+        return webSearchService;
+    }
 
     /** P1（测试钩子）：运行时切换投票超时开关。 */
     public void setVoteTimeoutEnabled(boolean enabled) { this.voteTimeoutEnabled = enabled; }
@@ -181,6 +236,16 @@ public class ScriptGameService {
         Map<String, Object> scriptSchema;
         /** C1: schema 中的凶手角色 id（role_x；兼容旧数据可为空，运行时判定仍走 truth 解析 D6）。 */
         String killerId = "";
+        /** P-0805-A（B2）：schema 角色 id → 角色名（killerId 结构化判定用；随快照落库，兼容旧快照空 map）。 */
+        final Map<String, String> roleNamesById = new LinkedHashMap<>();
+        /** P-0805-B（私聊）：私聊历史 —— 会话键 "A|B"（字典序）→ 消息列表 {from,to,content,ts}；随快照落库，重启可恢复。 */
+        final Map<String, List<Map<String, Object>>> privateChats = new LinkedHashMap<>();
+        /** P-0805-B（时间推进）：对局开始时间戳（initGame 置位；前端可显示对局已进行时长/阶段倒计时基准）。 */
+        long startedAt = System.currentTimeMillis();
+        /** P-0805-C（阶段倒计时）：当前阶段进入时间戳（INVESTIGATION/DISCUSSION/VOTE 每次切换置位；超时自动推进基准）。 */
+        long phaseStartedAt = System.currentTimeMillis();
+        /** P-0805-C（阶段倒计时）：单阶段最长停留毫秒（initGame 从配置拷入；0=禁用；toMap 下发供前端倒计时 UI）。 */
+        long phaseTimeoutMs = 0L;
         final List<String> roles = new ArrayList<>();
         final List<String> players = new ArrayList<>();
         final Map<String, String> assignments = new LinkedHashMap<>(); // player → role
@@ -218,6 +283,8 @@ public class ScriptGameService {
         //    前端 ScriptStatePanel 据此显示「离线模板模式」提示条。
         long voteStartedAt = 0;
         int quorumFailCount = 0;
+        /** P-0805-A（B4）：重投计数（平票清票 / 审批驳回回滚均累加；达 maxRevotes 后按「无人被定罪」终止）。 */
+        int revoteCount = 0;
         volatile boolean lowParticipation = false;
         final java.util.Set<String> trustees = java.util.concurrent.ConcurrentHashMap.newKeySet();
         String theme = "";
@@ -271,6 +338,11 @@ public class ScriptGameService {
             // D5: secrets 发放 —— 每个玩家只能看到自己扮演角色的秘密
             m.put("your_secret", role.isEmpty() ? "" : secrets.getOrDefault(role, ""));
             m.put("round", round);
+            m.put("started_at", startedAt);
+            m.put("elapsed_ms", System.currentTimeMillis() - startedAt);
+            m.put("phase_started_at", phaseStartedAt);
+            m.put("phase_elapsed_ms", System.currentTimeMillis() - phaseStartedAt);
+            m.put("phase_timeout_ms", phaseTimeoutMs);
             m.put("game_over", !winner.isEmpty());
             m.put("winner", winner);
             m.put("simulation_started", simulationStarted);
@@ -374,6 +446,56 @@ public class ScriptGameService {
 
     private final Map<String, ScriptGame> games = new ConcurrentHashMap<>();
 
+    /** P-0805-A（B5）：对局 TTL —— 内存 games 表超时未访问的对局惰性清理（防长期运行内存泄漏；重启后由快照重建）。 */
+    @Value("${roleplay.game.script.game-ttl-ms:43200000}")
+    private long gameTtlMs = 43200000L; // 默认 12h
+
+    /** P-0805-A（B5）：最近访问时间戳（sessionId → lastAccessMillis；getGame/init 时更新）。 */
+    private final Map<String, Long> lastAccess = new ConcurrentHashMap<>();
+
+    /** P-0805-A（B5）：惰性清扫计数器（每 256 次访问触发一次全表扫描，摊薄开销）。 */
+    private final java.util.concurrent.atomic.AtomicInteger sweepCounter = new java.util.concurrent.atomic.AtomicInteger();
+
+    /** P-0805-A（B5，测试钩子）：运行时切换对局 TTL（毫秒；0=禁用清理，对齐 setVoteTimeoutMs 先例）。 */
+    public void setGameTtlMs(long ms) { this.gameTtlMs = Math.max(0, ms); }
+
+    /** P-0805-A（B5）：访问即刷新（getGame 公共读取点）；惰性清扫（周期性扫描过期对局移除）+ 阶段超时惰性推进。 */
+    private ScriptGame touchGame(String sessionId) {
+        if (sessionId == null) return null;
+        ScriptGame g = games.get(sessionId);
+        if (g != null) {
+            lastAccess.put(sessionId, System.currentTimeMillis());
+            lazySweep();
+            // P-0805-C：轮询触发的阶段超时自动推进（惰性，零定时器）
+            maybeAdvanceOnTimeout(g);
+        }
+        return g;
+    }
+
+    private void lazySweep() {
+        if (gameTtlMs <= 0) return;
+        int n = sweepCounter.incrementAndGet();
+        if ((n & 0xFF) != 0) return; // 每 256 次访问
+        sweepExpired();
+    }
+
+    /** P-0805-A（B5，测试钩子）：立即执行一次过期清扫（绕过节流）。 */
+    public void sweepExpired() {
+        if (gameTtlMs <= 0) return;
+        long now = System.currentTimeMillis();
+        long deadline = now - gameTtlMs;
+        for (Map.Entry<String, Long> e : lastAccess.entrySet()) {
+            if (e.getValue() != null && e.getValue() < deadline) {
+                String sid = e.getKey();
+                lastAccess.remove(sid);
+                ScriptGame evicted = games.remove(sid);
+                if (evicted != null) {
+                    log.info("Script game {} evicted (idle > {}ms), snapshot persists state", sid, gameTtlMs);
+                }
+            }
+        }
+    }
+
     public ScriptGameService(LLMClient llmClient, ApprovalService approvalService) {
         this(llmClient, approvalService, null, null, null);
     }
@@ -443,6 +565,8 @@ public class ScriptGameService {
         game.background = ScriptSchemaV1.background(script);
         game.truth = ScriptSchemaV1.truth(script);
         game.killerId = ScriptSchemaV1.killerId(script);
+        // P-0805-A（B2）：角色 id → 角色名（结构化 killer 判定；空 killerId 不影响既有 truth 解析路径）
+        game.roleNamesById.putAll(ScriptSchemaV1.roleNamesById(script));
 
         // roles: 规范角色名序列（secrets 键集合恒等于 roles，A1-3）
         List<String> roles = ScriptSchemaV1.roleNames(script);
@@ -498,6 +622,7 @@ public class ScriptGameService {
         // P-0803-K：简单对话版直接进入 DISCUSSION（无搜证阶段）；真剧本杀维持 INVESTIGATION
         game.phase = chatMode ? Phase.DISCUSSION : Phase.INVESTIGATION;
         game.round = 1;
+        game.phaseTimeoutMs = this.phaseTimeoutMs;
         games.put(sessionId, game);
 
         // GAP-4c: 剧本生成即落库（对局重启不丢剧本；A4-3 验收依赖）
@@ -612,10 +737,26 @@ public class ScriptGameService {
         // C3: 状态变更 → 快照落库（搜证结果/AP 扣减可恢复）
         saveSnapshot(game);
 
+        // P-0805-B（WebSearch 搜证）：开启时对首条线索做联网背景检索（物证联网检索玩法；
+        // 失败静默降级——不影响搜证结果，仅追加 web_results 字段）
+        List<Map<String, Object>> webResults = new ArrayList<>();
+        if (webSearchEnabled && !found.isEmpty()) {
+            try {
+                Map<String, Object> first = found.get(0);
+                String query = String.valueOf(first.get("title")) + " " + game.name + " 案件 线索 真相";
+                for (Map<String, String> r : webSearch().search(query, 3)) {
+                    webResults.add(new LinkedHashMap<>(r));
+                }
+            } catch (Exception e) {
+                log.warn("Script game {} web search failed (non-blocking): {}", sessionId, e.getMessage());
+            }
+        }
+
         result.put("found", foundIds);
         result.put("clues", found.stream()
             .map(c -> Map.of("id", c.get("id"), "content", c.get("content"), "ap_cost", ScriptSchemaV1.apCost(c)))
             .collect(Collectors.toList()));
+        if (!webResults.isEmpty()) result.put("web_results", webResults);
         result.put("result", "搜证成功：获得 " + foundIds.size() + " 条线索，消耗 " + cost + " AP");
         result.put("ap", game.playerAp.get(player));
         result.put("ap_cost", cost);
@@ -1151,6 +1292,20 @@ public class ScriptGameService {
         final int maxVotesFinal = maxVotes; // effectively-final 副本（lambda 引用要求）
         long ties = voteCount.values().stream().filter(c -> c == maxVotesFinal).count();
         if (ties > 1) {
+            // P-0805-A（B4）：重投次数上限 —— 超过则按「无人被定罪」终止投票循环（不进入 REVEAL，返回 revote=false + tie_limit 标记）
+            if (game.revoteCount >= maxRevotes) {
+                game.revoteCount++;
+                saveSnapshot(game);
+                result.put("votes", new LinkedHashMap<>());
+                result.put("most_voted", mostVoted);
+                result.put("vote_count", maxVotes);
+                result.put("result", "多次重投仍平票（已满重投上限 " + maxRevotes + " 次），本局无人被定罪" + timeoutNote);
+                result.put("tie", true);
+                result.put("tie_limit", true);
+                result.put("revote", false);
+                return result;
+            }
+            game.revoteCount++;
             game.votes.clear();
             // 重投重新计时（防“等满 60s 才被允许重投”）；quorumFailCount 不清（防平票↔quorum 乒乓死循环）
             game.voteStartedAt = System.currentTimeMillis();
@@ -1260,8 +1415,24 @@ public class ScriptGameService {
         try {
             RouterService.RoundResult approved = approvalService.submitForApproval(round, game.sessionId, approvalTimeoutSeconds);
             if (approved == null) {
+                // P-0805-A（B4）：审批驳回回滚同样受重投上限约束（防 DM 无限驳回-重投循环）
+                game.revoteCount++;
+                if (game.revoteCount > maxRevotes) {
+                    game.votes.clear();
+                    saveSnapshot(game);
+                    Map<String, Object> rollback = new LinkedHashMap<>();
+                    rollback.put("votes", new LinkedHashMap<>());
+                    rollback.put("most_voted", mostVoted);
+                    rollback.put("vote_count", maxVotes);
+                    rollback.put("result", "审批多次驳回（已满上限 " + maxRevotes + " 次），本局无人被定罪");
+                    rollback.put("tie_limit", true);
+                    rollback.put("revote", false);
+                    rollback.put("approval", "rejected");
+                    return rollback;
+                }
                 log.warn("Script game {} reveal rejected/timeout, rollback to VOTE", game.sessionId);
                 game.votes.clear();
+                saveSnapshot(game);
                 Map<String, Object> rollback = new LinkedHashMap<>();
                 rollback.put("votes", new LinkedHashMap<>());
                 rollback.put("most_voted", mostVoted);
@@ -1276,6 +1447,7 @@ public class ScriptGameService {
             Thread.currentThread().interrupt();
             log.warn("Script game {} reveal approval interrupted", game.sessionId);
             game.votes.clear();
+            saveSnapshot(game);
             Map<String, Object> rollback = new LinkedHashMap<>();
             rollback.put("votes", new LinkedHashMap<>());
             rollback.put("most_voted", mostVoted);
@@ -1322,6 +1494,11 @@ public class ScriptGameService {
      * ③ 角色全名出现在真相中 → 经 assignments 反查玩家。
      */
     private String resolveMurderer(ScriptGame game) {
+        // P-0805-A（B2）：结构化 killer 判定 —— killer_id（schema 角色 id）→ 角色名 → 玩家。
+        // 消除 D6 文本解析不稳（LLM truth 用别名/不含凶手名 → 恒判"冤枉好人"）；killerId 为空（旧剧本/兜底）回退文本解析。
+        String structural = resolveKillerByRoleId(game);
+        if (!structural.isEmpty()) return structural;
+
         String truth = game.truth == null ? "" : game.truth;
         if (truth.isEmpty()) return "";
 
@@ -1350,6 +1527,28 @@ public class ScriptGameService {
             candidates.sort((a, b) -> Integer.compare(b.length(), a.length()));
         }
         return candidates.isEmpty() ? "" : candidates.get(0);
+    }
+
+    /**
+     * P-0805-A（B2）：killerId（schema 角色 id）→ roleNamesById → 角色名 → assignments 反查玩家。
+     * 三级容错：① id 直查 roleNamesById；② killerId 本身即角色名（部分旧格式）；③ killerId 是角色名时反查 assignments 值。
+     * 均未命中返回空串（调用方回退 D6 文本解析）。
+     */
+    private String resolveKillerByRoleId(ScriptGame game) {
+        String kid = game.killerId == null ? "" : game.killerId.trim();
+        if (kid.isEmpty()) return "";
+
+        // ① id → 角色名
+        String roleName = game.roleNamesById.get(kid);
+        // ② 兜底：killerId 直接是角色名
+        if ((roleName == null || roleName.isBlank()) && game.roles.contains(kid)) roleName = kid;
+        if (roleName == null || roleName.isBlank()) return "";
+
+        // 角色名 → 玩家（先 assignments 值反查，再玩家名直配）
+        for (Map.Entry<String, String> e : game.assignments.entrySet()) {
+            if (roleName.equals(e.getValue())) return e.getKey();
+        }
+        return game.players.contains(roleName) ? roleName : "";
     }
 
     /** D6: 提取凶手指向词后紧跟的名字片段（如“凶手是管家”→“管家”）。 */
@@ -1398,6 +1597,7 @@ public class ScriptGameService {
         if (game == null) return;
         game.phase = Phase.VOTE;
         game.voteStartedAt = System.currentTimeMillis();
+        game.phaseStartedAt = System.currentTimeMillis();
         game.quorumFailCount = 0;
         // C3: 阶段变更 → 快照
         saveSnapshot(game);
@@ -1415,6 +1615,7 @@ public class ScriptGameService {
         if (game != null && game.phase == Phase.INVESTIGATION) {
             game.phase = Phase.DISCUSSION;
             game.round++;
+            game.phaseStartedAt = System.currentTimeMillis();
             // C3: 阶段变更 → 快照（恢复后若处于 DISCUSSION 但讨论线程已随重启丢失，DM 可调 start_voting 推进）
             saveSnapshot(game);
             broadcastPhase(game, "discussion");
@@ -1702,6 +1903,139 @@ public class ScriptGameService {
     }
 
     /**
+     * P-0805-B（私聊闭环）：剧本杀私聊 —— 玩家与 AI 角色一对一密聊。
+     *
+     * <p>语义：请求方把消息发给另一名玩家的角色（AI 代管），目标角色以本人 persona + 秘密 +
+     * 已持线索生成回应（不泄露他人秘密、不直接认罪）；历史随快照落库。这是剧本杀核心玩法
+     * （秘密结盟/套话/传递线索），后端此前只有空壳 PrivateChatService（纯内存无 AI 应答）。
+     *
+     * <p>秘密守卫：回应经 {@code guardPrivateSecret} 拦截「认罪/自曝」类输出（对齐讨论 demo 的
+     * 修订机器人思想）；persona 只注入目标角色自己的秘密（WEAK 语义），不含他人秘密。
+     *
+     * @return {ok, from, to, message, reply, guarded, history}
+     */
+    public Map<String, Object> privateSay(String sessionId, String player, String target, String message) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (player == null || player.isBlank() || target == null || target.isBlank())
+            return Map.of("error", "缺少发送方或接收方");
+        if (message == null || message.isBlank()) return Map.of("error", "消息不能为空");
+        if (!game.players.contains(player) || !game.players.contains(target))
+            return Map.of("error", "私聊双方必须都在本局中");
+        if (player.equals(target)) return Map.of("error", "不能和自己私聊");
+
+        // 记录发送方消息
+        String key = privateChatKey(player, target);
+        List<Map<String, Object>> chat = game.privateChats.computeIfAbsent(key, k -> new ArrayList<>());
+        Map<String, Object> fromMsg = new LinkedHashMap<>();
+        fromMsg.put("from", player);
+        fromMsg.put("to", target);
+        fromMsg.put("content", message);
+        fromMsg.put("ts", System.currentTimeMillis());
+        chat.add(fromMsg);
+
+        // 目标角色 AI 应答
+        String reply = generatePrivateReply(game, player, target, message);
+        boolean guarded = false;
+        if (guardPrivateSecret(game, target, reply)) {
+            reply = "（神色不变）这个话题我不便多说，你若真想知道，得先拿出证据来。";
+            guarded = true;
+        }
+        Map<String, Object> toMsg = new LinkedHashMap<>();
+        toMsg.put("from", target);
+        toMsg.put("to", player);
+        toMsg.put("content", reply);
+        toMsg.put("ts", System.currentTimeMillis());
+        chat.add(toMsg);
+
+        // C3: 状态变更 → 快照
+        saveSnapshot(game);
+
+        // P-0805-C（私聊 SSE）：实时推送该私聊消息（script_private 事件；前端按本人 player 过滤展示）
+        if (sse != null) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("from", player);
+            payload.put("to", target);
+            payload.put("message", message);
+            payload.put("reply", reply);
+            payload.put("guarded", guarded);
+            payload.put("ts", System.currentTimeMillis());
+            sse.broadcastScriptPrivate(game.sessionId, payload);
+        }
+
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("from", player);
+        r.put("to", target);
+        r.put("message", message);
+        r.put("reply", reply);
+        r.put("guarded", guarded);
+        r.put("history", new ArrayList<>(chat));
+        return r;
+    }
+
+    /** P-0805-B：私聊历史（会话键字典序 "A|B" 或 "B|A" 均可取）。 */
+    public List<Map<String, Object>> getPrivateChatHistory(String sessionId, String playerA, String playerB) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return List.of();
+        return game.privateChats.getOrDefault(privateChatKey(playerA, playerB), List.of());
+    }
+
+    private static String privateChatKey(String a, String b) {
+        return a.compareTo(b) < 0 ? a + "|" + b : b + "|" + a;
+    }
+
+    /**
+     * P-0805-B：目标角色私聊应答 —— persona（身份+本人秘密+已持线索）+ 会话历史 + 玩家消息 → LLM 生成。
+     * LLM 失败/空输出 → 降级占位（不抛异常，保证私聊不中断）。
+     */
+    private String generatePrivateReply(ScriptGame game, String player, String target, String message) {
+        try {
+            Persona persona = buildDiscussionPersona(game, target, game.assignments.getOrDefault(target, target));
+            String role = game.assignments.getOrDefault(target, target);
+            String selfSecret = game.getSecretFor(target);
+            StringBuilder prompt = new StringBuilder();
+            prompt.append(persona.getPersonaDesc()).append("\n");
+            if (!selfSecret.isBlank()) {
+                prompt.append("你只知道自己「").append(role).append("」的秘密：").append(selfSecret)
+                      .append("。其他人秘密一概不知，绝不能承认自己是凶手，也不要主动供出不利信息。\n");
+            }
+            List<Map<String, Object>> history = game.privateChats.getOrDefault(privateChatKey(player, target), List.of());
+            prompt.append("以下是你们二人的私密对话历史（越靠后越新）：\n");
+            for (Map<String, Object> m : history) {
+                prompt.append(m.get("from")).append("：").append(m.get("content")).append("\n");
+            }
+            prompt.append(player).append("：").append(message).append("\n");
+            prompt.append("请以").append(role).append("的口吻，用 1-3 句话私下回应。直接输出回应内容，不要任何前缀。");
+            String reply = llmClient.callSync(java.util.List.of(
+                    new com.roleplay.engine.core.Message(com.roleplay.engine.core.Message.Role.SYSTEM, "system",
+                            "你是一个剧本杀角色，正在私下交谈。保持角色身份，谨慎作答，不主动泄露秘密，不直接认罪。"),
+                    new com.roleplay.engine.core.Message(com.roleplay.engine.core.Message.Role.USER, player,
+                            prompt.toString())), null, 200, 0.7);
+            return reply == null || reply.isBlank() ? "嗯，我听着呢。你继续说。" : reply.trim();
+        } catch (Exception e) {
+            log.warn("Script game {} private reply failed, using fallback: {}", game.sessionId, e.getMessage());
+            return "嗯，我听着呢。你继续说。";
+        }
+    }
+
+    /** P-0805-B：私聊回应守卫 —— 命中「认罪/自曝/自己是凶手」类 → true（改写为遮掩）。 */
+    private boolean guardPrivateSecret(ScriptGame game, String target, String reply) {
+        if (reply == null) return false;
+        String t = reply;
+        String role = game.assignments.getOrDefault(target, target);
+        boolean isKiller = !game.killerId.isBlank()
+                && role.equals(game.roleNamesById.get(game.killerId));
+        // 任何角色都不应自曝；凶手角色尤其不能认罪
+        if (t.contains("我是凶手") || t.contains("我杀了") || t.contains("凶手是我")
+                || t.contains("我下的毒") || t.contains("我捅的")) return true;
+        // 无证据佐证时不应主动供出关键秘密（简化：含秘密标题关键词即拦截 —— 保守策略）
+        String selfSecret = game.getSecretFor(target);
+        if (!selfSecret.isBlank() && t.contains(selfSecret)) return true;
+        return false;
+    }
+
+    /**
      * P-0802-J: per-game 懒创建讨论引擎 —— 每局独立 ConversationManager + SimulationWorld + WorldDirectorService
      * （替代原 service 实例级共享，多局并发互不覆盖/互不串状态；对齐狼人杀侧 P-0802-I 同款实现）。
      */
@@ -1748,6 +2082,20 @@ public class ScriptGameService {
         desc.append(hasSecret
                 ? "你有一个不可告人的秘密，务必保守，绝不能向任何人透露。"
                 : "你此行没有需要隐瞒的秘密，可以放心参与讨论。");
+        // P-0805-A（记忆检索接入讨论）：把该玩家已搜证持有的线索注入 persona ——
+        //   「信息收集 ≠ 推理闭环」：AI 必须记得自己发现的证据，才能在讨论中引用/试探/推演，
+        //   而不是只按秘密空泛发言。这是剧本杀语义下的"检索记忆"（对齐 MemoryRetrieval 的 additive 注入思想）。
+        List<Map<String, Object>> held = game.heldCluesOf(player);
+        if (!held.isEmpty()) {
+            StringBuilder cluesDesc = new StringBuilder("你当前掌握的证据：");
+            for (Map<String, Object> c : held) {
+                cluesDesc.append("\n· ").append(c.get("title")).append("（").append(c.get("location")).append("）：")
+                        .append(c.get("content"));
+            }
+            desc.append(cluesDesc).append("。讨论时可引用这些证据质询他人，但注意不要暴露你尚未掌握的线索。");
+        } else {
+            desc.append("你尚未掌握任何线索证据，主要通过他人发言获取信息。");
+        }
         desc.append("讨论时应根据已知线索发言、试探他人、隐藏不利信息。");
         Persona persona = new Persona(player);
         persona.setPersonaDesc(desc.toString());
@@ -1847,7 +2195,7 @@ public class ScriptGameService {
     }
 
     public ScriptGame getGame(String sessionId) {
-        return games.get(sessionId);
+        return touchGame(sessionId);
     }
 
     /**
@@ -2025,6 +2373,7 @@ public class ScriptGameService {
         content.put("background", game.background);
         content.put("truth", game.truth);
         content.put("killer_id", game.killerId);
+        content.put("role_names_by_id", new LinkedHashMap<>(game.roleNamesById));
         content.put("roles", ScriptSchemaV1.roleObjects(game.scriptSchema));
         content.put("locations", new ArrayList<>(game.locations));
         content.put("clues", new ArrayList<>(game.clues));
@@ -2343,13 +2692,19 @@ public class ScriptGameService {
         content.put("llm_degraded", game.llmDegraded);
         content.put("vote_started_at", game.voteStartedAt);
         content.put("quorum_fail_count", game.quorumFailCount);
+        content.put("revote_count", game.revoteCount);
         content.put("low_participation", game.lowParticipation);
         content.put("trustees", new ArrayList<>(game.trustees));
         content.put("name", game.name);
         content.put("background", game.background);
         content.put("truth", game.truth);
         content.put("killer_id", game.killerId);
+        content.put("role_names_by_id", new LinkedHashMap<>(game.roleNamesById));
         content.put("script_schema", game.scriptSchema);
+        content.put("started_at", game.startedAt);
+        content.put("phase_started_at", game.phaseStartedAt);
+        content.put("phase_timeout_ms", game.phaseTimeoutMs);
+        content.put("private_chats", new LinkedHashMap<>(game.privateChats));
         content.put("roles", new ArrayList<>(game.roles));
         content.put("players", new ArrayList<>(game.players));
         content.put("assignments", new LinkedHashMap<>(game.assignments));
@@ -2416,13 +2771,37 @@ public class ScriptGameService {
         game.llmDegraded = boolOf(c.get("llm_degraded"), false);
         game.voteStartedAt = c.get("vote_started_at") instanceof Number n ? n.longValue() : 0L;
         game.quorumFailCount = intOf(c.get("quorum_fail_count"), 0);
+        game.revoteCount = intOf(c.get("revote_count"), 0);
         game.lowParticipation = boolOf(c.get("low_participation"), false);
         game.trustees.addAll(strList(c.get("trustees")));
         game.name = str(c.get("name"));
         game.background = str(c.get("background"));
         game.truth = str(c.get("truth"));
         game.killerId = str(c.get("killer_id"));
+        game.roleNamesById.putAll(strMap(c.get("role_names_by_id")));
         game.scriptSchema = mapOf(c.get("script_schema"));
+        game.startedAt = c.get("started_at") instanceof Number n ? n.longValue() : System.currentTimeMillis();
+        game.phaseStartedAt = c.get("phase_started_at") instanceof Number n2 ? n2.longValue() : System.currentTimeMillis();
+        game.phaseTimeoutMs = c.get("phase_timeout_ms") instanceof Number n3 ? n3.longValue() : 0L;
+        for (Object o : mapList(c.get("private_chats"))) {
+            if (o instanceof Map<?, ?> mm) {
+                String k = String.valueOf(mm.keySet().iterator().next());
+                Object v = mm.get(k);
+                if (v instanceof List<?> l) {
+                    List<Map<String, Object>> msgs = new ArrayList<>();
+                    for (Object x : l) {
+                        if (x instanceof Map<?, ?> mx) {
+                            Map<String, Object> msg = new LinkedHashMap<>();
+                            for (Map.Entry<?, ?> e : mx.entrySet()) {
+                                if (e.getKey() != null) msg.put(String.valueOf(e.getKey()), e.getValue());
+                            }
+                            msgs.add(msg);
+                        }
+                    }
+                    game.privateChats.put(k, msgs);
+                }
+            }
+        }
         game.roles.addAll(strList(c.get("roles")));
         game.players.addAll(strList(c.get("players")));
         game.assignments.putAll(strMap(c.get("assignments")));

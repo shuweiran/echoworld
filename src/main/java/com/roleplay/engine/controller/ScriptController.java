@@ -332,6 +332,35 @@ public class ScriptController {
         return ResponseEntity.ok(scriptGameService.transferClue(sessionId, player, targetPlayer, clueId));
     }
 
+    /**
+     * P-0805-B（私聊闭环）：剧本杀私聊 —— 玩家与 AI 角色一对一密聊（秘密结盟/套话）。
+     * body: { player, target, message, player_key? } → { ok, from, to, message, reply, guarded, history }
+     */
+    @PostMapping("/private")
+    public ResponseEntity<Map<String, Object>> privateSay(@RequestBody Map<String, String> body) {
+        String player = body.getOrDefault("player", "");
+        String target = body.getOrDefault("target", "");
+        String message = body.getOrDefault("message", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.privateSay(sessionId, player, target, message));
+    }
+
+    /** P-0805-B：私聊历史 —— { player, other, player_key? } → 该二人私聊记录。 */
+    @GetMapping("/private/history")
+    public ResponseEntity<Map<String, Object>> privateHistory(@RequestParam String player,
+                                                               @RequestParam String other,
+                                                               @RequestParam(required = false) String player_key) {
+        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, player_key);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(Map.of(
+                "ok", true,
+                "history", scriptGameService.getPrivateChatHistory(sessionId, player, other)));
+    }
+
     @PostMapping("/start_discussion")
     public ResponseEntity<Map<String, Object>> startDiscussion(@RequestBody Map<String, String> body) {
         String sessionId = body.getOrDefault("session_id", currentSessionId);

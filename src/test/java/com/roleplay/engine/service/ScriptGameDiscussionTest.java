@@ -1,6 +1,7 @@
 package com.roleplay.engine.service;
 
 import com.roleplay.engine.approval.ApprovalService;
+import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.llm.LLMClient;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -15,7 +16,6 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
-
 /**
  * GAP-3 验收测试（蓝图 Step 3v）：剧本杀 DISCUSSION 阶段接对话引擎。
  *
@@ -173,5 +173,31 @@ class ScriptGameDiscussionTest {
                 "A3-4: 持秘密角色应注入隐藏秘密目标");
         assertEquals(ScriptGameService.GOAL_FIND_TRUTH, svc.getDiscussionGoal(SESSION, mergedPlayer),
                 "A3-4: 未持秘密角色应注入查明真相目标");
+    }
+
+    @Test
+    @DisplayName("P-0805-A（记忆检索）：已搜证持有的线索注入讨论 persona —— 玩家记住自己的证据才能推理")
+    void heldCluesInjectedIntoDiscussionPersona() throws Exception {
+        ScriptGameService svc = newService();
+        svc.initGame(SESSION, "庄园", List.of("Alice", "Bob", "Carol"));
+        ScriptGameService.ScriptGame game = svc.getGame(SESSION);
+
+        // Alice 搜证 客厅 → 获得 c1（碎玻璃）
+        svc.search(SESSION, "Alice", "客厅");
+        assertFalse(game.playerClues.getOrDefault("Alice", List.of()).isEmpty(), "前置：Alice 应持有线索");
+
+        // 反射调用私有 buildDiscussionPersona（persona 描述应含证据内容）
+        java.lang.reflect.Method m = ScriptGameService.class.getDeclaredMethod(
+                "buildDiscussionPersona", ScriptGameService.ScriptGame.class, String.class, String.class);
+        m.setAccessible(true);
+        Persona persona = (Persona) m.invoke(svc, game, "Alice", game.getAssignments().get("Alice"));
+
+        String desc = persona.getPersonaDesc();
+        assertTrue(desc.contains("你当前掌握的证据"), "persona 应注入证据记忆段: " + desc);
+        assertTrue(desc.contains("碎玻璃"), "persona 应包含 Alice 持有线索的内容: " + desc);
+        // 未持有线索的角色 → 提示无证据
+        String bobRole = game.getAssignments().get("Bob");
+        Persona bob = (Persona) m.invoke(svc, game, "Bob", bobRole);
+        assertTrue(bob.getPersonaDesc().contains("尚未掌握任何线索"), "未持线索角色应提示无证据: " + bob.getPersonaDesc());
     }
 }

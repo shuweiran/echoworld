@@ -95,6 +95,16 @@ roleplay:
       vote-timeout-ms: 60000
       vote-timeout-enabled: true
       quorum-enabled: true
+      # P-0805-A（B4/B5）：
+      #   max-revotes=平票/审批驳回重投次数上限（默认 3；超过按「无人被定罪」终止，防无限循环）
+      #   game-ttl-ms=对局内存 TTL（默认 43200000=12h 闲置清理；0=禁用；快照持久化，重启/清理后可由 resume 重建）
+      max-revotes: 3
+      game-ttl-ms: 43200000
+      # P-0805-B（WebSearch 搜证）：搜证时自动联网检索线索背景（默认关，避免每局都打 DuckDuckGo）
+      web-search-enabled: false
+      # P-0805-C（阶段倒计时）：单阶段最长停留毫秒（默认 0=禁用；>0 时惰性推进 INVESTIGATION→DISCUSSION→VOTE，
+      #   VOTE 阶段复用投票超时/弃票不在此推进）
+      phase-timeout-ms: 0
     werewolf:
       # 狼人杀自动推进（P-0802-F，主人授权后端批次）：
       #   ai-night-actions=AI 角色夜间自动决策（狼刀/预言家验/女巫救毒/猎人反杀）
@@ -114,6 +124,14 @@ roleplay:
     invite-enabled: false
     # 持久化初始邀请码（服务重启不丢，启用后立即可用；DEFAULT2024 兼容保留）
     invite-code: "B3283A78"
+  image:
+    # P-0805-C（生图 provider 适配）：AI 生图配置 ——
+    #   provider-url=OpenAI 兼容 /images/generations 端点（空=离线 SVG 占位）
+    #   provider-key=生图 API Key（provider-url 非空时必填）
+    #   model=生图模型（空=默认 gpt-image-1）
+    provider-url: ""
+    provider-key: ""
+    model: ""
   broadcast:
     # 演讲与广播合并地基：公告管线节流参数（AnnouncementService 读取）
     window-ms: 1000       # 滑动窗口长度

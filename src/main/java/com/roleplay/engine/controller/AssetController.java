@@ -27,7 +27,10 @@ import java.util.stream.Collectors;
 public class AssetController {
 
     /** 合法素材类型（注册即规范化大写） */
-    public static final Set<String> ASSET_TYPES = Set.of("CHARACTER_ANIMATION", "SCENE_TILESET");
+    public static final Set<String> ASSET_TYPES = Set.of(
+            "CHARACTER_ANIMATION", "SCENE_TILESET",
+            // P-0805-C（生图接入）：AI 生成的角色立绘 / 场景氛围图 / 线索物证图
+            "ROLE_PORTRAIT", "SCENE_BACKGROUND", "CLUE_IMAGE");
 
     private final DatabaseService databaseService;
     private final CharacterRepository characterRepo;
@@ -54,7 +57,7 @@ public class AssetController {
 
         if (name.isBlank()) return badRequest("素材名 name 必填");
         if (!ASSET_TYPES.contains(assetType)) {
-            return badRequest("asset_type 非法（应为 CHARACTER_ANIMATION 或 SCENE_TILESET）：" + assetType);
+            return badRequest("asset_type 非法（应为 CHARACTER_ANIMATION / SCENE_TILESET / ROLE_PORTRAIT / SCENE_BACKGROUND / CLUE_IMAGE）：" + assetType);
         }
         if (filePath.isBlank()) return badRequest("file_path 必填（素材文件相对 static/assets/ 的路径）");
         // 关联校验：提供即必须存在（严格拒绝）；两者皆空 = 未关联素材允许
