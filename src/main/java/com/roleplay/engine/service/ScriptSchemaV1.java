@@ -78,6 +78,145 @@ public final class ScriptSchemaV1 {
             """, theme, playerCount);
     }
 
+    // ═══════════════════════════════════════════════════════════
+    //  阶段 1（P-0810-17）：概略剧本（outline）生成路径
+    //  两阶段生成第一阶段：只生成概略（地点/人物一句话人设/线索标题/剧情线），
+    //  完整剧本由 POST /api/script/generate_full 后台异步补齐。
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * 概略剧本的 LLM prompt —— 轻量输出（目标 <10s，maxTokens≈800-1200），只含
+     * locations / roles（名字+一句话人设）/ clues（标题+地点）/ storyline / killer_hint。
+     */
+    public static String buildOutlinePrompt(String theme, int playerCount) {
+        return String.format("""
+            你是一个剧本杀创作者。请先生成剧本的概略（outline），用于建局后快速展示给玩家；完整剧本稍后由后台继续生成。
+
+            主题：%s
+            角色数：%d
+
+            概略要求（轻量输出，不要生成完整剧本）：
+            - locations[]：3-5 个可搜证地点
+            - roles[]：每个角色一个对象，含 name 角色名、intro 一句话人设（30字以内）
+            - clues[]：3-5 条线索，每条含 title 线索标题、location 所属地点
+            - storyline：剧情梗概（50-100字）
+            - killer_hint（可选）：凶手的模糊提示
+
+            返回JSON格式（不要任何markdown标记，纯JSON）：
+            {"locations": ["客厅", "书房", "花园"],
+             "roles": [{"name": "管家", "intro": "沉默寡言的老管家"}],
+             "clues": [{"title": "沾血的怀表", "location": "客厅"}],
+             "storyline": "风雨夜庄园主人遇害，众人各怀秘密，需要调查推理找出真凶。",
+             "killer_hint": "凶手可能与遗嘱有关"}
+            """, theme, playerCount);
+    }
+
+    /**
+     * 概略兜底（LLM 失败/空输出时）：从玩家名单派生出地点/角色/线索/剧情线，零 LLM 可确定性生成。
+     */
+    public static Map<String, Object> defaultOutline(String theme, List<String> playerNames) {
+        List<String> players = playerNames == null ? List.of() : playerNames;
+        String t = theme == null || theme.isBlank() ? "默认主题" : theme;
+        Map<String, Object> outline = new LinkedHashMap<>();
+        outline.put("locations", new ArrayList<>(DEFAULT_LOCATIONS));
+        List<Map<String, Object>> roles = new ArrayList<>();
+        for (String p : players) {
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("name", p);
+            r.put("intro", "身份未知的神秘来客");
+            roles.add(r);
+        }
+        if (roles.isEmpty()) {
+            Map<String, Object> r = new LinkedHashMap<>();
+            r.put("name", "嫌疑人_1");
+            r.put("intro", "身份未知的神秘来客");
+            roles.add(r);
+        }
+        outline.put("roles", roles);
+        outline.put("clues", List.of(
+            Map.of("title", "碎玻璃", "location", "客厅"),
+            Map.of("title", "威胁信", "location", "书房"),
+            Map.of("title", "脚印", "location", "花园")));
+        outline.put("storyline", t + "：深夜宅邸突发命案，众人各怀秘密，需要搜证推理找出真凶。");
+        outline.put("killer_hint", "");
+        return outline;
+    }
+
+    /**
+     * 概略宽容解析：接受 LLM 原始输出（或缺字段）→ 统一输出概略规范结构
+     * {locations[], roles[]{name,intro}, clues[]{title,location}, storyline, killer_hint}。
+     * 角色缺失时按玩家兜底；角色名即玩家名（概略阶段无角色分配）。
+     */
+    public static Map<String, Object> normalizeOutline(Map<String, Object> raw, List<String> playerNames, String theme) {
+        List<String> players = playerNames == null ? List.of() : playerNames;
+        String t = theme == null || theme.isBlank() ? "默认主题" : theme;
+        if (raw == null) raw = Map.of();
+
+        List<String> locations = strList(raw.get("locations"));
+        if (locations.isEmpty()) locations = new ArrayList<>(DEFAULT_LOCATIONS);
+
+        List<Map<String, Object>> roles = new ArrayList<>();
+        Object r = raw.get("roles");
+        if (r instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof String s) {
+                    Map<String, Object> rm = new LinkedHashMap<>();
+                    rm.put("name", s);
+                    rm.put("intro", "身份未知的神秘来客");
+                    roles.add(rm);
+                } else if (o instanceof Map<?, ?> mm) {
+                    Map<String, Object> rm = new LinkedHashMap<>();
+                    String name = str(mm.get("name"));
+                    if (name.isBlank()) continue;
+                    rm.put("name", name);
+                    rm.put("intro", str(mm.get("intro")));
+                    roles.add(rm);
+                }
+            }
+        }
+        if (roles.isEmpty()) {
+            for (String p : players) {
+                Map<String, Object> rm = new LinkedHashMap<>();
+                rm.put("name", p);
+                rm.put("intro", "身份未知的神秘来客");
+                roles.add(rm);
+            }
+        }
+        if (roles.isEmpty()) {
+            Map<String, Object> rm = new LinkedHashMap<>();
+            rm.put("name", "嫌疑人_1");
+            rm.put("intro", "身份未知的神秘来客");
+            roles.add(rm);
+        }
+
+        List<Map<String, Object>> clues = new ArrayList<>();
+        Object c = raw.get("clues");
+        if (c instanceof List<?> list) {
+            for (Object o : list) {
+                if (o instanceof Map<?, ?> cm) {
+                    Map<String, Object> cl = new LinkedHashMap<>();
+                    cl.put("title", str(cm.get("title")));
+                    cl.put("location", str(cm.get("location")));
+                    if (!str(cm.get("title")).isBlank()) clues.add(cl);
+                }
+            }
+        }
+        if (clues.isEmpty()) {
+            clues.add(Map.of("title", "碎玻璃", "location", "客厅"));
+            clues.add(Map.of("title", "威胁信", "location", "书房"));
+            clues.add(Map.of("title", "脚印", "location", "花园"));
+        }
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("locations", locations);
+        out.put("roles", roles);
+        out.put("clues", clues);
+        String storyline = str(raw.get("storyline"));
+        out.put("storyline", storyline.isBlank()
+                ? t + "：深夜宅邸突发命案，众人各怀秘密，需要搜证推理找出真凶。" : storyline);
+        out.put("killer_hint", str(raw.get("killer_hint")));
+        return out;
+    }
     /** 兜底剧本（LLM 失败/空输出时），输出同 v1 规范结构。 */
     public static Map<String, Object> defaultScript(String theme, List<String> playerNames) {
         List<String> players = playerNames == null ? List.of() : playerNames;

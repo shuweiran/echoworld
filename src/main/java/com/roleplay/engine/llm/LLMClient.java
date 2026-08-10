@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.roleplay.engine.config.AppConfig;
 import com.roleplay.engine.core.Message;
+import com.roleplay.engine.debug.TraceContext;
 import com.roleplay.engine.interrupt.CancellationToken;
 import com.roleplay.engine.interrupt.StopType;
 import com.roleplay.engine.interrupt.TaskCancelledException;
@@ -59,6 +60,9 @@ public class LLMClient {
     /** 运行时默认模型（D20）。 */
     private String defaultModel() { return appConfig.getLlm().getModel(); }
 
+    /** P-0810-21-D：对话主链路 max_tokens（roleplay.llm.dialogue-max-tokens，默认 700）。 */
+    private int dialogueMaxTokens() { return appConfig.getLlm().getDialogueMaxTokens(); }
+
     /**
      * 归一化 chat/completions 端点（D20）：容忍 api_base 传全路径
      * （…/chat/completions）、带 /v1（…/v1）或不带 /v1 三种写法。
@@ -78,9 +82,12 @@ public class LLMClient {
     /**
      * Call the LLM with retry logic （2 models × 2 retries）.
      * This is a BLOCKING call — designed to run in a Virtual Thread.
+     *
+     * <p>P-0810-21-D：对话主链路 max_tokens 由硬编码 300 提升为配置
+     * roleplay.llm.dialogue-max-tokens（默认 700）——AI 发言 300 常截断（content 不完整）。
      */
     public String callSync(List<Message> messages) {
-        return callSyncInternal(messages, defaultModel(), 300, 0.7, null, timeoutSeconds);
+        return callSyncInternal(messages, defaultModel(), dialogueMaxTokens(), 0.7, null, timeoutSeconds);
     }
 
     /**
@@ -91,7 +98,7 @@ public class LLMClient {
      * future.cancel(true)）也会立即 abort 进行中的 HTTP 调用并上抛取消信号。
      */
     public String callSync(List<Message> messages, CancellationToken token) {
-        return callSyncInternal(messages, defaultModel(), 300, 0.7, token, timeoutSeconds);
+        return callSyncInternal(messages, defaultModel(), dialogueMaxTokens(), 0.7, token, timeoutSeconds);
     }
 
     public String callSync(List<Message> messages, String modelOverride,
@@ -107,6 +114,21 @@ public class LLMClient {
     }
 
     private String callSyncInternal(List<Message> messages, String modelOverride,
+                                    int maxTokens, double temperature,
+                                    CancellationToken token, int timeoutSec) {
+        // P-0809-B（API 逻辑链追踪）：LLM 调用打点 —— 墙钟耗时（含全部重试）+ 模型，
+        // 关联到当前请求链路（TraceContext ThreadLocal；开关关闭零开销）
+        long traceT0 = System.currentTimeMillis();
+        try {
+            return callSyncInternal0(messages, modelOverride, maxTokens, temperature, token, timeoutSec);
+        } finally {
+            TraceContext.recordLlm(modelOverride == null || modelOverride.isBlank()
+                            ? defaultModel() : modelOverride,
+                    System.currentTimeMillis() - traceT0);
+        }
+    }
+
+    private String callSyncInternal0(List<Message> messages, String modelOverride,
                                     int maxTokens, double temperature,
                                     CancellationToken token, int timeoutSec) {
 
@@ -207,20 +229,27 @@ public class LLMClient {
     /**
      * Call LLM and parse response as JSON.
      * Includes fuzzy extraction: strips markdown fences, extracts first {…}.
+     *
+     * <p>P-0810-19：{@code maxTokens} 可空——null/&lt;=0 时用配置默认
+     * （{@code roleplay.llm.max-tokens}，yml 4000）；既有调用点显式传值优先，行为逐字节不变。</p>
      */
-    public Map<String, Object> callJson(String prompt, int maxTokens) {
+    public Map<String, Object> callJson(String prompt, Integer maxTokens) {
         return callJson(prompt, maxTokens, timeoutSeconds);
     }
 
     /** 带单次调用超时覆盖（地图生成等路径：LLM 卡住快速降级，防止 init 自动串联被拖死）。 */
-    public Map<String, Object> callJson(String prompt, int maxTokens, int timeoutOverrideSeconds) {
+    public Map<String, Object> callJson(String prompt, Integer maxTokens, int timeoutOverrideSeconds) {
         Message sysMsg = new Message(Message.Role.SYSTEM, "system",
                 "你是一个角色扮演主控（DM）。必须严格按照要求的JSON格式回复。");
         Message userMsg = new Message(Message.Role.USER, "user", prompt);
 
+        int effectiveMaxTokens = resolveMaxTokens(maxTokens);
+        double effectiveTemperature = appConfig.getLlm().getTemperature();
+
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
-                String content = callSync(List.of(sysMsg, userMsg), defaultModel(), maxTokens, 0.1,
+                String content = callSync(List.of(sysMsg, userMsg), defaultModel(), effectiveMaxTokens,
+                        effectiveTemperature,
                         timeoutOverrideSeconds > 0 ? timeoutOverrideSeconds : timeoutSeconds);
                 String json = extractJson(content);
                 if (json != null) {
@@ -233,6 +262,17 @@ public class LLMClient {
             }
         }
         return Map.of();
+    }
+
+    /**
+     * P-0810-19：maxTokens 可空解析——null/&lt;=0 回退配置默认
+     * （{@code roleplay.llm.max-tokens}）；显式正数恒优先（与既有调用点行为一致）。
+     */
+    private int resolveMaxTokens(Integer maxTokens) {
+        if (maxTokens == null || maxTokens <= 0) {
+            return appConfig.getLlm().getMaxTokens();
+        }
+        return maxTokens;
     }
 
     // ── Internal helpers ───────────────────────────────────────
@@ -264,6 +304,13 @@ public class LLMClient {
         requestBody.put("messages", msgList);
         requestBody.put("max_tokens", maxTokens);
         requestBody.put("temperature", temperature);
+        // P-0810-19：roleplay.llm.seed（DeepSeek 兼容 OpenAI seed）——非空时所有 chat 请求携带
+        // seed 字段：同 seed + 同 temperature 下同主题多次生成输出更稳定（复现/调试手段）；
+        // 默认 null=不发送，请求体与既有逐字节一致。
+        Integer seed = appConfig.getLlm().getSeed();
+        if (seed != null) {
+            requestBody.put("seed", seed);
+        }
         if (stream) requestBody.put("stream", true);
         // P-0804-F（2026-08-04）：deepseek-v4-flash 为推理模型（reasoning_content 思考吃满
         // max_tokens 导致 content 恒空、finish=length，地图/剧本长 JSON 生成全走 BSP 兜底）。
@@ -290,6 +337,17 @@ public class LLMClient {
      */
     public String callStream(List<Message> messages, CancellationToken token,
                              java.util.function.Consumer<String> onDelta) {
+        // P-0809-B（API 逻辑链追踪）：流式 LLM 调用打点（与 callSync* 同语义）
+        long traceT0 = System.currentTimeMillis();
+        try {
+            return callStreamInternal(messages, token, onDelta);
+        } finally {
+            TraceContext.recordLlm(defaultModel(), System.currentTimeMillis() - traceT0);
+        }
+    }
+
+    private String callStreamInternal(List<Message> messages, CancellationToken token,
+                                      java.util.function.Consumer<String> onDelta) {
         String[] modelsToTry = {defaultModel(), fallbackModel};
         Set<String> seen = new LinkedHashSet<>(Arrays.asList(modelsToTry));
         Exception lastError = null;
@@ -299,7 +357,7 @@ public class LLMClient {
                 // 检查点：每次尝试前（取消 → 立即中断，不发起新请求）
                 if (token != null) token.checkpoint();
                 try {
-                    String requestBody = buildChatRequest(messages, currentModel, 300, 0.7, true);
+                    String requestBody = buildChatRequest(messages, currentModel, dialogueMaxTokens(), 0.7, true);
                     HttpRequest request = HttpRequest.newBuilder()
                             .uri(URI.create(chatEndpoint()))
                             .header("Content-Type", "application/json")

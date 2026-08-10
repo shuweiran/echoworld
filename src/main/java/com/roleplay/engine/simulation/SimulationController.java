@@ -1,5 +1,6 @@
 package com.roleplay.engine.simulation;
 
+import com.roleplay.engine.controller.CharacterController;
 import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
 import org.slf4j.Logger;
@@ -23,13 +24,16 @@ public class SimulationController {
 
     private final SimulationService simulationService;
     private final SimulationWorld world;
+    private final CharacterController characterController;
     private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<SimulationWorld.WorldSnapshot> recentSnapshots = new CopyOnWriteArrayList<>();
     private static final int MAX_RECENT_SNAPSHOTS = 100;
 
-    public SimulationController(SimulationService simulationService, SimulationWorld world) {
+    public SimulationController(SimulationService simulationService, SimulationWorld world,
+                                CharacterController characterController) {
         this.simulationService = simulationService;
         this.world = world;
+        this.characterController = characterController;
 
         world.addTickListener(snapshot -> {
             Map<String, Object> event = snapshot.toMap();
@@ -85,6 +89,8 @@ public class SimulationController {
             p.setPersonaDesc(ch.getOrDefault("persona", ""));
             p.setVoice(ch.getOrDefault("voice", ""));
             p.setBackground(ch.getOrDefault("background", ""));
+            // P-0810-10：五层 persona 卡（导入卡优先，无则默认资源卡；已有 layer 不覆盖）
+            characterController.attachPersonaCard(p);
             personas.add(p);
         }
 

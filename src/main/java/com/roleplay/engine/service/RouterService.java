@@ -32,6 +32,7 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
@@ -74,7 +75,13 @@ public class RouterService {
     @Value("${roleplay.round.serial:false}")
     private boolean serialRound;
 
+    /** P-0810-23-D2：AI 角色单次发言中文字数提醒阈值（roleplay.llm.remind-threshold，默认 150；<=0 关闭）。 */
+    @Value("${roleplay.llm.remind-threshold:150}")
+    private int remindThreshold;
+
     private volatile boolean running = false;
+    /** P-0810-14: 起局后自动第一轮（AI 开场白）已触发标志 —— 每会话仅触发一次（initSession 重置）。 */
+    private volatile boolean autoFirstRoundFired = false;
     private String mode = "free";        // free | protagonist | multi_track | director | werewolf | script
     private String protagonist = "";
     private String directorCharacter = "";
@@ -88,6 +95,13 @@ public class RouterService {
     private ScriptGameService.ScriptGame scriptGame = null;
     // P-0802-F: 狼人杀当前对局 —— 用于把身份（含狼人互认）发放到对应角色上下文（仅 werewolf 模式生效）
     private WerewolfService.GameState werewolfGame = null;
+    // ═══ P-0810-09: 场景目标机制（一般模式「场景与场景目标」） ═══
+    /** 目标生成/判定服务（SessionRegistry 创建会话后注入；null=未启用，测试直构零影响）。 */
+    private volatile SceneGoalService sceneGoalService = null;
+    /** 当前会话目标集（null=无目标；结构见 SceneGoalService 类注释）。 */
+    private volatile Map<String, Object> sceneGoals = null;
+    /** 已向玩家揭示过全文的目标键（完成/失败各揭示一次，防重复广播）。 */
+    private final Set<String> goalRevealed = ConcurrentHashMap.newKeySet();
 
     public RouterService(ArbiterService arbiter, AgentExecutor executor,
                          MemoryStore memory, Compressor compressor,
@@ -134,6 +148,15 @@ public class RouterService {
         this.goals = new ArrayList<>();
         this.restrictedAgents = new HashSet<>();
         this.running = true;
+        // P-0810-09: 新会话重置目标集（旧会话残留目标不串场）
+        this.sceneGoals = null;
+        this.goalRevealed.clear();
+        // P-0810-11: 新会话清空对局历史快照 —— startScene 起局复用默认单例 router，
+        // roundHistory 跨会话残留会让 /api/round/rollback 恢复旧会话的消息快照
+        // （D-007 同类修法：新会话 init 时清状态；普通 init 会话走独立实例本就为空，零影响）
+        this.roundHistory.clear();
+        // P-0810-14: 新会话重置自动开场标志（每会话起局后自动第一轮仅触发一次）
+        this.autoFirstRoundFired = false;
 
         agents.clear();
         List<String> agentNames = new ArrayList<>();
@@ -228,6 +251,210 @@ public class RouterService {
         this.restrictedAgents = names != null ? new HashSet<>(names) : new HashSet<>();
     }
 
+    // ═══════════════════════════════════════════════════════════
+    //  P-0810-09: 场景目标机制（一般模式「场景与场景目标」）
+    // ═══════════════════════════════════════════════════════════
+
+    /** 注入目标服务（SessionRegistry 创建会话 router 后调用；测试可直设）。 */
+    public void setSceneGoalService(SceneGoalService sceneGoalService) {
+        this.sceneGoalService = sceneGoalService;
+    }
+
+    public boolean hasSceneGoals() {
+        return sceneGoals != null && !sceneGoals.isEmpty();
+    }
+
+    public Map<String, Object> getSceneGoalsRaw() {
+        return sceneGoals;
+    }
+
+    /**
+     * 一般模式 init 时确保目标集就绪：已有 → 跳过；DB 场景有 goals → 装载；否则 LLM 生成
+     * （失败规则兜底，恒不抛）。非一般模式（werewolf/script 等）零触碰。
+     */
+    public synchronized void ensureSceneGoals(String sceneId, String sceneDesc, String customPlayerGoal) {
+        if (!isGeneralMode(mode) || sceneGoalService == null) return;
+        if (hasSceneGoals()) return;
+        List<String> roleNames = new ArrayList<>(agents.keySet());
+        Map<String, Object> goals = sceneGoalService.generateAndLoad(sceneId, sceneDesc, roleNames, customPlayerGoal);
+        if (goals != null && !goals.isEmpty()) {
+            setSceneGoals(goals);
+            log.info("Session {} scene goals ready: {} role goals + global + player",
+                    sessionId, roleNames.size());
+        }
+    }
+
+    /** 装载目标集并注入各 Agent 隐藏目标。 */
+    public synchronized void setSceneGoals(Map<String, Object> goals) {
+        this.sceneGoals = goals;
+        injectHiddenGoals();
+    }
+
+    /** 隐藏目标注入：role_goals[agentName].desc → Agent.hiddenGoal（buildContext 系统提示用）。 */
+    private void injectHiddenGoals() {
+        if (sceneGoals == null) return;
+        Object rg = sceneGoals.get(SceneGoalService.KEY_ROLE_GOALS);
+        if (!(rg instanceof Map<?, ?> roleGoals)) return;
+        for (Map.Entry<String, Agent> e : agents.entrySet()) {
+            Object entry = roleGoals.get(e.getKey());
+            if (entry instanceof Map<?, ?> m && m.get("desc") != null) {
+                e.getValue().setHiddenGoal(String.valueOf(m.get("desc")));
+            } else {
+                e.getValue().setHiddenGoal(null);
+            }
+        }
+    }
+
+    /**
+     * init 响应视图：玩家目标明文；全局/角色目标仅「？？」占位 + 数量（隐藏不泄露）。
+     */
+    public Map<String, Object> getSceneGoalsView() {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("enabled", hasSceneGoals());
+        if (!hasSceneGoals()) return view;
+        Map<String, Object> goals = sceneGoals;
+        Object pg = goals.get(SceneGoalService.KEY_PLAYER);
+        if (pg instanceof Map<?, ?> m) {
+            view.put(SceneGoalService.KEY_PLAYER, Map.of(
+                "desc", descOf(m, ""),
+                "status", statusOfGoal(m, SceneGoalService.NOT_STARTED)));
+        }
+        Object gg = goals.get(SceneGoalService.KEY_GLOBAL);
+        if (gg instanceof Map<?, ?> m) {
+            view.put(SceneGoalService.KEY_GLOBAL, Map.of(
+                "desc", SceneGoalService.MASK,
+                "status", statusOfGoal(m, SceneGoalService.NOT_STARTED)));
+        }
+        Map<String, Object> roleView = new LinkedHashMap<>();
+        Object rg = goals.get(SceneGoalService.KEY_ROLE_GOALS);
+        if (rg instanceof Map<?, ?> roleGoals) {
+            for (Map.Entry<?, ?> e : roleGoals.entrySet()) {
+                if (e.getValue() instanceof Map<?, ?> m) {
+                    roleView.put(String.valueOf(e.getKey()), Map.of(
+                        "desc", SceneGoalService.MASK,
+                        "status", statusOfGoal(m, SceneGoalService.NOT_STARTED)));
+                }
+            }
+        }
+        view.put(SceneGoalService.KEY_ROLE_GOALS, roleView);
+        view.put("ai_goal_count", roleView.size());
+        return view;
+    }
+
+    /** 读取目标条目 desc（Map&lt;?,?&gt; 捕获类型安全取值）。 */
+    private static String descOf(Map<?, ?> m, String def) {
+        Object d = m.get("desc");
+        return d != null ? String.valueOf(d) : def;
+    }
+
+    /** 读取目标条目 status（Map&lt;?,?&gt; 捕获类型安全取值）。 */
+    private static String statusOfGoal(Map<?, ?> m, String def) {
+        Object s = m.get("status");
+        return s != null ? String.valueOf(s) : def;
+    }
+
+    /**
+     * runRound 末尾钩子：异步目标进展判定（不阻塞主流程；失败静默降级）。
+     * 判定频率：每轮一次（任务先做每轮判定，性能优化留后续）。
+     */
+    private void submitGoalJudgment() {
+        if (sceneGoalService == null || !hasSceneGoals()) return;
+        Map<String, Object> goalsSnapshot = sceneGoals;
+        String transcript = buildGoalTranscript();
+        CompletableFuture.runAsync(() -> {
+            try {
+                SceneGoalService.JudgeResult result =
+                        sceneGoalService.judgeGoals(goalsSnapshot, transcript);
+                if (result != null) applyGoalJudgment(result);
+            } catch (Exception e) {
+                // 判定失败静默降级：不阻塞、不广播、不影响对话主流程
+                log.warn("Scene goal judgment skipped: {}", e.getMessage());
+            }
+        });
+    }
+
+    /** 应用判定结果：状态有变化 → 组装 scene_target_update 定向广播（完成/失败揭示全文一次）。 */
+    private synchronized void applyGoalJudgment(SceneGoalService.JudgeResult r) {
+        if (!hasSceneGoals()) return;
+        Map<String, Object> goals = sceneGoals;
+        boolean changed = false;
+        List<String> revealed = new ArrayList<>();
+
+        Map<String, String> roleStatusOut = new LinkedHashMap<>();
+        Object rg = goals.get(SceneGoalService.KEY_ROLE_GOALS);
+        if (rg instanceof Map<?, ?> roleGoals) {
+            for (Map.Entry<String, String> e : r.roleStatuses().entrySet()) {
+                Object entry = roleGoals.get(e.getKey());
+                if (!(entry instanceof Map<?, ?> m)) continue; // LLM 幻觉角色名忽略
+                String cur = statusOfGoal(m, SceneGoalService.NOT_STARTED);
+                roleStatusOut.put(e.getKey(), e.getValue());
+                if (!cur.equals(e.getValue())) {
+                    ((Map<String, Object>) entry).put("status", e.getValue());
+                    changed = true;
+                    if (isTerminal(e.getValue()) && goalRevealed.add(e.getKey())) {
+                        revealed.add(descOf(m, ""));
+                    }
+                }
+            }
+        }
+        String globalOut = SceneGoalService.NOT_STARTED;
+        if (r.globalStatus() != null) {
+            Object gg = goals.get(SceneGoalService.KEY_GLOBAL);
+            if (gg instanceof Map<?, ?> m) {
+                String cur = statusOfGoal(m, SceneGoalService.NOT_STARTED);
+                globalOut = r.globalStatus();
+                if (!cur.equals(r.globalStatus())) {
+                    ((Map<String, Object>) m).put("status", r.globalStatus());
+                    changed = true;
+                    if (isTerminal(r.globalStatus()) && goalRevealed.add(SceneGoalService.KEY_GLOBAL)) {
+                        revealed.add(descOf(m, ""));
+                    }
+                }
+            }
+        }
+        String playerOut = SceneGoalService.NOT_STARTED;
+        if (r.playerStatus() != null) {
+            Object pp = goals.get(SceneGoalService.KEY_PLAYER);
+            if (pp instanceof Map<?, ?> m) {
+                String cur = statusOfGoal(m, SceneGoalService.NOT_STARTED);
+                playerOut = r.playerStatus();
+                if (!cur.equals(r.playerStatus())) {
+                    ((Map<String, Object>) m).put("status", r.playerStatus());
+                    changed = true;
+                    // 玩家目标本就明文展示，状态变化同样广播（全文不重复进 revealed）
+                }
+            }
+        }
+        if (!changed) return;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("session_id", sessionId);
+        payload.put("role_goal_status", roleStatusOut);
+        payload.put("global_goal_status", globalOut);
+        payload.put("player_goal_status", playerOut);
+        payload.put("revealed", revealed);
+        if (sse != null) sse.broadcastToSession(sessionId, "scene_target_update", payload);
+    }
+
+    private static boolean isTerminal(String status) {
+        return SceneGoalService.COMPLETED.equals(status) || SceneGoalService.FAILED.equals(status);
+    }
+
+    /** 最近对话转录（最近 3 轮 ≈ 10 条消息），判定 LLM 输入用。 */
+    private String buildGoalTranscript() {
+        List<Map<String, String>> raw = memory.getShortTermContextRaw(3);
+        StringBuilder sb = new StringBuilder();
+        for (Map<String, String> m : raw) {
+            sb.append(m.getOrDefault("name", "?")).append(": ")
+              .append(m.getOrDefault("content", "")).append("\n");
+        }
+        return sb.toString();
+    }
+
+    private static boolean isGeneralMode(String mode) {
+        return mode != null && ("free".equals(mode) || "protagonist".equals(mode)
+                || "multi_track".equals(mode) || "director".equals(mode));
+    }
+
     /**
      * 停止会话。D1 增强：除置位停止标志外，立即硬停止所有进行中的生成任务
      * （取消令牌 + 中断 LLM 调用线程），使 /api/stop 真正能中断进行中的生成。
@@ -271,8 +498,12 @@ public class RouterService {
      * P-0802-P2（改造方案《玩家角色改名与 AI 识别》Phase 2，主人授权 2026-08-02）：
      * runRound 四参重载 —— playerId 解析式豁免。判定优先级（方案 §3.3）：player_id 存在且能解析
      * → 用解析出的当前角色名；否则用 player_name 字符串（现状逻辑，零行为变化）。
+     *
+     * <p>P-0810-14：方法级同步（与 renameAgent 同策略）——起局自动第一轮在后台线程执行，
+     * 与 /api/send 等并发入口互斥串行：开场轮先完成，玩家发言按序接入（MemoryStore 非线程安全，
+     * 并发 runRound 会造成同轮消息交错/CME）。
      */
-    public RoundResult runRound(String userInput, String userInterjection, String speaker, String playerId) {
+    public synchronized RoundResult runRound(String userInput, String userInterjection, String speaker, String playerId) {
         if (agents.isEmpty()) {
             if (sse != null) sse.broadcastError("No active session");
             return RoundResult.error("No active session");
@@ -404,6 +635,15 @@ public class RouterService {
             if (excludeName != null) agentMap.remove(excludeName);
         }
 
+        // P-0810-25-2：玩家角色（protagonist）不参与 LLM 生成 —— 玩家发言只来自玩家输入（/api/send），AI 绝不能代答。
+        // 并行路径 buildTasks 对缺失 agent 自动跳过（AgentExecutor ~L306 `if (agent == null) continue`）；
+        // 串行路径 executeRoundSerial 对缺失 agent 自动跳过（~L967 `if (!agentMap.containsKey(agentName)) continue`）——
+        // 两条路径一次修复（与上方 P0-2 speaker 排除同款机制）。
+        // 仅在 protagonist 非空时排除（director/free 模式 protagonist 为空 → 不影响 AI 自动对话）。
+        if (!protagonist.isEmpty()) {
+            agentMap.remove(protagonist);
+        }
+
         AgentExecutor.ExecutionResult execResult;
         List<Map<String, Object>> agentOutputs = new ArrayList<>();
         // D8: trackId → 轨道信息映射（agent_output 事件的 track_label / track_mode）
@@ -434,6 +674,8 @@ public class RouterService {
         if (!serialRound) {
             for (AgentExecutor.AgentOutput output : execResult.outputs()) {
                 if (output.isSuccess() && output.content() != null && !output.content().isBlank()) {
+                    // P-0810-23-D2：AI 角色单次发言落盘前检测超长（中文字数 > 阈值 → 记录下一轮提醒）
+                    maybeRecordOverLengthReminder(agents.get(output.agentName()), output.content());
                     Message agentMsg = new Message(Message.Role.AGENT, output.agentName(), output.content());
                     agentMsg.setRoundNumber(roundCount);
                     agentMsg.setTrackId(output.trackId());
@@ -498,6 +740,11 @@ public class RouterService {
         // D8: 回合完成推送（前端 setRunning(false) + "第N轮完成"）
         if (sse != null) sse.broadcastRoundComplete(roundCount);
 
+        // P-0810-09: 场景目标进展判定（异步，不阻塞主流程；失败静默降级；仅一般模式有目标时触发）
+        if (sceneGoalService != null && hasSceneGoals() && isGeneralMode(mode)) {
+            submitGoalJudgment();
+        }
+
         return new RoundResult(status, agentOutputs, integration, trackResult.reasoning,
             execResult.metrics() != null ? execResult.metrics().toMap() : Map.of());
     }
@@ -513,6 +760,89 @@ public class RouterService {
         // D8: 自动对话结束推送（前端 "自动对话结束，共 N 轮"）
         if (sse != null) sse.broadcastAutoComplete(results.size());
         return results;
+    }
+
+    /**
+     * P-0810-21-D：玩家发言候选话术生成（一般模式玩家回合可选项，任务 D1）。
+     *
+     * <p>LLM 路径：基于当前场景 + 最近对话 + 在场角色，生成 2-4 条第一人称候选
+     * （覆盖推进 / 询问 / 情感 / 行动等方向）；失败（无 key / 超时 / 解析失败）→
+     * 规则兜底通用候选，恒不抛（前端可选项永远可用）。
+     *
+     * @param count 请求条数（钳制到 2-4）
+     */
+    public List<String> suggestPlayerLines(int count) {
+        int n = Math.max(2, Math.min(4, count));
+        if (agents.isEmpty()) return List.of();
+        // LLM 路径（callJson 结构化输出 {"suggestions":[...]}）
+        try {
+            StringBuilder recent = new StringBuilder();
+            List<Message> msgs = getConversationMessages();
+            for (int i = Math.max(0, msgs.size() - 8); i < msgs.size(); i++) {
+                Message m = msgs.get(i);
+                recent.append("[").append(m.getName()).append("] ").append(m.getContent()).append("\n");
+            }
+            String prompt = "你是这款文字角色扮演游戏的玩家助手。当前场景："
+                + (sceneDescription == null || sceneDescription.isBlank() ? "（未设置）" : sceneDescription)
+                + "\n在场角色：" + String.join("、", agents.keySet())
+                + "\n最近对话：\n" + (recent.length() == 0 ? "（尚无对话）" : recent)
+                + "\n请以玩家视角，给出 " + n + " 条合适的发言候选（第一人称、简短口语、每条约 5-20 字，"
+                + "覆盖：推进剧情 / 询问信息 / 表达情感 / 采取行动 等不同方向）。"
+                + "只输出 JSON，格式 {\"suggestions\":[\"...\",\"...\"]}，不要输出其他任何文字。";
+            Map<String, Object> out = llmClient.callJson(prompt, 800);
+            Object raw = out != null ? out.get("suggestions") : null;
+            if (raw instanceof List<?> list && !list.isEmpty()) {
+                List<String> result = new ArrayList<>();
+                for (Object o : list) {
+                    String s = String.valueOf(o).trim();
+                    if (!s.isEmpty() && s.length() <= 80) result.add(s);
+                    if (result.size() >= n) break;
+                }
+                if (result.size() >= 2) return result;
+            }
+        } catch (Exception e) {
+            // 失败静默走规则兜底
+            log.warn("suggestPlayerLines LLM 失败，规则兜底: {}", e.getMessage());
+        }
+        return fallbackSuggestions(n);
+    }
+
+    /** 规则兜底候选（零 LLM 零成本；LLM 失败/无 key 时恒可用）。 */
+    private List<String> fallbackSuggestions(int n) {
+        List<String> base = new ArrayList<>();
+        String first = agents.keySet().stream().findFirst().orElse("");
+        if (!first.isEmpty()) {
+            base.add("询问" + first + "的想法");
+        } else {
+            base.add("继续刚才的话题");
+        }
+        base.add("聊聊我自己的事");
+        base.add("换个话题，看看大家怎么接");
+        base.add("观察一下周围的环境");
+        return base.subList(0, Math.min(n, base.size()));
+    }
+
+    /**
+     * P-0810-14：起局后自动触发第一轮（AI 开场白）。
+     * <ul>
+     *   <li><b>范围</b>：仅一般模式（free/protagonist/multi_track/director）——狼人杀/剧本杀各自有剧本流程，不触发；</li>
+     *   <li><b>异步</b>：CompletableFuture.runAsync 后台执行，不阻塞 init/startScene 响应；</li>
+     *   <li><b>幂等</b>：每会话仅触发一次（autoFirstRoundFired，initSession 重置）；</li>
+     *   <li><b>链路</b>：复用 {@link #runRound(String, String)} 全路径（userInput=null 纯 AI 开场）——
+     *       SSE 推 round_start → arbiter_task → agent_output（逐条）→ arbiter_integrate → round_complete；</li>
+     *   <li><b>并发</b>：runRound 为方法级同步，与 /api/send 串行互斥，开场轮不会与玩家发言交错。</li>
+     * </ul>
+     */
+    public synchronized void triggerAutoFirstRound() {
+        if (!isGeneralMode(mode) || autoFirstRoundFired) return;
+        autoFirstRoundFired = true;
+        CompletableFuture.runAsync(() -> {            try {
+                runRound(null, null);
+            } catch (Exception e) {
+                // 自动开场失败不抛给调用方（init/startScene 已返回）；下一轮玩家发言仍可正常驱动
+                log.warn("起局自动第一轮失败: session={} err={}", sessionId, e.getMessage());
+            }
+        });
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -687,6 +1017,8 @@ public class RouterService {
                 interruptManager.unregister(it.getId());
 
                 if (content != null && !content.isBlank()) {
+                    // P-0810-23-D2：AI 角色单次发言落盘前检测超长（中文字数 > 阈值 → 记录下一轮提醒）
+                    maybeRecordOverLengthReminder(agent, content);
                     // 即时入史：后发言者 buildAgentContext 立即可见
                     Message agentMsg = new Message(Message.Role.AGENT, task.agentName(), content);
                     agentMsg.setRoundNumber(roundCount);
@@ -817,6 +1149,35 @@ public class RouterService {
     /** C-2: 串行调度开关（roleplay.round.serial，默认 false）。测试/运行时切换用。 */
     public void setSerialRound(boolean serialRound) { this.serialRound = serialRound; }
     public boolean isSerialRound() { return serialRound; }
+
+    // ── P-0810-23-D2：AI 角色发言超长提醒（仅下一轮生效，玩家无感知） ────────
+
+    /** 设置提醒阈值（测试/运行时覆盖；<=0 关闭检测）。 */
+    public void setRemindThreshold(int remindThreshold) { this.remindThreshold = remindThreshold; }
+
+    public int getRemindThreshold() { return remindThreshold; }
+
+    /** 统计文本中的中文字符（CJK 统一表意文字，UnicodeScript.HAN）数。 */
+    static int countChineseChars(String text) {
+        if (text == null) return 0;
+        int n = 0;
+        for (int i = 0; i < text.length(); i++) {
+            if (Character.UnicodeScript.of(text.charAt(i)) == Character.UnicodeScript.HAN) n++;
+        }
+        return n;
+    }
+
+    /**
+     * D2：AI 角色单次发言（agent_output 落盘前）中文字符数超过阈值 →
+     * 记录待发提醒（下一轮该角色构建系统提示时注入，之后自动清除；不持续、不广播旁白、无前端 UI）。
+     */
+    private void maybeRecordOverLengthReminder(Agent agent, String content) {
+        if (agent == null || content == null || content.isBlank() || remindThreshold <= 0) return;
+        if (countChineseChars(content) > remindThreshold) {
+            agent.setPendingReminder("你上一轮发言超过 " + remindThreshold + " 字，本轮请精简输出");
+        }
+    }
+
     public void setProtagonist(String name) { this.protagonist = name; }
     public void setDirectorCharacter(String name) { this.directorCharacter = name; }
     public void setGoals(List<String> goals) { this.goals = goals; }

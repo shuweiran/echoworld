@@ -60,6 +60,10 @@ public class HistoryController {
      *
      * <p>Query params: limit / offset / character / round / player_name (player_name =
      * visibility filter for werewolf/rules mode, mirrors Python).
+     *
+     * <p>P-0810-21：新增 session_id 参数 —— 有 session_id 时读取该会话专属 router 实例
+     * （SessionRegistry）的真实消息（含 round_logs，结构与默认单例完全一致）；
+     * 未传 / 未知 session_id 回退默认单例（向后兼容，旧客户端行为逐字节不变）。
      */
     @GetMapping
     public ResponseEntity<Map<String, Object>> getHistory(
@@ -67,9 +71,12 @@ public class HistoryController {
             @RequestParam(defaultValue = "0") int offset,
             @RequestParam(defaultValue = "") String character,
             @RequestParam(defaultValue = "0") int round,
-            @RequestParam(defaultValue = "") String player_name) {
+            @RequestParam(defaultValue = "") String player_name,
+            @RequestParam(defaultValue = "") String session_id) {
+        // P-0810-21：session_id → 该会话实例（无/未知 → 默认单例，向后兼容）
+        RouterService target = sessions.get(session_id);
         List<Map<String, Object>> filtered = new ArrayList<>();
-        for (Message m : router.getConversationMessages()) {
+        for (Message m : target.getConversationMessages()) {
             Map<String, Object> d = m.toMap();
             if (!character.isEmpty() && !character.equals(d.get("name"))) continue;
             if (round > 0 && ((Number) d.getOrDefault("round_number", 0)).intValue() != round) continue;
@@ -85,7 +92,7 @@ public class HistoryController {
         return ResponseEntity.ok(Map.of(
             "messages", filtered.subList(from, to),
             "total", filtered.size(),
-            "round_logs", lastN(router.getConversationRoundLogs(), 20)
+            "round_logs", lastN(target.getConversationRoundLogs(), 20)
         ));
     }
 
@@ -194,6 +201,8 @@ public class HistoryController {
                 p.setVoice(String.valueOf(ch.getOrDefault("voice", "")));
                 p.setBackground(String.valueOf(ch.getOrDefault("background", "")));
             }
+            // P-0810-10：五层 persona 卡（导入卡优先，无则默认资源卡；已有 layer 不覆盖）
+            characterController.attachPersonaCard(p);
             agents.add(new Agent(p, "agent", llmClient));
         }
         return agents;

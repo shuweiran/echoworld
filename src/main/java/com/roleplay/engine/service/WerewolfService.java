@@ -1023,7 +1023,14 @@ public class WerewolfService {
         if (text.isEmpty()) return Map.of("error", "发言内容为空");
         g.pendingHumanEvents.offer(Map.of("player", player, "text", text));
         log.info("Werewolf game {} human {} spoke in day discussion: {}", sessionId, player, text);
-        return Map.of("ok", true, "player", player, "message", text);
+        // P-0810-17（B4）：Map.of（不可变）→ LinkedHashMap —— WerewolfController.discussionSay
+        // 对返回 map 再 put session_id，不可变 map 抛 UnsupportedOperationException → HTTP 500
+        // （P-0810-06 真机已复现）；改可变 map 一行修复（控制器侧另有防御性拷贝兜底）。
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("ok", true);
+        result.put("player", player);
+        result.put("message", text);
+        return result;
     }
 
     /**

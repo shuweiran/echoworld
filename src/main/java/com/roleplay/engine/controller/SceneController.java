@@ -4,6 +4,7 @@ import com.roleplay.engine.db.service.DatabaseService;
 import com.roleplay.engine.service.GeneratorService;
 import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.ScriptMapService;
+import com.roleplay.engine.service.SessionRegistry;
 import com.roleplay.engine.simulation.map.BspMapGenerator;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.annotation.PostConstruct;
@@ -32,25 +33,40 @@ public class SceneController {
     private final DatabaseService databaseService;
     /** P-0803-O：LLM 全量生成统一路径（仅依赖 LLMClient，无循环依赖；4 参旧构造为 null → 防御回落 BSP）。 */
     private final ScriptMapService mapService;
+    /** P-0810-16：会话注册表 —— startScene 起局走 SessionRegistry 独立实例（getOrCreate 注入 sceneGoalService），
+     *  修复目标双层缺口后端侧：startScene 响应 goals.enabled=true + 场景目标生成 + scene_target_update SSE 广播。
+     *  null=测试/旧构造（4/5 参）回退默认单例 router（P-0810-09 旧行为）。 */
+    private final SessionRegistry sessionRegistry;
 
     /** P-0803-O：4 参旧构造委托（mapService=null，LLM 主题请求防御回落 BSP 确定性；既有测试/调用点零破坏）。 */
     public SceneController(GeneratorService generator, RouterService router,
                            CharacterController characterController,
                            DatabaseService databaseService) {
-        this(generator, router, characterController, databaseService, null);
+        this(generator, router, characterController, databaseService, null, null);
     }
 
-    /** P-0803-O：5 参 @Autowired 构造 —— 注入 ScriptMapService（Spring bean，仅依赖 LLMClient，无环）。 */
-    @Autowired
+    /** P-0803-O：5 参旧构造委托（sessionRegistry=null → startScene 回退默认单例 router）。 */
     public SceneController(GeneratorService generator, RouterService router,
                            CharacterController characterController,
                            DatabaseService databaseService,
                            ScriptMapService mapService) {
+        this(generator, router, characterController, databaseService, mapService, null);
+    }
+
+    /** P-0803-O + P-0810-16：6 参 @Autowired 构造 —— 注入 ScriptMapService（仅依赖 LLMClient，无环）
+     *  + SessionRegistry（startScene 会话独立实例，createRouter 已注入 sceneGoalService，无环）。 */
+    @Autowired
+    public SceneController(GeneratorService generator, RouterService router,
+                           CharacterController characterController,
+                           DatabaseService databaseService,
+                           ScriptMapService mapService,
+                           SessionRegistry sessionRegistry) {
         this.generator = generator;
         this.router = router;
         this.characterController = characterController;
         this.databaseService = databaseService;
         this.mapService = mapService;
+        this.sessionRegistry = sessionRegistry;
     }
 
     @PostConstruct
@@ -92,6 +108,8 @@ public class SceneController {
         Object dm = body.get("default_map");
         // 空串 = 清除（不落库不暴露）；null = 无地图
         scene.put("default_map", (dm instanceof String s && s.isBlank()) ? null : dm);
+        // P-0810-09：场景目标集（结构化 JSON；null=无目标，旧场景零破坏）
+        scene.put("goals", body.get("goals"));
         // P-0804-G：default_map 统一为对象（对齐 update 端点与 DB 加载行为，前端直接消费）
         if (scene.get("default_map") instanceof String s2 && !s2.isBlank()) {
             try {
@@ -207,6 +225,8 @@ public class SceneController {
             } else {
                 p.setPersonaDesc(name + "，一个角色");
             }
+            // P-0810-10：五层 persona 卡（导入卡优先，无则默认资源卡；已有 layer 不覆盖）
+            characterController.attachPersonaCard(p);
             personas.add(p);
         }
         if (personas.isEmpty()) {
@@ -222,16 +242,79 @@ public class SceneController {
                 break;
             }
         }
-        router.initSession(sessionId, personas, sceneDesc, "free", "", "");
-        Map<String, Object> result = new LinkedHashMap<>(router.getState());
+        // P-0810-25：玩家角色保护 —— 读取 body/query 的 me 字段决定 mode 与 protagonist（P-0810-24 前端
+        // GameBridge 已正确传参：api.startScene(script.title, agents, playerName, charDetails)，playerName =
+        // withPlayer && playerRole ? playerRole.name : undefined）。body 的 me 优先，空则回退 query 参数
+        // （双保险，旧客户端仅 query 传 me 亦生效）：
+        //   me 非空 → mode=protagonist + protagonist=me —— AgentExecutor.computePriority 对
+        //   protagonist/"me" 返回 PLAYER 且不生成 AI 发言，玩家角色不再被 LLM 自动接管（对比 GalLivePanel
+        //   快速起局走 /api/init 正确传 mode/protagonist 无此问题；旧实现硬编码 mode="free" 且 protagonist
+        //   传空，玩家角色被当 AI 处理——日志实锤 Session initialized with 4 agents, mode=free）；
+        //   me 为空 → mode=director（导演模式：无玩家角色，AI 角色们自己对话，语义与 P-0810-24 前端一致）。
+        String playerName = "";
+        if (body != null && body.get("me") != null) {
+            playerName = str(body.get("me")).trim();
+        }
+        if (playerName.isEmpty() && me != null && !me.isBlank()) {
+            playerName = me.trim();
+        }
+        String mode = playerName.isEmpty() ? "director" : "protagonist";
+        String protagonist = mode.equals("protagonist") ? playerName : "";
+        // P-0810-16：startScene 会话走 SessionRegistry 独立实例（createRouter 已注入 sceneGoalService）——
+        // 修复 P-0810-12 走查 FAIL「goals.enabled=false」根因（原走默认单例 router，sceneGoalService 恒 null
+        // → ensureSceneGoals 直接 return）；与 /api/init（P-0810-09）同构：独立实例出目标 + 默认单例镜像
+        // 向后兼容（旧客户端不传 session_id 时 /api/state、/api/send 仍走默认会话）。
+        RouterService sessionRouter = (sessionRegistry != null) ? sessionRegistry.getOrCreate(sessionId) : router;
+        sessionRouter.initSession(sessionId, personas, sceneDesc, mode, protagonist, "");
+        // P-0810-09：一般模式 init 时确保场景目标集（场景无目标 → LLM 生成，失败规则兜底）
+        sessionRouter.ensureSceneGoals(id, sceneDesc, null);
+        // P-0810-14：起局后自动触发第一轮（AI 开场白）—— 一般模式生效，异步不阻塞 start 响应
+        sessionRouter.triggerAutoFirstRound();
+        // 向后兼容：默认单例同步初始化（与 SessionController.initialize 同款镜像；不触发自动轮防双开）
+        // P-0810-20：sessionRegistry==null 时 sessionRouter 即默认单例 router —— 跳过镜像 init 防双调
+        // （修复 P-0810-17 全量测试唯一失败：P-0810-16 双调 initSession × P-0810-14 verify(times(1)) 冲突；
+        //   P-0810-16 语义保持：registry 存在时独立实例出目标 + 默认单例镜像向后兼容，逐字节不变）
+        if (sessionRouter != router) {
+            router.initSession(sessionId, personas, sceneDesc, mode, protagonist, "");
+        }
+        Map<String, Object> result = new LinkedHashMap<>(sessionRouter.getState());
         result.put("session_id", sessionId);
-        result.put("mode", "free");
+        // P-0810-25：mode 同步实际值（旧实现硬编码 "free"，前端按 mode 判断主角/导演语义）
+        result.put("mode", mode);
+        // P-0810-25：protagonist 回传（与 POST /api/init P-0810-21 同源同值；非主角模式空串，附加键零破坏）
+        result.put("protagonist", protagonist);
+        // P-0810-09：目标列表随 init 返回（玩家目标明文，AI 目标 ?? 占位+数量）
+        result.put("goals", sessionRouter.getSceneGoalsView());
         return ResponseEntity.ok(result);
     }
 
     @PostMapping("/generate")
-    public ResponseEntity<Map<String, String>> generate(@RequestBody Map<String, String> body) {
-        return ResponseEntity.ok(generator.generateScene(body.getOrDefault("keywords", ""), ""));
+    public ResponseEntity<Map<String, Object>> generate(@RequestBody Map<String, String> body) {
+        Map<String, Object> result = generator.generateScene(body.getOrDefault("keywords", ""), "");
+        // P-0811-E（追加）：配套角色自动落库——每个角色经 CharacterController.persistGeneratedRole
+        // （撞名自动加序号后缀重试，避免 409 中断整批）；落库失败跳过但保留在响应（saved=false）。
+        // 响应 roles 为表层形状（{saved,name,appearance?,summary?,layers?}），绝不回五层内容（P-0810-10 硬性）。
+        List<Map<String, Object>> persistedRoles = new ArrayList<>();
+        if (result.get("roles") instanceof List<?> rawRoles) {
+            for (Object o : rawRoles) {
+                if (!(o instanceof Map<?, ?> rm)) continue;
+                @SuppressWarnings("unchecked")
+                Map<String, Object> role = (Map<String, Object>) rm;
+                Map<String, Object> saved = characterController.persistGeneratedRole(role);
+                if (saved != null) {
+                    persistedRoles.add(saved);
+                } else {
+                    Map<String, Object> keep = new LinkedHashMap<>();
+                    keep.put("saved", false);
+                    keep.put("name", str(role.get("name"), "场景角色"));
+                    if (role.get("appearance") != null) keep.put("appearance", role.get("appearance"));
+                    if (role.get("summary") != null) keep.put("summary", role.get("summary"));
+                    persistedRoles.add(keep);
+                }
+            }
+        }
+        result.put("roles", persistedRoles);
+        return ResponseEntity.ok(result);
     }
 
     /** Persist one scene map to H2 (create/update path). */
@@ -247,7 +330,8 @@ public class SceneController {
                 str(scene.get("description")), agents, str(scene.get("keywords")),
                 str(scene.get("category"), "general"),
                 toJson(scene.get("default_roles")),
-                toJson(scene.get("default_map")));
+                toJson(scene.get("default_map")),
+                toJson(scene.get("goals")));
     }
 
     /** P-0803-H：default_roles/default_map 序列化 —— 已是字符串直用；对象转 JSON；null 传 null（不覆盖旧值） */

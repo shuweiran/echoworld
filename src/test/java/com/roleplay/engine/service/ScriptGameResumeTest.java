@@ -328,8 +328,11 @@ class ScriptGameResumeTest {
         ScriptController ctl = new ScriptController(svc, mock(RouterService.class), mock(SimulationService.class));
 
         // init 带 room_code → 响应含 room_code + session_id
+        // （P-0810-17：controller 默认 outline_only=true 只出概略；本用例需完整局验证
+        // 搜证/阶段，显式 outline_only=false 走既有同步完整生成路径）
         ResponseEntity<Map<String, Object>> initResp = ctl.init(new LinkedHashMap<>(Map.of(
-            "players", List.of("Alice", "Bob", "Carol"), "theme", "庄园", "room_code", "ABC123")));
+            "players", List.of("Alice", "Bob", "Carol"), "theme", "庄园", "room_code", "ABC123",
+            "outline_only", false)));
         String sessionId = (String) initResp.getBody().get("session_id");
         assertEquals("ABC123", initResp.getBody().get("room_code"), "init 响应回显房间码");
         assertNotNull(sessionId);
@@ -361,8 +364,8 @@ class ScriptGameResumeTest {
         ResponseEntity<Map<String, Object>> legacySearch = ctl.search(Map.of("player", "Alice", "location", "书房"));
         assertEquals(200, legacySearch.getStatusCode().value(), "无 key 兼容放行");
 
-        // DM keys 端点：返回全员令牌一览
-        Map<String, Object> keysResp = ctl.getKeys(sessionId).getBody();
+        // DM keys 端点：返回全员令牌一览（P-0810-17 B3：新增可选 player_key 参数，缺省保持旧行为）
+        Map<String, Object> keysResp = ctl.getKeys(sessionId, "").getBody();
         @SuppressWarnings("unchecked")
         Map<String, String> keys = (Map<String, String>) keysResp.get("player_keys");
         assertEquals(3, keys.size(), "DM 面板可见全员令牌");

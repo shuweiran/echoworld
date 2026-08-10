@@ -2,6 +2,7 @@ package com.roleplay.engine.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.roleplay.engine.broadcast.SseBroadcaster;
+import com.roleplay.engine.debug.TraceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -109,6 +110,9 @@ public class SSEController implements SseBroadcaster {
      * {@code data} is serialized to a JSON string (Jackson handles escaping).
      */
     public void broadcast(String eventType, Object data) {
+        // P-0809-B（API 逻辑链追踪）：SSE 事件打点——关联到当前请求链路（同一请求线程内
+        // 触发的广播可关联；后台线程触发时 ThreadLocal 为空，自动跳过，属已知限制）
+        TraceContext.recordSse(eventType, null);
         String json = serialize(eventType, data);
         if (json == null) return;
         for (SseEmitter emitter : emitters) {
@@ -125,6 +129,8 @@ public class SSEController implements SseBroadcaster {
             broadcast(eventType, data);
             return;
         }
+        // P-0809-B（API 逻辑链追踪）：定向广播同样打点（会话定向分支不经 broadcast()）
+        TraceContext.recordSse(eventType, sessionId);
         String json = serialize(eventType, data);
         if (json == null) return;
         boolean delivered = false;
@@ -310,6 +316,29 @@ public class SSEController implements SseBroadcaster {
         if (data != null) payload.putAll(data);
         payload.put("session_id", sessionId == null ? "" : sessionId);
         broadcastToSession(sessionId, "script_private", payload);
+    }
+
+    /**
+     * P-0810-17（B1）：script_speech → {session_id, speaker, message, round, human?}
+     *  剧本杀讨论发言逐轮实时回显（会话定向；与 werewolf_speech 同形态，前端可直接复用消费逻辑）。
+     */
+    public void broadcastScriptSpeech(String sessionId, Map<String, Object> data) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (data != null) payload.putAll(data);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcastToSession(sessionId, "script_speech", payload);
+    }
+
+    /**
+     * P-0810-17（阶段 1）：script_ready → {session_id, ready, phase, name, map_ready, generated?}
+     *  完整剧本（+地图）后台异步生成完成通知（决策点 6：新增结构化事件承载「剧本就绪」，
+     *  与 script_phase/script_status 并存——script_phase 仍推阶段切换、script_status 仍推全量状态）。
+     */
+    public void broadcastScriptReady(String sessionId, Map<String, Object> data) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (data != null) payload.putAll(data);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcastToSession(sessionId, "script_ready", payload);
     }
 
     public int getConnectionCount() {

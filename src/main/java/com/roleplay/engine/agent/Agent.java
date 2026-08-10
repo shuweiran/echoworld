@@ -29,6 +29,8 @@ public class Agent {
     private final String role;
     private final LLMClient llmClient;
     private volatile boolean isGenerating = false;
+    /** P-0810-09：当前角色的隐藏目标（场景目标机制）—— buildContext/生成路径注入系统提示，不暴露给玩家。 */
+    private volatile String hiddenGoal = null;
 
     public Agent(Persona persona, String role, LLMClient llmClient) {
         this.persona = persona;
@@ -46,6 +48,49 @@ public class Agent {
 
     public boolean isGenerating() {
         return isGenerating;
+    }
+
+    // ── P-0810-09：隐藏目标（场景目标机制） ───────────────────
+
+    /** 设置当前角色隐藏目标（RouterService.setSceneGoals 时注入）。 */
+    public void setHiddenGoal(String hiddenGoal) {
+        this.hiddenGoal = hiddenGoal;
+    }
+
+    public String getHiddenGoal() {
+        return hiddenGoal;
+    }
+
+    /** 系统提示追加隐藏目标块（行为引导，禁止暴露给玩家）。 */
+    private String appendHiddenGoal(String systemContent) {
+        if (hiddenGoal == null || hiddenGoal.isBlank()) return systemContent;
+        return systemContent + "\n\n【隐藏目标】\n你的目标：" + hiddenGoal
+                + "\n（不要主动暴露给玩家，用行为和言语自然引导剧情推进）";
+    }
+
+    // ── P-0810-23-D2：发言超长提醒（仅下一轮生效，玩家无感知） ──────────────
+
+    /** 待发提醒：AI 角色单次发言超长时由 RouterService 记录，下一轮构建系统提示时注入并清除。 */
+    private volatile String pendingReminder = null;
+
+    /** 设置待发提醒（RouterService.maybeRecordOverLengthReminder 检测到超长时调用）。 */
+    public void setPendingReminder(String reminder) {
+        this.pendingReminder = reminder;
+    }
+
+    public String getPendingReminder() {
+        return pendingReminder;
+    }
+
+    /**
+     * 系统提示追加提醒块并消费：提醒仅注入下一轮一次，注入即清除（不持续、不广播旁白、无前端 UI）。
+     * 无待发提醒时原样返回，零行为变化。
+     */
+    private String appendReminder(String systemContent) {
+        String r = pendingReminder;
+        if (r == null || r.isBlank()) return systemContent;
+        pendingReminder = null; // 消费后清除：仅下一轮生效
+        return systemContent + "\n\n【系统提醒】" + r;
     }
 
     // ── Core generation (blocking + non-blocking variants) ─────
@@ -69,7 +114,7 @@ public class Agent {
         List<Message> messages = new ArrayList<>();
 
         // 1. System prompt from persona
-        String systemContent = persona.buildSystemPrompt();
+        String systemContent = appendReminder(appendHiddenGoal(persona.buildSystemPrompt()));
         if (sceneDescription != null && !sceneDescription.isEmpty()) {
             systemContent += "\n\n【当前场景】\n" + sceneDescription;
         }
@@ -189,7 +234,7 @@ public class Agent {
         try {
             if (token != null) token.checkpoint();
             List<Message> messages = List.of(
-                new Message(Message.Role.SYSTEM, "system", persona.buildSystemPrompt()),
+                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(persona.buildSystemPrompt()))),
                 new Message(Message.Role.USER, "user", context)
             );
             completed = token != null
@@ -217,7 +262,7 @@ public class Agent {
         try {
             if (token != null) token.checkpoint();
             List<Message> messages = List.of(
-                new Message(Message.Role.SYSTEM, "system", persona.buildSystemPrompt()),
+                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(persona.buildSystemPrompt()))),
                 new Message(Message.Role.USER, "user", context)
             );
             completed = llmClient.callStream(messages, token, onDelta);

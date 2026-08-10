@@ -68,7 +68,7 @@ class ScriptMapSwitchPersistenceTest {
 
         String sid = SESSION + "-" + System.nanoTime();
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
-        // map_1（BSP 24×16）：Alice 搜证 客厅
+        // map_1（BSP：测试 yml 默认 24×16 经 P-0810-21 下限 clamp → 32×20）：Alice 搜证 客厅
         svc.search(sid, "Alice", "客厅");
         // map_2（BSP 64×64，显式 map_id + 尺寸）：Bob 搜证 花园
         svc.generateMap(sid, "地下室", 0, true, 64, 64, "map_2");
@@ -84,7 +84,9 @@ class ScriptMapSwitchPersistenceTest {
         // 当前图恢复为 map_1（快照时的当前图），注册表两图完好
         assertEquals("map_1", restored.get("current_map_id"));
         assertEquals(Set.of("map_1", "map_2"), new HashSet<>(fresh.getRegisteredMapIds(sid)));
-        assertEquals(24, fresh.getGame(sid).mapWidth);
+        // P-0810-21（P0-3，B 方案）：测试 yml 同步 min 32×20，map_1 由 24×16 clamp 至 32×20
+        assertEquals(32, fresh.getGame(sid).mapWidth);
+        assertEquals(20, fresh.getGame(sid).mapHeight);
         // 当前图足迹恢复（map_1 = 客厅；花园留在 map_2）
         assertTrue(((List<?>) restored.get("searched_locations")).contains("客厅"));
         assertFalse(((List<?>) restored.get("searched_locations")).contains("花园"));

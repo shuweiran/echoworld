@@ -86,8 +86,14 @@ public class AppConfig {
         private String apiKey = "";
         private String apiBase = "https://api.deepseek.com";
         private String model = "deepseek-v4-flash";
-        private int maxTokens = 4096;
-        private double temperature = 0.9;
+        /** 默认 max_tokens 兑底（roleplay.llm.max-tokens）：callJson 传 null 时使用；各调用点显式传值优先（概略 1200 / 完整剧本 4000 / 地图 8000）。 */
+        private int maxTokens = 4000;
+        /** P-0810-21-D：对话主链路 max_tokens（roleplay.llm.dialogue-max-tokens）：callSync 无参/带 token 入口与 callStream 使用（原硬编码 300 偏短，AI 发言常截断）；显式传值调用点优先。 */
+        private int dialogueMaxTokens = 700;
+        /** 默认 temperature（roleplay.llm.temperature）：callJson 等结构化生成路径使用；对话主链路 callSync 显式 0.7 不受影响。 */
+        private double temperature = 0.1;
+        /** 生成确定性 seed（roleplay.llm.seed，DeepSeek 兼容 OpenAI seed）：非空时 buildChatRequest 携带 seed 字段；默认 null=不启用（行为不变）。 */
+        private Integer seed = null;
 
         public String getApiKey() { return apiKey; }
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
@@ -97,8 +103,12 @@ public class AppConfig {
         public void setModel(String model) { this.model = model; }
         public int getMaxTokens() { return maxTokens; }
         public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
+        public int getDialogueMaxTokens() { return dialogueMaxTokens; }
+        public void setDialogueMaxTokens(int dialogueMaxTokens) { this.dialogueMaxTokens = dialogueMaxTokens; }
         public double getTemperature() { return temperature; }
         public void setTemperature(double temperature) { this.temperature = temperature; }
+        public Integer getSeed() { return seed; }
+        public void setSeed(Integer seed) { this.seed = seed; }
     }
 
     public static class MemoryConfig {

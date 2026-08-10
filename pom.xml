@@ -84,6 +84,13 @@
             <artifactId>slf4j-api</artifactId>
         </dependency>
 
+        <!-- P-0810-04（RMBG-1.4 立绘自动抠背景）：onnxruntime CPU 推理（模型文件外置 models/rmbg/，不打包进 jar） -->
+        <dependency>
+            <groupId>com.microsoft.onnxruntime</groupId>
+            <artifactId>onnxruntime</artifactId>
+            <version>1.20.0</version>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

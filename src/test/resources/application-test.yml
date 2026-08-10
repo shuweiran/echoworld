@@ -21,8 +21,14 @@ roleplay:
   llm:
     api-base: "http://localhost:9999/mock-llm"
     model: "test-mock"
-    max-tokens: 256
-    temperature: 0.0
+    # P-0810-19：与主 yml 同步「默认值」语义（显式传值优先）；测试环境 LLM 为 mock，值不影响断言
+    max-tokens: 4000
+    # P-0810-21-D：与主 yml 同步（对话主链路 callSync/callStream max_tokens，默认 700；测试显式覆盖）
+    dialogue-max-tokens: 700
+    temperature: 0.1
+    seed: null
+    # P-0810-23-D2：与主 yml 同步（RouterService @Value 默认 150，测试经 setRemindThreshold 覆盖）
+    remind-threshold: 150
   monitor:
     # D26: 与主 yml 同步——fallback-model/timeout-seconds 属 roleplay.monitor.*（LLMClient 读取处）
     fallback-model: "test-mock"
@@ -40,6 +46,9 @@ roleplay:
     default: "free"
     language: "zh"
   game:
+    # P-0811-D：五层 persona 卡外部持久化目录（与主 yml 同步键；测试指向 target/ 构建目录，
+    # 避免污染 ./data/persona；持久化专项用例经 CharacterController.setPersonaCardsDir 指 @TempDir 临时目录）
+    persona-cards-dir: "target/persona-test-cards"
     ap:
       # C2 行动点：测试环境与主 yml 同步（ScriptGameService @Value 默认 3，显式声明便于覆盖）
       base: 3
@@ -47,10 +56,13 @@ roleplay:
       # C4 主持人面板 key：测试默认放开（与审批门同模式）；DM key 越权用例在 controller 层反射注入验证
       key: ""
     map:
-      # P-0803-J 剧本杀地图默认尺寸（与主 yml 同步）：默认 24×16 保持既有行为；
+      # P-0803-J 剧本杀地图默认尺寸（与主 yml 同步）：默认 24×16（P-0810-21 P0-3 下限 clamp 后实际生效 32×20）；
       # 大图（超 LLM token 预算 40×24）直接走 BSP 确定性生成（ScriptMapService 预算闸）
       default-width: 24
       default-height: 16
+      # 尺寸下限（P-0810-21 P0-3，B 方案：测试 yml 同步 min 值，断言同步更新）
+      min-width: 32
+      min-height: 20
       # BSP 降级种子（与主 yml 同步默认值；测试走显式 seed 时不受影响）
       bsp-seed: 20260801
     discussion:
@@ -93,5 +105,21 @@ roleplay:
     fallback-to-global: true
     # 剧本杀阶段切换 SYSTEM 广播总开关（默认 true=启用）
     script-phase-broadcast: true
+  debug:
+    # P-0809-B（API 逻辑链追踪）：与主 yml 同步——默认关闭零打点；测试经 TraceService.setEnabled 显式开启
+    trace-enabled: false
+    trace-size: 1000
+  ai-image:
+    # P-0810-01（本地 ComfyUI + Pony V6 XL）：与主 yml 同步键；测试直构服务不经 Spring，@Value/@ConfigurationProperties 默认值生效
+    comfyui-base-url: "http://127.0.0.1:1"
+    output-dir: "src/main/resources/static/ai-images"
+    pool-size: 1
+    timeout-seconds: 10
+    poll-interval-ms: 50
+    lora-name: "pixel_art_sakuemonq_pony.safetensors"
+    rmbg-model: "D:\\roleplay-java\\models\\rmbg\\rmbg-1.4.onnx"
+    rmbg-enabled: true
+    img2img-denoise: 0.5
+    characters: []
   frontend:
     dev-mode: false

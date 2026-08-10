@@ -56,6 +56,8 @@ public class SessionRegistry {
     private final SSEController sse;
     /** P-0802-P2：玩家身份解析器（Phase 2 判定链路解析式，透传给会话 router 实例）。 */
     private final PlayerIdentityService identityService;
+    /** P-0810-09：场景目标服务（一般模式目标生成/判定，透传给会话 router 实例；null=未启用）。 */
+    private final SceneGoalService sceneGoalService;
 
     public SessionRegistry(@Lazy RouterService defaultRouter, ArbiterService arbiter,
                            AgentExecutor executor, Compressor compressor, Monitor monitor,
@@ -63,7 +65,8 @@ public class SessionRegistry {
                            LLMClient llmClient, @Lazy HistoryController historyController,
                            LorebookService lorebookService, InterruptManager interruptManager,
                            WorldEventBus eventBus, SSEController sse,
-                           PlayerIdentityService playerIdentityService) {
+                           PlayerIdentityService playerIdentityService,
+                           SceneGoalService sceneGoalService) {
         this.defaultRouter = defaultRouter;
         this.arbiter = arbiter;
         this.executor = executor;
@@ -78,6 +81,7 @@ public class SessionRegistry {
         this.eventBus = eventBus;
         this.sse = sse;
         this.identityService = playerIdentityService;
+        this.sceneGoalService = sceneGoalService;
     }
 
     /**
@@ -106,6 +110,8 @@ public class SessionRegistry {
         RouterService r = new RouterService(arbiter, executor, new MemoryStore(), compressor,
             monitor, generator, trackRequestService, llmClient, historyController,
             lorebookService, interruptManager, eventBus, sse, identityService);
+        // P-0810-09：注入场景目标服务（一般模式 init 生成 / 每轮判定）
+        r.setSceneGoalService(sceneGoalService);
         log.info("D11: created isolated RouterService for session {}", sessionId);
         return r;
     }

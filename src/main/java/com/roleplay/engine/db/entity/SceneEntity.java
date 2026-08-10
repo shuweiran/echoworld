@@ -35,6 +35,10 @@ public class SceneEntity {
     @Column(length = 40000)
     private String defaultMap;
 
+    /** P-0810-09：场景目标集（JSON 字符串：{global_goal, role_goals, player_goal}，可空=旧数据无目标） */
+    @Column(length = 8000)
+    private String goals;
+
     private LocalDateTime createdAt;
 
     public SceneEntity() {}
@@ -72,6 +76,9 @@ public class SceneEntity {
 
     public String getDefaultMap() { return defaultMap; }
     public void setDefaultMap(String defaultMap) { this.defaultMap = defaultMap; }
+
+    public String getGoals() { return goals; }
+    public void setGoals(String goals) { this.goals = goals; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

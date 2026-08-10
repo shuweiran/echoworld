@@ -18,6 +18,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -48,7 +49,8 @@ class ScriptRenameTest {
 
     private ScriptController newController(CharacterRepository repo) {
         ScriptGameService svc = mock(ScriptGameService.class);
-        when(svc.initGame(anyString(), anyString(), anyList())).thenReturn(new LinkedHashMap<>());
+        // P-0810-17：controller 现调五参 initGame（outlineOnly 分流）——stub 对齐新签名
+        when(svc.initGame(anyString(), anyString(), anyList(), anyString(), anyBoolean())).thenReturn(new LinkedHashMap<>());
         when(svc.getGame(anyString())).thenReturn(null); // router.setScriptGame null 守卫
         RouterService router = mock(RouterService.class);
         SimulationService sim = mock(SimulationService.class);

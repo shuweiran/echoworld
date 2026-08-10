@@ -77,6 +77,26 @@ public class RoundController {
         return ResponseEntity.ok(Map.of("status", result));
     }
 
+    /**
+     * P-0810-21-D：玩家发言候选话术（一般模式玩家回合可选项）——
+     * 前端在 AI 回合结束后拉取 2-4 条候选，点击即发言；LLM 失败恒返回规则兜底候选。
+     * <pre>{@code
+     * POST /api/round/suggest
+     * {"session_id": "xxx", "count": 3} → {"session_id": "xxx", "suggestions": ["...", "...", "..."]}
+     * }</pre>
+     */
+    @PostMapping("/suggest")
+    public ResponseEntity<Map<String, Object>> suggest(@RequestBody Map<String, Object> body) {
+        int count = ((Number) body.getOrDefault("count", 3)).intValue();
+        String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
+        RouterService target = sessions.get(sessionId);
+        List<String> suggestions = target.suggestPlayerLines(count);
+        return ResponseEntity.ok(Map.of(
+            "session_id", sessionId,
+            "suggestions", suggestions
+        ));
+    }
+
     @GetMapping("/status")
     public ResponseEntity<Map<String, Object>> getRoundStatus(@RequestParam(required = false) String session_id) {
         RouterService target = sessions.get(session_id);

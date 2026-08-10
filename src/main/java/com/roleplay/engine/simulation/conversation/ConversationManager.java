@@ -58,11 +58,24 @@ public class ConversationManager {
      *  split 模式下抑制方案A 回调，避免与 SpeechStrategy 内联广播重复推送。 */
     private AnnouncementService announcementService;
 
+    /**
+     * P-0810-17（B1）：剧本杀讨论发言逐轮实时回调（讨论组专用，与 speechBroadcastListener 分离——
+     * 后者是 2D 世界 PUBLIC_SPEAKING 演讲广播回调，语义不同不混用）。
+     * 在 {@link #runScriptDiscussionRounds} 每轮结束后对新增发言逐条回调，订阅方
+     * （ScriptGameService）转 script_speech SSE 实时回显；null = 不回调（旧行为逐字节不变）。
+     */
+    private java.util.function.Consumer<SpeechTurn> scriptSpeechListener;
+
     /** 一次演讲产出（供广播管线使用：谁、说了什么、所属群组）。 */
     public record SpeechTurn(String groupId, String speaker, String text) {}
 
     public void setSpeechBroadcastListener(java.util.function.Consumer<SpeechTurn> listener) {
         this.speechBroadcastListener = listener;
+    }
+
+    /** P-0810-17（B1）：设置剧本杀讨论发言逐轮回调（见 {@link #scriptSpeechListener}）。 */
+    public void setScriptSpeechListener(java.util.function.Consumer<SpeechTurn> listener) {
+        this.scriptSpeechListener = listener;
     }
 
     public ConversationManager() {}
@@ -603,10 +616,29 @@ public class ConversationManager {
 
         Map<String, String> lastContexts = new LinkedHashMap<>();
         int rounds = Math.max(1, maxRounds);
+        // P-0810-17（B1）：讨论发言逐轮实时回调——记录已回调的发言条数，每轮结束后对新增发言
+        // 逐条回调 scriptSpeechListener（ScriptGameService 订阅后转 script_speech SSE 实时回显，
+        // 不再等全部轮次结束后才落盘）。未注册监听器（null）时循环零开销、行为逐字节不变。
+        int emittedTurns = 0;
         for (int r = 0; r < rounds && group.isActive() && strategy.shouldContinue(group) && !stopped; r++) {
             try {
                 RoundGateDecision gate = roundGate == null ? null : roundGate.apply(group, r);
                 executeRound(group, strategy, lastContexts, gate);
+                if (scriptSpeechListener != null) {
+                    List<Map<String, String>> history = group.getMessageHistory();
+                    for (int i = emittedTurns; i < history.size(); i++) {
+                        Map<String, String> turn = history.get(i);
+                        String speaker = turn == null ? null : turn.get("speaker");
+                        String msg = turn == null ? null : turn.get("message");
+                        if (speaker == null || msg == null || msg.isBlank()) continue;
+                        try {
+                            scriptSpeechListener.accept(new SpeechTurn(group.getGroupId(), speaker, msg));
+                        } catch (Exception e) {
+                            log.warn("Script speech listener failed for {}: {}", speaker, e.getMessage());
+                        }
+                    }
+                    emittedTurns = history.size();
+                }
             } catch (Exception e) {
                 log.warn("Script discussion group {} round {} failed: {}",
                         group.getGroupId(), r + 1, e.getMessage());

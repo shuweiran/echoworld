@@ -187,6 +187,25 @@ public class ScriptGameService {
     @Value("${roleplay.game.map.default-height:24}")
     private int mapDefaultHeight = 24;
 
+    /** P-0810-21（P0-3，尺寸下限）：剧本杀地图最小宽度（roleplay.game.map.min-width，默认 32）。 */
+    @Value("${roleplay.game.map.min-width:32}")
+    private int mapMinWidth = 32;
+
+    /** P-0810-21（P0-3，尺寸下限）：剧本杀地图最小高度（roleplay.game.map.min-height，默认 20）。 */
+    @Value("${roleplay.game.map.min-height:20}")
+    private int mapMinHeight = 20;
+
+    /** P-0810-21（P0-3）：尺寸解析后 clamp 到下限（显式传参 / 对局已定尺寸 / 配置默认统一生效；低于下限提升并 log warning）。 */
+    private int[] clampToMin(int effW, int effH, String logTag) {
+        int cw = Math.max(effW, mapMinWidth);
+        int ch = Math.max(effH, mapMinHeight);
+        if (cw != effW || ch != effH) {
+            log.warn("Script game {} map size clamped to min {}×{} (requested {}×{})", logTag, cw, ch, effW, effH);
+        }
+        return new int[] { cw, ch };
+    }
+
+
     /** P-0803-K（多地图切换）：door 靠近校验容差（格）——玩家上报坐标距 door 中心曼哈顿距离
      *  ≤ radius + 容差 视为靠近（服务端不持有玩家权威位置，坐标由客户端上报，尽力校验；缺坐标跳过）。 */
     private static final int DOOR_PROXIMITY_SLACK = 2;
@@ -290,12 +309,25 @@ public class ScriptGameService {
         String theme = "";
         volatile boolean llmDegraded = false;
 
+        // P-0810-17（阶段 1，两阶段生成）：概略剧本（第一阶段产物：locations/roles 一句话人设/
+        // clues 标题/storyline/killer_hint）；完整剧本+地图由 POST /api/script/generate_full 异步补齐。
+        Map<String, Object> outline;
+        /** P-0810-17：完整剧本后台生成中标记（generate_full 异步期间 true；toMap.generating 暴露给前端 loading）。 */
+        volatile boolean generating = false;
+        /**
+         * P-0810-17（B1）：已实时回显的发言去重键（speaker|message）——discussionSay 立即广播与
+         * 讨论线程逐轮回调共用此集合，防止同一发言（人类在 discussionSay 广播 + 讨论组历史回放）重复推送。
+         */
+        final java.util.Set<String> speechEmitted = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
         // GAP-4b: 判定结果缓存（resolveVote 揭晓时写入，ENDED 落库/展示用）
         String murderer = "";
         boolean correctVerdict = false;
 
         // GAP-3: 讨论引擎产物 —— 发言记录 + 最后一轮各成员上下文（WEAK 隔离验证 A3-2）
-        final List<Map<String, String>> discussionTranscript = new ArrayList<>();
+        // P-0810-17（B5，D-034 登记项）：ArrayList → CopyOnWriteArrayList —— 讨论线程逐轮 append 与
+        // saveSnapshot 拷贝（地图生成/切图/轮询快照路径）并发存在极小概率 CME，改并发安全容器根治。
+        final List<Map<String, String>> discussionTranscript = new java.util.concurrent.CopyOnWriteArrayList<>();
         final Map<String, String> discussionContexts = new LinkedHashMap<>();
         /** 讨论组已建且轮次进行中（A3-1/A3-3 验收）。 */
         volatile boolean discussionActive = false;
@@ -372,6 +404,13 @@ public class ScriptGameService {
             // P1: 托管玩家列表 —— 退出/断线/投票超时无操作的玩家由 AI 代管（标记清楚，投票权作废），
             // 前端据此展示 🤖 托管标记与 quorum 在线人数感知
             m.put("trustees", new ArrayList<>(trustees));
+            // P-0810-17（阶段 1）：概略剧本（两阶段生成第一阶段产物；SETUP 中间态时展示给玩家，
+            // generate_full 完成后完整剧本生效，概略键保留供前端对照——附加键不破坏既有契约）
+            if (outline != null) {
+                m.put("outline", outline);
+            }
+            // P-0810-17：完整剧本后台生成中标记（前端 loading 依据；generate_full 异步期间 true）
+            m.put("generating", generating);
             m.put("locations", new ArrayList<>(locations));
             // 阶段 2: 对局地图（已生成时附加；契约 v1，前端 Phaser 渲染）
             if (mapData != null) {
@@ -532,7 +571,7 @@ public class ScriptGameService {
 
     /** Phase 1: Generate script and assign roles. */
     public Map<String, Object> initGame(String sessionId, String theme, List<String> playerNames) {
-        return initGame(sessionId, theme, playerNames, "full");
+        return initGame(sessionId, theme, playerNames, "full", false);
     }
 
     /**
@@ -544,6 +583,22 @@ public class ScriptGameService {
      * mode="full"（默认，真剧本杀）：维持既有行为（INVESTIGATION + 自动地图串联）。
      */
     public Map<String, Object> initGame(String sessionId, String theme, List<String> playerNames, String mode) {
+        return initGame(sessionId, theme, playerNames, mode, false);
+    }
+
+    /**
+     * P-0810-17（阶段 1，两阶段生成）：initGame 五参重载 —— outlineOnly 分流。
+     *
+     * <p>{@code outlineOnly=true}（概略先行，POST /api/script/init 默认）：只生成概略剧本
+     * （轻量 prompt，目标 &lt;10s，不再同步双 LLM 生成完整剧本+地图）→ {@code game.phase = Phase.SETUP}
+     * （枚举现成未用，天然“概略已生成、完整待生成”中间态）→ toMap 附加 {@code outline} 键；
+     * 完整剧本+地图由 {@link #generateFull}（POST /api/script/generate_full）后台异步补齐。
+     *
+     * <p>{@code outlineOnly=false}（缺省）：既有同步完整生成路径（完整剧本 + full 模式自动地图），
+     * 3/4 参旧重载委托本参（既有调用方/测试零变化）。
+     */
+    public Map<String, Object> initGame(String sessionId, String theme, List<String> playerNames,
+                                        String mode, boolean outlineOnly) {
         boolean chatMode = "chat".equalsIgnoreCase(mode);
         ScriptGame game = new ScriptGame();
         game.mode = chatMode ? "chat" : "full";
@@ -553,71 +608,39 @@ public class ScriptGameService {
         // P1: 剧本主题留档（restart 重开一局复用；随快照落库）
         game.theme = theme == null ? "" : theme;
 
+        // ══════════════ P-0810-17 两阶段生成第一阶段：概略先行（outlineOnly） ══════════════
+        if (outlineOnly) {
+            // 只生成概略（轻量 LLM 调用，快 <10s）：locations / roles（名字+一句话人设）/
+            // clues（标题+地点）/ storyline / killer_hint —— 完整剧本+地图由 generate_full 异步补齐。
+            Map<String, Object> outline = scriptService.generateOutline(theme, playerNames);
+            game.outline = outline;
+            game.name = outlineName(outline, theme);
+            game.background = outlineStoryline(outline);
+            game.phase = Phase.SETUP;   // 中间态：概略已生成、完整剧本待生成
+            game.round = 1;
+            game.phaseStartedAt = System.currentTimeMillis();
+            game.phaseTimeoutMs = this.phaseTimeoutMs;
+            games.put(sessionId, game);
+
+            // C3: 概略态也发放 roleKey（重连/身份认证概略期可用；generate_full 补齐完整剧本时保留）
+            for (String player : game.players) {
+                game.playerKeys.put(player, UUID.randomUUID().toString());
+            }
+
+            // 概略态快照（outline 随快照落库，重启不丢；scriptSchema 为空 → persistScript 跳过）
+            saveSnapshot(game);
+            broadcastPhase(game, "setup");
+            broadcastStatus(game);
+            log.info("Script game {} outline ready (SETUP): theme='{}', {} locations, {} roles, {} clues",
+                    sessionId, game.theme,
+                    outlineLocations(outline).size(), outlineRoles(outline).size(), outlineClues(outline).size());
+            return game.toMap(playerNames.isEmpty() ? "" : playerNames.get(0));
+        }
+
+        // ══════════════ 完整生成路径（outlineOnly=false，既有行为） ══════════════
         // C1: 统一生成路径 —— 委托 ScriptService.generateScriptChecked（Schema v1 输出，宽容解析旧/新格式）
-        // P1（任务 3）：checked 变体额外返回是否走了 defaultScript 兜底（无 LLM key / LLM 失败）→
-        // 注入 gameState.llmDegraded，前端 ScriptStatePanel 显示「离线模板模式」提示条
         ScriptService.ScriptGeneration generation = scriptService.generateScriptChecked(theme, playerNames);
-        Map<String, Object> script = generation.schema();
-        game.scriptSchema = script;
-        game.llmDegraded = generation.degraded();
-
-        game.name = ScriptSchemaV1.title(script);
-        game.background = ScriptSchemaV1.background(script);
-        game.truth = ScriptSchemaV1.truth(script);
-        game.killerId = ScriptSchemaV1.killerId(script);
-        // P-0805-A（B2）：角色 id → 角色名（结构化 killer 判定；空 killerId 不影响既有 truth 解析路径）
-        game.roleNamesById.putAll(ScriptSchemaV1.roleNamesById(script));
-
-        // roles: 规范角色名序列（secrets 键集合恒等于 roles，A1-3）
-        List<String> roles = ScriptSchemaV1.roleNames(script);
-        game.roles.addAll(roles);
-
-        game.locations.addAll(ScriptSchemaV1.locations(script));
-
-        // clues: 规范化线索（id/title/location/content/transferable/visible_to_owner_only + public 兼容键）
-        game.clues.addAll(ScriptSchemaV1.clueList(script));
-
-        // D5: secrets 发放 —— 从 schema 解析角色秘密（角色名 → 秘密），按角色存储
-        game.secrets.putAll(ScriptSchemaV1.secretsByRole(script));
-
-        // Assign roles to players (shuffle)
-        List<String> shuffledRoles = new ArrayList<>(roles);
-        Collections.shuffle(shuffledRoles);
-        for (int i = 0; i < playerNames.size() && i < shuffledRoles.size(); i++) {
-            game.assignments.put(playerNames.get(i), shuffledRoles.get(i));
-        }
-        // Leftover players get generic roles
-        for (int i = shuffledRoles.size(); i < playerNames.size(); i++) {
-            game.assignments.put(playerNames.get(i), "嫌疑人_" + (i - shuffledRoles.size() + 1));
-        }
-
-        // C2: 按角色分配初始 AP（基础值 + 角色 ap_bonus；侦探类角色行动点多，蓝图 P2 角色差异化搜证）
-        Map<String, Integer> apBonusByName = ScriptSchemaV1.apBonusByRoleName(script);
-        for (String player : game.players) {
-            String role = game.assignments.getOrDefault(player, "");
-            int bonus = role.isEmpty() ? 0 : apBonusByName.getOrDefault(role, 0);
-            int ap = Math.max(1, apBase + bonus); // 至少 1 点，避免 0 AP 死局
-            game.playerAp.put(player, ap);
-            game.playerApMax.put(player, ap);
-        }
-
-        // 批次 D: 按角色分配 talkativeness（schema roles[].talkativeness，缺省 0.5；发言门控概率输入）
-        Map<String, Double> talkativenessByName = ScriptSchemaV1.talkativenessByRoleName(script);
-        for (String player : game.players) {
-            String role = game.assignments.getOrDefault(player, "");
-            double tt = role.isEmpty() ? ScriptSchemaV1.DEFAULT_TALKATIVENESS
-                    : talkativenessByName.getOrDefault(role, ScriptSchemaV1.DEFAULT_TALKATIVENESS);
-            game.playerTalkativeness.put(player, Math.max(0.0, Math.min(1.0, tt)));
-        }
-        // 批次 D: 人类玩家标记（当前剧本杀全员为真人玩家；AI 讨论角色由引擎代声）
-        for (String player : game.players) {
-            game.playerIsHuman.put(player, true);
-        }
-
-        // C3: 每玩家生成唯一 roleKey（对齐 Chronos：开房生成每角色 roleKey；断线重连/顶号认证一体）
-        for (String player : game.players) {
-            game.playerKeys.put(player, UUID.randomUUID().toString());
-        }
+        applyScript(game, generation.schema(), generation.degraded());
 
         // P-0803-K：简单对话版直接进入 DISCUSSION（无搜证阶段）；真剧本杀维持 INVESTIGATION
         game.phase = chatMode ? Phase.DISCUSSION : Phase.INVESTIGATION;
@@ -641,13 +664,20 @@ public class ScriptGameService {
         }
         // GAP-8: 剧本生成完成，推送首阶段 + 状态；简单版直接推送 discussion 并自动启动讨论引擎
         if (chatMode) {
-            broadcastPhase(game, "discussion");
-            try {
-                runDiscussionEngine(game);
-            } catch (Exception e) {
-                log.warn("Script game {} chat-mode discussion engine setup failed, advancing to VOTE: {}",
-                        sessionId, e.getMessage());
+            if (game.players.size() < 2) {
+                // P-0810-17（B2）：单人局无讨论对象 → 直接进 VOTE（跳过 discussion 广播，
+                // 避免同一请求内 script_phase 连发 discussion→vote 快速翻转，前端只见 vote）
                 enterVotePhase(game);
+            } else {
+                broadcastPhase(game, "discussion");
+                try {
+                    runDiscussionEngine(game);
+                } catch (Exception e) {
+                    log.warn("Script game {} chat-mode discussion engine setup failed, advancing to VOTE: {}",
+                            sessionId, e.getMessage());
+                    // P-0810-17（B2）：失败路径同样跳过 discussion 广播直接进 VOTE（同请求内不连发）
+                    enterVotePhase(game);
+                }
             }
         } else {
             broadcastPhase(game, "investigation");
@@ -658,6 +688,195 @@ public class ScriptGameService {
             sessionId, playerNames.size(), game.locations.size(), game.clues.size(), game.secrets.size());
 
         return game.toMap(playerNames.isEmpty() ? "" : playerNames.get(0));
+    }
+
+    /**
+     * P-0810-17（阶段 1）：完整剧本 schema → 对局字段填充（initGame 完整路径与 generateFull 共用，
+     * 双路径零漂移——两阶段二次生成 players 必须与概略一致，此处按 init 已登记的 players 分配角色）。
+     */
+    private void applyScript(ScriptGame game, Map<String, Object> script, boolean degraded) {
+        game.scriptSchema = script;
+        game.llmDegraded = degraded;
+        game.name = ScriptSchemaV1.title(script);
+        game.background = ScriptSchemaV1.background(script);
+        game.truth = ScriptSchemaV1.truth(script);
+        game.killerId = ScriptSchemaV1.killerId(script);
+        // P-0805-A（B2）：角色 id → 角色名（结构化 killer 判定；空 killerId 不影响既有 truth 解析路径）
+        game.roleNamesById.putAll(ScriptSchemaV1.roleNamesById(script));
+        // roles: 规范角色名序列（secrets 键集合恒等于 roles，A1-3）
+        game.roles.clear();
+        game.roles.addAll(ScriptSchemaV1.roleNames(script));
+        game.locations.clear();
+        game.locations.addAll(ScriptSchemaV1.locations(script));
+        // clues: 规范化线索（id/title/location/content/transferable/visible_to_owner_only + public 兼容键）
+        game.clues.clear();
+        game.clues.addAll(ScriptSchemaV1.clueList(script));
+        // D5: secrets 发放 —— 从 schema 解析角色秘密（角色名 → 秘密），按角色存储
+        game.secrets.clear();
+        game.secrets.putAll(ScriptSchemaV1.secretsByRole(script));
+
+        // Assign roles to players (shuffle)
+        List<String> shuffledRoles = new ArrayList<>(game.roles);
+        Collections.shuffle(shuffledRoles);
+        game.assignments.clear();
+        for (int i = 0; i < game.players.size() && i < shuffledRoles.size(); i++) {
+            game.assignments.put(game.players.get(i), shuffledRoles.get(i));
+        }
+        // Leftover players get generic roles
+        for (int i = shuffledRoles.size(); i < game.players.size(); i++) {
+            game.assignments.put(game.players.get(i), "嫌疑人_" + (i - shuffledRoles.size() + 1));
+        }
+
+        // C2: 按角色分配初始 AP（基础值 + 角色 ap_bonus；侦探类角色行动点多，蓝图 P2 角色差异化搜证）
+        Map<String, Integer> apBonusByName = ScriptSchemaV1.apBonusByRoleName(script);
+        game.playerAp.clear();
+        game.playerApMax.clear();
+        for (String player : game.players) {
+            String role = game.assignments.getOrDefault(player, "");
+            int bonus = role.isEmpty() ? 0 : apBonusByName.getOrDefault(role, 0);
+            int ap = Math.max(1, apBase + bonus); // 至少 1 点，避免 0 AP 死局
+            game.playerAp.put(player, ap);
+            game.playerApMax.put(player, ap);
+        }
+
+        // 批次 D: 按角色分配 talkativeness（schema roles[].talkativeness，缺省 0.5；发言门控概率输入）
+        Map<String, Double> talkativenessByName = ScriptSchemaV1.talkativenessByRoleName(script);
+        game.playerTalkativeness.clear();
+        for (String player : game.players) {
+            String role = game.assignments.getOrDefault(player, "");
+            double tt = role.isEmpty() ? ScriptSchemaV1.DEFAULT_TALKATIVENESS
+                    : talkativenessByName.getOrDefault(role, ScriptSchemaV1.DEFAULT_TALKATIVENESS);
+            game.playerTalkativeness.put(player, Math.max(0.0, Math.min(1.0, tt)));
+        }
+        // 批次 D: 人类玩家标记（当前剧本杀全员为真人玩家；AI 讨论角色由引擎代声）
+        for (String player : game.players) {
+            game.playerIsHuman.put(player, true);
+        }
+        // C3: 每玩家 roleKey —— 概略态 init 已发放则保留（generate_full 不覆盖，重连/认证连续）；
+        // 完整路径（init outlineOnly=false）直接生成
+        for (String player : game.players) {
+            game.playerKeys.putIfAbsent(player, UUID.randomUUID().toString());
+        }
+    }
+
+    /**
+     * P-0810-17（阶段 1，新端点 POST /api/script/generate_full）：完整剧本 + 地图后台异步生成。
+     *
+     * <p>仅 {@code Phase.SETUP}（概略已生成、完整待生成）可调；异步虚拟线程执行，不阻塞调用方：
+     * ① 完整剧本（概略作 prompt 约束，防两阶段矛盾）→ applyScript 填角色/秘密/线索/AP →
+     * 落库 + 快照；② 阶段推进：full → INVESTIGATION / chat → DISCUSSION（与 initGame 完整路径同语义）；
+     * ③ 推送 script_ready（决策点 6：新增结构化就绪事件）+ script_phase + script_status；
+     * ④ full 模式异步 generateMap（LLM→7 项校验→BSP 降级，多图注册表；失败不阻塞）；
+     * 完成后再次 script_ready（map_ready=true）+ script_status。
+     *
+     * @return 立即返回 {ok, generating, session_id, phase:"setup", message}；生成状态经 toMap.generating / script_ready 可查
+     */
+    public Map<String, Object> generateFull(String sessionId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (game.phase != Phase.SETUP) {
+            return Map.of("error", "当前不是概略待生成阶段（phase=" + game.phase.name().toLowerCase() + "）",
+                    "phase", game.phase.name().toLowerCase());
+        }
+        if (game.generating) return Map.of("error", "完整剧本生成中，请稍候", "generating", true);
+        game.generating = true;
+        // 生成中状态先推一次（script_status 携带 generating=true，前端可显示 loading）
+        broadcastStatus(game);
+        final ScriptGame fg = game;
+        discussionExecutor.submit(() -> {
+            try {
+                // ① 完整剧本（概略约束注入 prompt，防两阶段矛盾——方案 §7 决策点 3）
+                ScriptService.ScriptGeneration generation =
+                        scriptService.generateScriptChecked(fg.theme, fg.players, fg.outline);
+                applyScript(fg, generation.schema(), generation.degraded());
+                // 落库：剧本 type=script + 初始快照（与 initGame 完整路径双点一致）
+                persistScript(fg);
+                saveSnapshot(fg);
+
+                // ② 阶段推进：full → INVESTIGATION / chat → DISCUSSION（守卫语义与 initGame 一致）
+                boolean chat = "chat".equalsIgnoreCase(fg.mode);
+                fg.phase = chat ? Phase.DISCUSSION : Phase.INVESTIGATION;
+                fg.round = 1;
+                fg.phaseStartedAt = System.currentTimeMillis();
+
+                // ③ 就绪事件 + 阶段/状态推送（script_ready 携带结构化 payload，决策点 6 选新增事件）
+                broadcastScriptReady(fg, false);
+                if (chat) {
+                    if (fg.players.size() < 2) {
+                        // B2：单人局直接进 VOTE（跳过 discussion 广播，防同请求快速翻转）
+                        enterVotePhase(fg);
+                    } else {
+                        broadcastPhase(fg, "discussion");
+                        try {
+                            runDiscussionEngine(fg);
+                        } catch (Exception e) {
+                            log.warn("Script game {} chat-mode discussion engine setup failed, advancing to VOTE: {}",
+                                    sessionId, e.getMessage());
+                            enterVotePhase(fg);
+                        }
+                    }
+                } else {
+                    broadcastPhase(fg, "investigation");
+                }
+                broadcastStatus(fg);
+
+                // ④ full 模式异步地图（LLM→校验→BSP 降级；失败不阻塞，generateMap 内部已有兜底）
+                if (!chat) {
+                    try {
+                        generateMap(sessionId, "", 0L, false);
+                        broadcastScriptReady(fg, true);
+                        broadcastStatus(fg);
+                    } catch (Exception e) {
+                        log.warn("Script game {} full map generation failed (non-blocking): {}",
+                                sessionId, e.getMessage());
+                    }
+                }
+                log.info("Script game {} full generation done: phase={}, roles={}, clues={}, map={}",
+                        sessionId, fg.phase.name().toLowerCase(), fg.roles.size(), fg.clues.size(), fg.currentMapId);
+            } catch (Exception e) {
+                log.warn("Script game {} generate_full failed: {}", sessionId, e.getMessage());
+            } finally {
+                fg.generating = false;
+                saveSnapshot(fg);
+            }
+        });
+        return Map.of("ok", true, "generating", true, "session_id", sessionId,
+                "phase", "setup", "message", "完整剧本生成已开始（后台异步），完成后推送 script_ready 事件");
+    }
+
+    // ── P-0810-17：概略字段访问器（toMap/initGame 用，null 安全） ──
+
+    private static String outlineName(Map<String, Object> outline, String theme) {
+        if (outline == null) return theme == null || theme.isBlank() ? "未命名剧本" : theme;
+        Object t = outline.get("name");
+        String s = t == null ? "" : String.valueOf(t).trim();
+        return s.isBlank() ? (theme == null || theme.isBlank() ? "未命名剧本" : theme) : s;
+    }
+
+    private static String outlineStoryline(Map<String, Object> outline) {
+        if (outline == null) return "";
+        Object s = outline.get("storyline");
+        return s == null ? "" : String.valueOf(s);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> outlineRoles(Map<String, Object> outline) {
+        if (outline == null) return List.of();
+        Object r = outline.get("roles");
+        return r instanceof List ? (List<Map<String, Object>>) r : List.of();
+    }
+
+    private static List<String> outlineLocations(Map<String, Object> outline) {
+        if (outline == null) return List.of();
+        Object l = outline.get("locations");
+        return l instanceof List ? (List<String>) l : List.of();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static List<Map<String, Object>> outlineClues(Map<String, Object> outline) {
+        if (outline == null) return List.of();
+        Object c = outline.get("clues");
+        return c instanceof List ? (List<Map<String, Object>>) c : List.of();
     }
 
     /**
@@ -808,6 +1027,10 @@ public class ScriptGameService {
         }
         int effW = width > 0 ? width : (game.mapWidth > 0 ? game.mapWidth : mapDefaultWidth);
         int effH = height > 0 ? height : (game.mapHeight > 0 ? game.mapHeight : mapDefaultHeight);
+        // P-0810-21（P0-3）：尺寸下限 clamp（显式传参 / 对局已定尺寸 / 配置默认统一生效）
+        int[] clamped = clampToMin(effW, effH, sessionId);
+        effW = clamped[0];
+        effH = clamped[1];
         String effTheme = (theme == null || theme.isBlank()) ? game.name : theme;
         String id = (mapId != null && !mapId.isBlank()) ? mapId.trim() : nextMapId(game);
         Map<String, Object> m = doGenerateAndRegister(game, id, effTheme, seed, effW, effH);
@@ -847,6 +1070,10 @@ public class ScriptGameService {
         try {
             int effW = width > 0 ? width : (game.mapWidth > 0 ? game.mapWidth : mapDefaultWidth);
             int effH = height > 0 ? height : (game.mapHeight > 0 ? game.mapHeight : mapDefaultHeight);
+            // P-0810-21（P0-3）：尺寸下限 clamp（switchMap 自动生成目标图同样生效）
+            int[] clamped = clampToMin(effW, effH, game.sessionId);
+            effW = clamped[0];
+            effH = clamped[1];
             String effTheme = (theme == null || theme.isBlank()) ? game.name : theme;
             // 线索地点（去重）：clues[].location —— zones[].clue_location 对齐目标（契约 §5）
             List<String> clueLocations = game.clues.stream()
@@ -854,16 +1081,33 @@ public class ScriptGameService {
                 .filter(s -> !s.isBlank())
                 .distinct()
                 .collect(Collectors.toList());
-            ScriptMapService.MapResult result = mapService.generateMap(effTheme, game.locations, clueLocations, seed, effW, effH);
+            // P-0810-21（P0-1）：剧本上下文注入 —— background（概略态=outline.storyline，完整态=剧本 background）
+            // + truth（完整剧本才有时，概略态为空）拼成 backgroundText 透传（仅氛围参考，不改变地点来源）
+            String backgroundText = buildMapBackgroundText(game);
+            ScriptMapService.MapResult result = mapService.generateMap(effTheme, backgroundText, game.locations, clueLocations, seed, effW, effH);
             Map<String, Object> m = new LinkedHashMap<>(result.map());
             m.put("map_id", mapId);
             game.maps.put(mapId, m);
             game.mapFallbacks.put(mapId, new ArrayList<>(result.fallbackReasons()));
+            if (result.warnings() != null && !result.warnings().isEmpty()) {
+                log.warn("Script game {} map {} quality warnings: {}", game.sessionId, mapId, result.warnings());
+            }
             return m;
         } catch (Exception e) {
             log.warn("Script game {} map generation failed for {}: {}", game.sessionId, mapId, e.getMessage());
             return null;
         }
+    }
+
+    /** P-0810-21（P0-1）：拼地图 prompt 的剧本上下文文本（background + 案件真相；均空则空串）。 */
+    private static String buildMapBackgroundText(ScriptGame game) {
+        StringBuilder sb = new StringBuilder();
+        if (game.background != null && !game.background.isBlank()) sb.append(game.background.trim());
+        if (game.truth != null && !game.truth.isBlank()) {
+            if (sb.length() > 0) sb.append("。");
+            sb.append("案件真相：").append(game.truth.trim());
+        }
+        return sb.toString();
     }
 
     /** P-0803-K: 自动分配地图注册表键（map_1, map_2, …，注册表内唯一）。 */
@@ -1624,7 +1868,11 @@ public class ScriptGameService {
             } catch (Exception e) {
                 log.warn("Script game {} discussion engine setup failed, advancing to VOTE: {}",
                         sessionId, e.getMessage());
-                enterVotePhase(game);
+                // P-0810-17（B2）：失败路径改异步进 VOTE —— discussion 阶段广播已先行发送，
+                // 若同步 enterVotePhase 会在同一请求内连发 discussion→vote（前端 setScriptPhase
+                // 竞态只见 vote）；异步提交让 discussion 广播先落 SSE 通道，防快速翻转。
+                final ScriptGame fg = game;
+                discussionExecutor.submit(() -> enterVotePhase(fg));
             }
             return true;
         }
@@ -1646,9 +1894,36 @@ public class ScriptGameService {
         SimulationWorld world = discussionWorlds.get(game.sessionId);
         ConversationManager cm = discussionConversations.get(game.sessionId);
         WorldDirectorService director = discussionDirectors.get(game.sessionId);
+
+        // P-0810-17（B1）：订阅讨论发言逐轮实时回调 —— ConversationManager 每轮结束后对新增发言
+        // 逐条回调（SpeechTurn），此处转 script_speech SSE 实时回显（不再等全部轮次结束才落盘）；
+        // human 发言已在 discussionSay 入口立即广播（同一对局 speechEmitted 去重，见 discussionSay），
+        // 此处按 speaker|message 去重防双发。per-game 实例隔离：2D 世界/狼人杀各自 CM 不受影响。
+        cm.setScriptSpeechListener(turn -> {
+            try {
+                if (turn == null || turn.speaker() == null || turn.text() == null || turn.text().isBlank()) return;
+                if (!game.speechEmitted.add(turn.speaker() + "|" + turn.text())) return; // 已广播过（如 discussionSay 立即回显）
+                if (sse != null) {
+                    Map<String, Object> payload = new LinkedHashMap<>();
+                    payload.put("speaker", turn.speaker());
+                    payload.put("message", turn.text());
+                    payload.put("round", game.round);
+                    payload.put("human", false);
+                    payload.put("ts", System.currentTimeMillis());
+                    sse.broadcastScriptSpeech(game.sessionId, payload);
+                }
+            } catch (Exception e) {
+                log.warn("Script game {} speech SSE broadcast failed: {}", game.sessionId, e.getMessage());
+            }
+        });
+
         if (game.players.size() < 2) {
             // 单人局无讨论对象，直接进投票（统一入口：计时/quorum 重置/快照/推送）
-            enterVotePhase(game);
+            // P-0810-17（B2）：异步进 VOTE —— 调用方（initGame chat 单人局已跳过 discussion 广播；
+            // startDiscussion 路径 discussion 广播已先行）同步 enterVotePhase 会同一请求内连发
+            // discussion→vote 快速翻转，异步提交让前序广播先落 SSE 通道。
+            final ScriptGame fg = game;
+            discussionExecutor.submit(() -> enterVotePhase(fg));
             return;
         }
 
@@ -1883,6 +2158,19 @@ public class ScriptGameService {
         ev.put("clue", isClue);
         ev.put("ts", System.currentTimeMillis());
         game.pendingHumanEvents.add(ev);
+
+        // P-0810-17（B1）：人类发言立即实时回显（script_speech SSE，会话定向）——不再等讨论线程
+        // 下轮排空后才可见；speechEmitted 去重（speaker|message）：讨论线程逐轮回调该发言时跳过，
+        // 防同一发言重复推送（对齐狼人杀 werewolf_speech 实时回显形态）。
+        if (sse != null && game.speechEmitted.add(player + "|" + message)) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("speaker", player);
+            payload.put("message", message);
+            payload.put("round", game.round);
+            payload.put("human", true);
+            payload.put("ts", System.currentTimeMillis());
+            sse.broadcastScriptSpeech(game.sessionId, payload);
+        }
 
         // 可观测：被 @ 的目标（强制发言名单，响应回显供前端展示）
         List<String> mentioned = new ArrayList<>();
@@ -2361,9 +2649,15 @@ public class ScriptGameService {
         return initGame(sessionId, theme, players, mode);
     }
 
-    /** GAP-4c + C1: 剧本落库（initGame 剧本生成后调用；A4-3 剧本落库来源）—— 按 Schema v1 存取。 */
+    /** GAP-4c + C1: 剧本落库（initGame 剧本生成后调用；A4-3 剧本落库来源）—— 按 Schema v1 存取。
+     *  P-0810-17（阶段 1）：概略态（scriptSchema 为空）跳过——完整剧本生成（generate_full）后才落库。 */
     private void persistScript(ScriptGame game) {
         if (databaseService == null) return;
+        if (game.scriptSchema == null) {
+            log.info("Script game {} script persist skipped (outline-only SETUP state, full script pending)",
+                    game.sessionId);
+            return;
+        }
         Map<String, Object> content = new LinkedHashMap<>();
         content.put("type", "script");
         content.put("schema_version", ScriptSchemaV1.CURRENT_VERSION);
@@ -2452,6 +2746,26 @@ public class ScriptGameService {
     private void broadcastStatus(ScriptGame game) {
         if (sse == null || game == null) return;
         sse.broadcastScriptStatus(game.sessionId, game.toMap(""));
+    }
+
+    /**
+     * P-0810-17（阶段 1）：完整剧本/地图后台生成完成通知（script_ready 事件，会话定向）。
+     * 决策点 6：新增结构化就绪事件承载「剧本就绪」（与 script_phase/script_status 并存——
+     * script_phase 仍推阶段切换、script_status 仍推全量状态，script_ready 仅通知就绪时刻）。
+     *
+     * @param mapReady true = 地图也已就绪（full 模式第二阶段）；false = 仅完整剧本就绪
+     */
+    private void broadcastScriptReady(ScriptGame game, boolean mapReady) {
+        if (sse == null || game == null) return;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("ready", true);
+        payload.put("phase", game.phase.name().toLowerCase());
+        payload.put("name", game.name);
+        payload.put("map_ready", mapReady);
+        if (mapReady) {
+            payload.put("current_map_id", game.currentMapId == null ? "" : game.currentMapId);
+        }
+        sse.broadcastScriptReady(game.sessionId, payload);
     }
 
     /** C1: 剧本 Schema v1 全量（双生成器一致性验证/外部读取用）。 */
@@ -2690,6 +3004,8 @@ public class ScriptGameService {
         // （旧快照无此键 → 恢复默认值：theme 空/llmDegraded false/voteStartedAt 0=超时判定跳过/quorumFailCount 0/lowParticipation false/trustees 空）
         content.put("theme", game.theme);
         content.put("llm_degraded", game.llmDegraded);
+        // P-0810-17（阶段 1）：概略剧本随快照落库（重连/重启后概略不丢；旧快照无此键 → 恢复 null 零影响）
+        content.put("outline", game.outline);
         content.put("vote_started_at", game.voteStartedAt);
         content.put("quorum_fail_count", game.quorumFailCount);
         content.put("revote_count", game.revoteCount);
@@ -2769,6 +3085,9 @@ public class ScriptGameService {
         // P1: 主题/LLM 降级/投票超时基准/quorum 重投/低参与度/托管恢复（旧快照无此键 → 默认值，零行为变化）
         game.theme = str(c.get("theme"));
         game.llmDegraded = boolOf(c.get("llm_degraded"), false);
+        // P-0810-17（阶段 1）：概略剧本快照恢复（旧快照无此键 → null，零影响）
+        Object ol = c.get("outline");
+        game.outline = ol instanceof Map ? mapOf(ol) : null;
         game.voteStartedAt = c.get("vote_started_at") instanceof Number n ? n.longValue() : 0L;
         game.quorumFailCount = intOf(c.get("quorum_fail_count"), 0);
         game.revoteCount = intOf(c.get("revote_count"), 0);

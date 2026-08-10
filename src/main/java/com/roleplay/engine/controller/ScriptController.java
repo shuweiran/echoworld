@@ -83,6 +83,11 @@ public class ScriptController {
         String theme = (String) body.getOrDefault("theme", "默认主题");
         // P-0803-K（剧本杀双版本）：对局模式 —— 缺省 "full"=真剧本杀（搜证+地图）/ "chat"=简单对话版（无取证，直接多人对话）
         String mode = (String) body.getOrDefault("mode", "full");
+        // P-0810-17（阶段 1，两阶段生成）：outline_only 缺省 true —— init 只生成概略（快 <10s，
+        // 不再同步双 LLM 生成完整剧本+地图）；完整剧本+地图由 POST /api/script/generate_full 后台异步补齐。
+        // outline_only=false 保留既有同步完整生成路径（向后兼容旧调用方/测试）。
+        boolean outlineOnly = body.get("outline_only") == null
+                || Boolean.parseBoolean(String.valueOf(body.get("outline_only")));
         // C3: 可选房间码绑定（/api/rooms 6 位码 → 对局，重连入口；不传则跳过）
         String roomCode = (String) body.getOrDefault("room_code", "");
         // P-0802-P2：可选 player_id —— 按解析出的当前角色名登记绑定（角色库改名后即使 players 仍传旧名，
@@ -105,7 +110,7 @@ public class ScriptController {
                 scriptGameService.registerPlayerBinding(sessionId, playerId, resolved);
             }
         }
-        Map<String, Object> state = scriptGameService.initGame(sessionId, theme, players, mode);
+        Map<String, Object> state = scriptGameService.initGame(sessionId, theme, players, mode, outlineOnly);
         // D5: 将剧本局注册到 RouterService，secrets 随对话注入对应角色上下文
         ScriptGameService.ScriptGame game = scriptGameService.getGame(sessionId);
         if (game != null) {
@@ -117,6 +122,21 @@ public class ScriptController {
         resp.put("session_id", sessionId);
         if (roomCode != null && !roomCode.isBlank()) resp.put("room_code", roomCode.trim().toUpperCase());
         return ResponseEntity.ok(resp);
+    }
+
+    /**
+     * P-0810-17（阶段 1，新端点）：完整剧本 + 地图后台异步生成（两阶段生成第二阶段）。
+     * body: session_id（可选，缺省当前对局）。返回 {ok, generating, session_id, phase:"setup", message}；
+     * 生成完成推送 script_ready（map_ready 分两段：完整剧本就绪 → 地图就绪）+ script_phase + script_status。
+     * 仅 SETUP（概略已生成）可调；重复调用/非概略态返回 error（含 phase）。
+     */
+    @PostMapping("/generate_full")
+    public ResponseEntity<Map<String, Object>> generateFull(@RequestBody Map<String, String> body) {
+        String sessionId = body.getOrDefault("session_id", currentSessionId);
+        if (sessionId == null || sessionId.isBlank()) {
+            return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        }
+        return ResponseEntity.ok(scriptGameService.generateFull(sessionId));
     }
 
     /**
@@ -244,10 +264,18 @@ public class ScriptController {
         return ResponseEntity.ok(scriptGameService.resumeGame(sessionId, playerKey == null ? "" : playerKey));
     }
 
-    /** C3: DM 面板分发 roleKey 用（全员令牌一览；仅 DM 侧调用，配合重连/顶号 UI）。 */
+    /** C3: DM 面板分发 roleKey 用（全员令牌一览；仅 DM 侧调用，配合重连/顶号 UI）。
+     *  P-0810-17（B3）：可选 player_key —— 有 key 时优先按 key 反查对局（防多局并发
+     *  currentSessionId 回退错位，role_key 串局 403）；无 key 保持 session_id/current 解析。 */
     @GetMapping("/keys")
-    public ResponseEntity<Map<String, Object>> getKeys(@RequestParam(defaultValue = "") String session_id) {
+    public ResponseEntity<Map<String, Object>> getKeys(@RequestParam(defaultValue = "") String session_id,
+                                                       @RequestParam(defaultValue = "") String player_key) {
         String sid = session_id.isBlank() ? currentSessionId : session_id;
+        // P-0810-17（B3）：优先 player_key 反查（该 key 属于哪个对局以服务层为准，key 与对局一一对应）
+        if (player_key != null && !player_key.isBlank()) {
+            String sidByKey = scriptGameService.findSessionByPlayerKey(player_key);
+            if (!sidByKey.isBlank()) sid = sidByKey;
+        }
         if (sid.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
         Map<String, String> keys = scriptGameService.getPlayerKeys(sid);
         return ResponseEntity.ok(Map.of("session_id", sid, "player_keys", keys));
@@ -451,26 +479,36 @@ public class ScriptController {
     /**
      * C3: 状态查询 —— 支持 player_key 认证（有 key 校验匹配，无 key 向后兼容）；
      * 仅传 player_key 时可由 key 反查玩家（重连场景）。
+     * P-0810-17（B3）：sessionId 解析优先 findSessionByPlayerKey(player_key)（有 key 时）——
+     * 修复 role_key 错位：playerSessions 回退 currentSessionId 在并发对局下会拿到全局最后对局，
+     * 玩家 1..N 误用玩家 0 的 key → 403；key 与对局一一对应，反查是唯一可靠归属。
      */
     @GetMapping("/status")
     public ResponseEntity<Map<String, Object>> getStatus(@RequestParam(defaultValue = "") String player,
                                                          @RequestParam(defaultValue = "") String player_key) {
-        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
-        // C3: 只传 player_key（未传玩家名）→ 由 key 反查对局与玩家（重连后个人视图）
-        if ((player == null || player.isBlank()) && player_key != null && !player_key.isBlank()) {
+        // P-0810-17（B3）：有 player_key 时优先按 key 反查对局（key 唯一归属本局）；
+        // 反查失败再回退 playerSessions/currentSessionId（旧行为兜底）
+        String sessionId = "";
+        String resolvedPlayer = player == null ? "" : player;
+        if (player_key != null && !player_key.isBlank()) {
             String sidByKey = scriptGameService.findSessionByPlayerKey(player_key);
             if (!sidByKey.isBlank()) {
                 sessionId = sidByKey;
-                player = scriptGameService.findPlayerByKey(sessionId, player_key);
+                if (resolvedPlayer.isBlank()) {
+                    resolvedPlayer = scriptGameService.findPlayerByKey(sessionId, player_key);
+                }
             }
+        }
+        if (sessionId.isBlank()) {
+            sessionId = playerSessions.getOrDefault(resolvedPlayer, currentSessionId);
         }
         if (sessionId.isEmpty()) {
             return ResponseEntity.ok(Map.of("phase", "idle"));
         }
-        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, player_key);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, resolvedPlayer, player_key);
         if (denied != null) return ResponseEntity.status(403).body(denied);
         ScriptGameService.ScriptGame game = scriptGameService.getGame(sessionId);
         if (game == null) return ResponseEntity.ok(Map.of("phase", "not_found"));
-        return ResponseEntity.ok(game.toMap(player));
+        return ResponseEntity.ok(game.toMap(resolvedPlayer));
     }
 }

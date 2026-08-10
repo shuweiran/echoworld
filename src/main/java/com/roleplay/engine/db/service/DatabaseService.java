@@ -160,6 +160,21 @@ public class DatabaseService {
                                           String description, List<String> agents,
                                           String keywords, String category,
                                           String defaultRolesJson, String defaultMapJson) {
+        // P-0810-09：旧八参调用方委托新重载，goals=null（不修改保留旧值）
+        return saveScene(sceneId, name, description, agents, keywords, category,
+                defaultRolesJson, defaultMapJson, null);
+    }
+
+    /**
+     * P-0810-09：带场景目标集的落库重载 —— 九参 = 八参 + goalsJson（场景目标集 JSON 串，可空）。
+     * goals 语义与 defaultRoles/defaultMap 一致：null=不修改保留旧值；空串=清空为 null。
+     */
+    @Transactional
+    public Map<String, Object> saveScene(String sceneId, String name,
+                                          String description, List<String> agents,
+                                          String keywords, String category,
+                                          String defaultRolesJson, String defaultMapJson,
+                                          String goalsJson) {
         String agentStr = agents != null ? String.join(",", agents) : "";
         SceneEntity entity = sceneRepo.findById(sceneId)
                 .orElse(new SceneEntity(sceneId, name, description, agentStr));
@@ -180,6 +195,9 @@ public class DatabaseService {
         }
         if (defaultMapJson != null) {
             entity.setDefaultMap(defaultMapJson.isBlank() ? null : defaultMapJson);
+        }
+        if (goalsJson != null) {
+            entity.setGoals(goalsJson.isBlank() ? null : goalsJson);
         }
         if (entity.getCreatedAt() == null) {
             entity.setCreatedAt(LocalDateTime.now());
@@ -463,6 +481,8 @@ public class DatabaseService {
         map.put("category", e.getCategory() != null && !e.getCategory().isBlank() ? e.getCategory() : "general");
         map.put("default_roles", parseRoleList(e.getDefaultRoles()));
         map.put("default_map", parseJsonMap(e.getDefaultMap()));
+        // P-0810-09：场景目标集（JSON 串 → 对象；旧数据/空 → null，前端按缺省处理零破坏）
+        map.put("goals", parseJsonMap(e.getGoals()));
         String agents = e.getInitialAgentNames();
         if (agents != null && !agents.isEmpty()) {
             map.put("initial_agent_names", List.of(agents.split(",")));

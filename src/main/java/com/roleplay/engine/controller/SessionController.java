@@ -56,6 +56,8 @@ public class SessionController {
         Map<String, Object> state = new LinkedHashMap<>(r.getState());
         state.put("characters", characterController.getAll());
         state.put("scenes", sceneController.getAll());
+        // P-0810-16：场景目标视图随 /api/state 下发（前端场景卡进入/刷新时拉取；无目标时 enabled=false 零影响）
+        state.put("scene_goals", r.getSceneGoalsView());
         return ResponseEntity.ok(state);
     }
 
@@ -69,32 +71,57 @@ public class SessionController {
             p.setPersonaDesc(ch.getOrDefault("persona", ""));
             p.setVoice(ch.getOrDefault("voice", ""));
             p.setBackground(ch.getOrDefault("background", ""));
+            // P-0810-10：五层 persona 卡（导入卡优先，无则默认资源卡；已有 layer 不覆盖）
+            characterController.attachPersonaCard(p);
             personas.add(p);
         }
         if (personas.isEmpty()) {
-            personas.add(new Persona("助手", "一个友好的助手"));
+            // P-0810-21-C：空 characters 不再兜底「助手」——用户实测「没选助手但对局里出现助手」根因
+            // （GalLivePanel「空角色」预设 characters:[] 触发旧兜底）；与 startScene 一致返回 400，
+            // 前端须显式传至少一个角色。旧兜底行为移除，测试无依赖（已核查）。
+            return ResponseEntity.badRequest().body(Map.of("error", "至少需要一个角色"));
         }
 
         String sessionId = UUID.randomUUID().toString().substring(0, 12);
+        String sceneDesc = (String) body.getOrDefault("scene", "默认场景");
+        String mode = (String) body.getOrDefault("mode", "free");
         // D11: 按 session_id 创建/获取独立 router 实例（多会话隔离）
         RouterService sessionRouter = sessions.getOrCreate(sessionId);
-        sessionRouter.initSession(sessionId, personas,
-            (String) body.getOrDefault("scene", "默认场景"),
-            (String) body.getOrDefault("mode", "free"),
+        sessionRouter.initSession(sessionId, personas, sceneDesc, mode,
             (String) body.getOrDefault("protagonist", ""),
             (String) body.getOrDefault("director_character", ""));
         // 向后兼容：默认单例 router 同步初始化（未传 session_id 的旧客户端仍走默认会话）
-        router.initSession(sessionId, personas,
-            (String) body.getOrDefault("scene", "默认场景"),
-            (String) body.getOrDefault("mode", "free"),
+        router.initSession(sessionId, personas, sceneDesc, mode,
             (String) body.getOrDefault("protagonist", ""),
             (String) body.getOrDefault("director_character", ""));
+        // P-0810-09：一般模式 init（含 scene）时确保场景目标集 —— scene_id 用于 DB 目标装载/回写（可选），
+        // player_goal 为玩家自定义目标（可选，缺省 LLM 生成）；生成失败规则兜底恒不抛。
+        String sceneId = body.get("scene_id") != null ? String.valueOf(body.get("scene_id")).trim() : "";
+        String playerGoal = body.get("player_goal") != null ? String.valueOf(body.get("player_goal")).trim() : "";
+        sessionRouter.ensureSceneGoals(sceneId, sceneDesc, playerGoal);
+        // P-0810-14：起局后自动触发第一轮（AI 开场白）—— 仅一般模式生效，异步不阻塞 init 响应
+        sessionRouter.triggerAutoFirstRound();
 
-        return ResponseEntity.ok(Map.of(
-            "session_id", sessionId,
-            "status", "initialized",
-            "agents", personas.stream().map(Persona::getName).toList()
-        ));
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("session_id", sessionId);
+        resp.put("status", "initialized");
+        resp.put("agents", personas.stream().map(Persona::getName).toList());
+        // P-0810-09：目标列表随 init 返回（玩家目标明文，AI 目标 ?? 占位+数量；无目标时 goals.enabled=false）
+        resp.put("goals", sessionRouter.getSceneGoalsView());
+        // P-0810-21：玩家角色回传 —— 与 GET /api/state 的 protagonist 字段同源（保持一致性），
+        // 前端据此确认玩家角色已注入。mode=protagonist 时额外回传 your_role/player_name（同值）；
+        // 非主角模式仅回 protagonist（空串=未设置，附加键零破坏）。getState 可能为 null（测试 mock），null 守卫。
+        Map<String, Object> routerState = sessionRouter.getState();
+        String protagonist = "";
+        if (routerState != null && routerState.get("protagonist") != null) {
+            protagonist = String.valueOf(routerState.get("protagonist"));
+        }
+        resp.put("protagonist", protagonist);
+        if ("protagonist".equals(mode)) {
+            resp.put("your_role", protagonist);
+            resp.put("player_name", protagonist);
+        }
+        return ResponseEntity.ok(resp);
     }
 
     @PostMapping("/send")

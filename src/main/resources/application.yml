@@ -31,8 +31,23 @@ roleplay:
     api-base: "https://api.deepseek.com"
     api-key: "${ROLEPLAY_LLM_API_KEY:}"
     model: "deepseek-v4-flash"
-    max-tokens: 4096
-    temperature: 0.9
+    # P-0810-19：max-tokens / temperature 为「默认值」语义（旧值 4096/0.9 全源码无消费点=死配置）：
+    #   - max-tokens：callJson 未显式传 maxTokens（null）时使用；全部既有调用点显式传值优先
+    #     （概略 1200 / 完整剧本 4000 / 地图 8000）
+    #   - temperature：callJson 等结构化生成路径使用；对话主链路 callSync 显式 0.7 不受影响
+    max-tokens: 4000
+    # P-0810-21-D：对话主链路 max_tokens（callSync 无参/带 token 入口 + callStream）——原硬编码
+    # 300 偏短（AI 发言常截断，P-0804-F 曾见 finish=length 内容不完整）；提升为 700 默认、可配；
+    # 显式传值的调用点（地图/剧本/审批等）优先不受影响
+    dialogue-max-tokens: 700
+    temperature: 0.1
+    # seed（DeepSeek 兼容 OpenAI seed，P-0810-19）：非空时所有 chat 请求携带 seed 字段——
+    # 同 seed + 同 temperature 下同主题多次生成输出更稳定（复现/调试用）；默认 null=不启用（行为不变）
+    seed: null
+    # P-0810-23-D2：AI 角色单次发言中文字数提醒阈值——发言中文字数 > 该值 → 下一轮自动注入
+    # 该角色系统提示「你上一轮发言超过 N 字，本轮请精简输出」（仅下一轮生效，之后清除；不广播、无前端 UI）；
+    # <=0 关闭检测。
+    remind-threshold: 150
   monitor:
     # D26: fallback-model/timeout-seconds 由 LLMClient 从 roleplay.monitor.* 读取（AppConfig.MonitorConfig）——
     #      fallback-model=主模型失败后的兜底模型，timeout-seconds=单次 LLM HTTP 调用超时
@@ -54,6 +69,11 @@ roleplay:
     default: "free"
     language: "zh"
   game:
+    # P-0811-D：五层 persona 卡外部持久化目录（默认 ./data/persona，与 H2 同 data/ 目录族）。
+    # 卡按 {角色名}.json 写入（UTF-8 无 BOM），重启后由 PersonaCardLoader 扫描合并（classpath 默认卡
+    # + 外部目录，外部优先）；生成自动落库 / POST /{name}/persona 导入 / 批量升级（POST /api/characters/upgrade）
+    # 三个挂载点均写盘。目录不存在自动创建；未配置（空）→ 仅内存不落盘（零破坏）。
+    persona-cards-dir: "./data/persona"
     approval:
       # 审批门（D7）：剧本杀揭晓 / 狼人杀投票结算挂起等待 DM 审批；true=手动审批（超时自动驳回回滚），false=自动通过
       enabled: true
@@ -71,6 +91,10 @@ roleplay:
       # （BspMapGenerator.scaledZonesCount：24×16=384 格 → 3 个，64×64 → ≈10 个）。
       default-width: 40
       default-height: 24
+      # 尺寸下限（P-0810-21 P0-3）：显式传参/对局已定尺寸/配置默认低于下限时提升到 32×20（防微型图）；
+      # 超 LLM token 预算（40×24）仍走 BSP 确定性大图路径（既有行为不变）
+      min-width: 32
+      min-height: 20
       # BSP 降级种子（ScriptMapService 读取；缺省用 DEFAULT_BSP_SEED=20260801，同 seed 同输出确定性）
       bsp-seed: 20260801
     discussion:
@@ -132,6 +156,38 @@ roleplay:
     provider-url: ""
     provider-key: ""
     model: ""
+  ai-image:
+    # P-0810-01（本地 ComfyUI + Pony V6 XL 角色表情集预生成）：
+    #   comfyui-base-url=本地 ComfyUI API 地址（POST /prompt + GET /history/{id} + GET /view）
+    #   output-dir=生成图片落盘目录（默认 src/main/resources/static/ai-images，URL 直接 /ai-images/...，
+    #     AiImageConfig 另注册 file: 资源映射兜底，jar 运行亦可达；同目录族 ./data/ 可选）
+    #   pool-size=生成线程池大小（同时并发提交给 ComfyUI 的任务数）
+    #   timeout-seconds=单图生成总超时（提交+轮询，超时任务标记失败）
+    #   poll-interval-ms=/history 轮询间隔
+    #   lora-name=Pony 像素风 LoRA 文件名（空=不使用 LoRA，工作流自动改接 UNETLoader/CLIPLoader）
+    #   rmbg-model=P-0810-04 RMBG-1.4 抠背景 ONNX 模型路径（不存在=跳过抠图降级保留原图）
+    #   rmbg-enabled=P-0810-04 抠背景总开关（默认 true；false=只存原图不产透明版）
+    #   img2img-denoise=P-0810-05 表情 img2img 强度（默认 0.5；0.45 实测脸型/发型/服装 100% 保持）
+    #   characters=初始角色注册表（id/name/appearance 外貌描述/style 风格描述——风格必须固定，
+    #     同角色固定外貌模板+固定风格词+固定 seed（角色 ID hash）保证同一角色风格一致）
+    comfyui-base-url: "http://127.0.0.1:8188"
+    output-dir: "src/main/resources/static/ai-images"
+    pool-size: 2
+    timeout-seconds: 300
+    poll-interval-ms: 1000
+    lora-name: "pixel_art_sakuemonq_pony.safetensors"
+    rmbg-model: "D:\\roleplay-java\\models\\rmbg\\rmbg-1.4.onnx"
+    rmbg-enabled: true
+    img2img-denoise: 0.5
+    characters:
+      - id: "heroine"
+        name: "小铃"
+        appearance: "silver long hair, purple eyes, 16-year-old japanese girl, white kimono with red ribbons"
+        style: "retro game character art style, 16-bit pixel art, clean outlines, flat colors"
+      - id: "knight"
+        name: "凯尔"
+        appearance: "golden short hair, blue eyes, handsome young knight, silver and blue armor"
+        style: "retro game character art style, 16-bit pixel art, clean outlines, flat colors"
   broadcast:
     # 演讲与广播合并地基：公告管线节流参数（AnnouncementService 读取）
     window-ms: 1000       # 滑动窗口长度
@@ -149,6 +205,13 @@ roleplay:
     fallback-to-global: true
     # 剧本杀阶段切换 SYSTEM 广播总开关（五处阶段切换→全局横幅通道，进正式版；默认 true=启用）
     script-phase-broadcast: true
+  debug:
+    # 阶段② API 逻辑链可视化（调研报告 docs/ui-api-survey.md §5 方案 C，P-0809-B）：
+    #   trace-enabled=总开关（默认 false=零打点零影响；true=TraceFilter 打点 /api/** +
+    #     LLM/SSE 子调用关联，GET /api/debug/trace 可查）
+    #   trace-size=内存环形缓冲上限（默认 1000 条，硬上限 2000；不进 DB）
+    trace-enabled: false
+    trace-size: 1000
   frontend:
     dev-mode: false
     dev-port: 5173

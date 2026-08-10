@@ -63,3 +63,7 @@ demo/
 # Python 缂栬瘧缂撳瓨
 __pycache__/
 *.pyc
+
+# 大模型/运行时产物不入库
+models/
+src/main/resources/static/ai-images/

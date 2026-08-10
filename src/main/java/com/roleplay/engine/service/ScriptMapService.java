@@ -69,8 +69,10 @@ public class ScriptMapService {
             Map.entry("储藏室", "储藏室"), Map.entry("储物间", "储藏室"),
             Map.entry("书房密室", "密室"), Map.entry("暗室", "密室"));
 
-    /** 生成结果：map + generator 溯源 + 校验信息。 */
-    public record MapResult(Map<String, Object> map, MapValidator.Result validation, List<String> fallbackReasons) {
+    /** 生成结果：map + generator 溯源 + 校验信息。
+     * P-0810-21（P0-2）：warnings = 生成后质量提示（如「rooms 未覆盖剧本地点」），不影响 usedBsp 判定。 */
+    public record MapResult(Map<String, Object> map, MapValidator.Result validation, List<String> fallbackReasons,
+                            List<String> warnings) {
         public boolean usedBsp() {
             return fallbackReasons != null && !fallbackReasons.isEmpty();
         }
@@ -80,7 +82,7 @@ public class ScriptMapService {
      * 生成地图（统一路径）——旧四参签名委托五参（width/height=0 → 默认 24×16，行为不变）。
      */
     public MapResult generateMap(String theme, List<String> locations, List<String> clueLocations, long seed) {
-        return generateMap(theme, locations, clueLocations, seed, 0, 0);
+        return generateMap(theme, null, locations, clueLocations, seed, 0, 0);
     }
 
     /**
@@ -95,6 +97,22 @@ public class ScriptMapService {
      */
     public MapResult generateMap(String theme, List<String> locations, List<String> clueLocations, long seed,
                                  int width, int height) {
+        return generateMap(theme, null, locations, clueLocations, seed, width, height);
+    }
+
+    /**
+     * 生成地图（统一路径，P-0810-21 P0-1：剧本上下文 background 注入——背景/真相仅用于氛围与场景布置参考）。
+     *
+     * @param theme         主题（LLM prompt 输入）
+     * @param background    剧本背景/真相文本（background + truth 拼接；可空——旧调用方/预览路径零影响）
+     * @param locations     剧本 locations[]（房间语义参考 + zones 绑定时序）
+     * @param clueLocations 剧本 clues[].location 去重列表（zones[].clue_location 对齐目标）
+     * @param seed          BSP 降级种子（LLM 路径忽略）
+     * @param width         显式地图宽度（≤0 → 默认 24；超 {@link #LLM_MAX_WIDTH} 时跳过 LLM 直接 BSP）
+     * @param height        显式地图高度（≤0 → 默认 16；超 {@link #LLM_MAX_HEIGHT} 时跳过 LLM 直接 BSP）
+     */
+    public MapResult generateMap(String theme, String background, List<String> locations, List<String> clueLocations,
+                                 long seed, int width, int height) {
         List<String> fallbackReasons = new ArrayList<>();
         int effW = width > 0 ? width : BspMapGenerator.DEFAULT_WIDTH;
         int effH = height > 0 ? height : BspMapGenerator.DEFAULT_HEIGHT;
@@ -116,7 +134,7 @@ public class ScriptMapService {
                 // P-0803-F（超时修复）：单次调用 45s 上限（比剧本 60s 更激进）——地图输出小于剧本，
                 // 45s 未完成说明模型慢/卡 → 快速走 BSP 降级，防止 init 自动串联（剧本+地图两次 LLM）被拖死超前端超时。
                 // P-0803-J：prompt 内嵌本次要求尺寸（预算内）。
-                raw = llmClient.callJson(buildPrompt(theme, locations, clueLocations, effW, effH), 8000, 45);
+                raw = llmClient.callJson(buildPrompt(theme, background, locations, clueLocations, effW, effH), 8000, 45);
             } catch (Exception e) {
                 log.warn("ScriptMapService: LLM call failed (attempt {}/2): {}", attempt + 1, e.getMessage());
                 raw = Map.of();
@@ -171,10 +189,14 @@ public class ScriptMapService {
                 }
                 // P-0803-D（调研项 4 方案 A）：线索地点覆盖补齐——LLM 缺 zone 时自动补全
                 Map<String, Object> covered = ensureClueZoneCoverage(bindClueLocations(base, clueLocations), clueLocations);
+                List<String> warnings = missingRoomWarnings(covered, locations);
+                if (!warnings.isEmpty()) {
+                    log.warn("ScriptMapService: LLM map OK but rooms 未完全覆盖剧本地点: {}", warnings);
+                }
                 log.info("ScriptMapService: LLM map OK (attempt {}), {} zones, {} rooms, {} spawns (coverage +{})",
                         attempt + 1, zoneCount(covered), roomCount(covered), spawnCount(covered),
                         zoneCount(covered) - zoneCount(normalized));
-                return new MapResult(covered, v, fallbackReasons);
+                return new MapResult(covered, v, fallbackReasons, warnings);
             }
             // P-0804-G：坐标宽容修正——LLM 输出校验失败且错误仅为「热点/出生点落在不可通行格」时，
             // 自动将 zones/spawn_points 微调至最近可通行格（collision=0），修复后通过校验则不再降级 BSP。
@@ -188,7 +210,7 @@ public class ScriptMapService {
                         repaired.put("generator", gen);
                         Map<String, Object> covered2 = ensureClueZoneCoverage(bindClueLocations(repaired, clueLocations), clueLocations);
                         log.info("ScriptMapService: LLM map OK after anchor repair (attempt {}), {} zones, {} rooms", attempt + 1, zoneCount(covered2), roomCount(covered2));
-                        return new MapResult(covered2, v2, fallbackReasons);
+                        return new MapResult(covered2, v2, fallbackReasons, missingRoomWarnings(covered2, locations));
                     }
                 }
             }
@@ -206,7 +228,11 @@ public class ScriptMapService {
         // P-0803-D（调研项 4 方案 A）：BSP 兜底地图 zone（房间 A/B/C）与线索脱钩 → 覆盖补齐
         Map<String, Object> covered = ensureClueZoneCoverage(bound, clueLocations);
         log.info("ScriptMapService: BSP map coverage pass: {} → {} zones", zoneCount(bound), zoneCount(covered));
-        return new MapResult(covered, v, fallbackReasons);
+        List<String> warnings = missingRoomWarnings(covered, locations);
+        if (!warnings.isEmpty()) {
+            log.warn("ScriptMapService: BSP map rooms 未覆盖剧本地点（BSP 兜底房间为占位名，符合既有语义）: {}", warnings);
+        }
+        return new MapResult(covered, v, fallbackReasons, warnings);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -269,6 +295,58 @@ public class ScriptMapService {
         }
         return trimmed;
     }
+
+    // ═══════════════════════════════════════════════════════════
+    //  P0-2（P-0810-21）：rooms 覆盖 locations 校验（贴合度护栏）
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * P0-2：计算剧本地点中「未被 rooms[].name ∪ zones[].clue_location 覆盖」的地点列表。
+     * 复用 {@link #matchLocation} 同义词宽容匹配（与 zones 侧 bindClueLocations 同一容错风格），
+     * 避免「餐厅 vs 厨房」类命名差异误报；zones 侧已由 ensureClueZoneCoverage 自动补齐（不误杀），
+     * 此处仅 rooms 侧的质量提示——缺失不降级 BSP（房间数 ≠ 地点数不是校验错误）。
+     */
+    public static List<String> missingRoomLocations(Map<String, Object> map, List<String> locations) {
+        if (map == null || locations == null || locations.isEmpty()) return List.of();
+        List<String> missing = new ArrayList<>();
+        for (String loc : locations) {
+            if (loc == null || loc.isBlank()) continue;
+            String standard = loc.trim();
+            if (coveredBy(map, standard)) continue;
+            missing.add(standard);
+        }
+        return missing;
+    }
+
+    /** 单个地点是否被 rooms[].name（宽容匹配）或 zones[].clue_location（已归一精确匹配）覆盖。 */
+    private static boolean coveredBy(Map<String, Object> map, String standard) {
+        if (map.get("rooms") instanceof List<?> rooms) {
+            for (Object o : rooms) {
+                if (o instanceof Map<?, ?> r) {
+                    String name = MapContract.str(r.get("name"), "");
+                    if (!name.isBlank() && matchLocation(name, List.of(standard)).equals(standard)) return true;
+                }
+            }
+        }
+        if (map.get("zones") instanceof List<?> zones) {
+            for (Object o : zones) {
+                if (o instanceof Map<?, ?> z) {
+                    String cl = MapContract.str(z.get("clue_location"), "");
+                    if (cl.trim().equals(standard)) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /** 生成后质量提示（缺失地点 → warning 文案；无缺失 → 空列表）。 */
+    private static List<String> missingRoomWarnings(Map<String, Object> map, List<String> locations) {
+        List<String> missing = missingRoomLocations(map, locations);
+        if (missing.isEmpty()) return List.of();
+        return List.of("rooms 未覆盖剧本地点（" + String.join("、", missing)
+                + "）——地图房间与剧本地点存在偏差；搜证可用性已由 zones 覆盖兜底（ensureClueZoneCoverage）");
+    }
+
 
     // ═══════════════════════════════════════════════════════════
     //  线索地点覆盖补齐 pass（调研项 4 方案 A：G4-1/G4-2）
@@ -390,14 +468,25 @@ public class ScriptMapService {
 
     /** 地图生成 prompt（主题 + 地点/线索地点 → 契约 v1 JSON，zones.clue_location 与线索地点对齐）。旧签名委托新签名（尺寸不指定）。 */
     public static String buildPrompt(String theme, List<String> locations, List<String> clueLocations) {
-        return buildPrompt(theme, locations, clueLocations, 0, 0);
+        return buildPrompt(theme, null, locations, clueLocations, 0, 0);
     }
 
     /** 地图生成 prompt（P-0803-J：显式尺寸嵌入——预算内 LLM 路径按本次要求尺寸输出）。 */
     public static String buildPrompt(String theme, List<String> locations, List<String> clueLocations,
                                      int width, int height) {
+        return buildPrompt(theme, null, locations, clueLocations, width, height);
+    }
+
+    /**
+     * 地图生成 prompt（P-0810-21 P0-1：剧本上下文注入——background 段仅用于氛围与场景布置参考，
+     * rooms/zones 地点仍以「剧本地点」为准，防止 LLM 把背景中的场景名词当作地点来源）。
+     */
+    public static String buildPrompt(String theme, String background, List<String> locations, List<String> clueLocations,
+                                     int width, int height) {
         String locs = locations == null || locations.isEmpty() ? "（自由发挥 4-6 个地点）" : String.join("、", locations);
         String clues = clueLocations == null || clueLocations.isEmpty() ? "（自由发挥）" : String.join("、", clueLocations);
+        String bg = (background == null || background.isBlank())
+                ? "（无背景信息——仅按剧本地点生成）" : background.trim();
         String sizeHint = (width > 0 && height > 0)
                 ? "width/height 为格数（本次要求 " + width + " × " + height
                 + "，layers.ground/collision 二维数组必须严格为 height 行 × width 列）"
@@ -406,7 +495,9 @@ public class ScriptMapService {
             你是一个剧本杀地图设计师。请为以下剧本生成一张 2D 地图（地图 JSON 契约 v1）。
 
             剧本主题：%s
-            剧本地点（rooms[].name / zones 应覆盖这些地点）：%s
+            剧本背景（仅用于氛围与场景布置参考——rooms/zones 的地点仍以「剧本地点」为准，
+            不得把背景中的场景名词当作地点来源）：%s
+            剧本地点（rooms[].name 必须严格覆盖这些地点，不得遗漏、不得凭空增减；zones 也应覆盖这些地点）：%s
             线索所在地点（zones[].clue_location 必须逐一取自这里）：%s
 
             地图要求：
@@ -417,7 +508,8 @@ public class ScriptMapService {
             - 开阔布局：地图可通行格（collision=0）必须占全图一半以上；墙体只用于外边界与房间分隔，
               禁止用墙大面积填满地图；房间/花园/走廊之间留出开阔空地
             - 热点（zones）均匀分布在各房间/花园/空地，热点之间间隔至少 4 格，全部落在可通行格上
-            - rooms[]：每个房间 {id, name, x, y, w, h, tags}，x/y 为左上角格坐标，房间之间用走廊连通
+            - rooms[]：每个房间 {id, name, x, y, w, h, tags}，x/y 为左上角格坐标，房间之间用走廊连通；
+              房间名单必须与「剧本地点」一一对应（不得遗漏任何地点，也不得凭空增加地点）
             - 形状自由（P-0804-H）：房间形状由你自由设计——可为矩形，也可为 L 形/T 形/凹形等不规则形状
               （不规则房间用 2-3 个同 id 同 name 的矩形组合表示，彼此相邻拼成整体）；不要所有房间都千篇一律的规整矩形
             - 墙体类别最多两层（P-0804-H）：任何墙体厚度最多 2 层瓦片，禁止 3 格以上厚墙浪费空间
@@ -428,27 +520,27 @@ public class ScriptMapService {
                 ground:    [[2,2,2,2,2,2],[2,1,1,1,1,2],[2,1,1,1,1,2],[2,1,1,1,1,2],[2,1,1,1,1,2],[2,2,1,2,2,2]]
               花园/庭院等开阔区域不需要围合墙，但建筑物内每个房间必须围合
             - 房间可声明门位与墙样式（P-0804-H，程序将按声明确定性围合）：
-              doors: [{"side": "top|bottom|left|right", "offset": 0~1}]（offset 为该边相对位置，0.5=正中；每边最多 1 个门，
-              不声明的边程序自动在正中开门洞）；wallStyle: "brick|wood|stone"（可选，墙瓦片样式）；
+              doors: [{\"side\": \"top|bottom|left|right\", \"offset\": 0~1}]（offset 为该边相对位置，0.5=正中；每边最多 1 个门，
+              不声明的边程序自动在正中开门洞）；wallStyle: \"brick|wood|stone\"（可选，墙瓦片样式）；
               每个房间建议声明 1-3 个门（面向走廊/相邻房间/花园的方向），大门房间（如别墅大门）声明 offset 0.5
             - corridors[]：可选，{id, from, to, points}，points 为四邻接连通路径 [[x,y],...]
             - 不要输出 layers（ground/collision 网格）——墙体、地面、外边界由程序确定性生成，
               你只需声明房间几何与门位；程序会为每个房间四边画 1 层墙并按 doors 开门洞
-            - zones[]：搜证热点（type 固定 "search"），每个热点 {id, name, type, x, y, radius, clue_location, prompt}，
+            - zones[]：搜证热点（type 固定 \"search\"），每个热点 {id, name, type, x, y, radius, clue_location, prompt}，
               clue_location 必须与「线索所在地点」一致，x/y 必须在可通行格上；
-              可选 door 型热点（type="door"，通往其他地图的门）：{id, name, type, x, y, radius, target}，
-              target 为目标地图 id（如 "map_2"），同样必须落在可通行格上
+              可选 door 型热点（type=\"door\"，通往其他地图的门）：{id, name, type, x, y, radius, target}，
+              target 为目标地图 id（如 \"map_2\"），同样必须落在可通行格上
             - spawn_points[]：{id, type(player/npc), x, y}，1 个玩家出生点 + 2-4 个 npc 出生点，必须在可通行格上
 
             返回JSON格式（不要任何markdown标记，纯JSON；不输出 layers 网格）：
-            {"map_version": 1, "map_id": "脚本地图", "name": "地图名", "theme": "主题描述",
-             "tile_size": 32, "width": %d, "height": %d,
-             "rooms": [{"id": "room_1", "name": "客厅", "x": 1, "y": 1, "w": 6, "h": 5,
-                        "doors": [{"side": "bottom", "offset": 0.5}], "tags": ["searchable"]}],
-             "corridors": [],
-             "zones": [{"id": "z_1", "name": "客厅八仙桌", "type": "search", "x": 3, "y": 3, "radius": 1, "clue_location": "客厅", "prompt": "..."}],
-             "spawn_points": [{"id": "sp_player", "type": "player", "x": 2, "y": 2}]}
-            """.formatted(theme, locs, clues, sizeHint, width > 0 ? width : 24, height > 0 ? height : 16);
+            {\"map_version\": 1, \"map_id\": \"脚本地图\", \"name\": \"地图名\", \"theme\": \"主题描述\",
+             \"tile_size\": 32, \"width\": %d, \"height\": %d,
+             \"rooms\": [{\"id\": \"room_1\", \"name\": \"客厅\", \"x\": 1, \"y\": 1, \"w\": 6, \"h\": 5,
+                        \"doors\": [{\"side\": \"bottom\", \"offset\": 0.5}], \"tags\": [\"searchable\"]}],
+             \"corridors\": [],
+             \"zones\": [{\"id\": \"z_1\", \"name\": \"客厅八仙桌\", \"type\": \"search\", \"x\": 3, \"y\": 3, \"radius\": 1, \"clue_location\": \"客厅\", \"prompt\": \"...\"}],
+             \"spawn_points\": [{\"id\": \"sp_player\", \"type\": \"player\", \"x\": 2, \"y\": 2}]}
+            """.formatted(theme, bg, locs, clues, sizeHint, width > 0 ? width : 24, height > 0 ? height : 16);
     }
 
     // ── 溯源信息 ──

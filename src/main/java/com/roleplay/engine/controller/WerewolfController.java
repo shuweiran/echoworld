@@ -199,13 +199,15 @@ public class WerewolfController {
         return ResponseEntity.ok(Map.of("result", result));
     }
 
-    /** P-0802-F：白天讨论人类发言（接入讨论引擎，下轮被排空入发言记录）。 */
+    /** P-0802-F：白天讨论人类发言（接入讨论引擎，下轮被排空入发言记录）。
+     *  P-0810-17（B4）：防御性拷贝 —— service 返回 map 后需追加 session_id，不可变 map（Map.of）
+     *  再 put 会 500（service 侧已改 LinkedHashMap 根治，此处兜底防其他返回路径/未来回归）。 */
     @PostMapping("/discussion_say")
     public ResponseEntity<Map<String, Object>> discussionSay(@RequestBody Map<String, String> body) {
         String player = body.getOrDefault("player", "");
         String message = body.getOrDefault("message", "");
         String sessionId = playerSessions.getOrDefault(player, currentSessionId);
-        Map<String, Object> result = werewolfService.discussionSay(sessionId, player, message);
+        Map<String, Object> result = new LinkedHashMap<>(werewolfService.discussionSay(sessionId, player, message));
         result.put("session_id", sessionId);
         return ResponseEntity.ok(result);
     }
