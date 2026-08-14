@@ -69,18 +69,20 @@ class TrackDistanceConfigTest {
         // 100px 双人 + 无触发 → allMerged 路径（公开聊天）
         assertEquals(Track.Mode.MERGED, result.get("A").type());
 
-        // 触发空间路径时（5 人密集）显式距离生效：80px 双人 MERGED / 150px 对 WEAK
+        // 触发空间路径时显式距离生效：C(0)/D(80) 互距 80px < 100 → 双人 MERGED；
+        // E(190) 距 C=190px / 距 D=110px 均 ∈ [100, 200) 听觉带 → WEAK。
+        // （注：E 不能放 150px——距 D(80) 仅 70px < 100px 会合法落入 MERGED，几何与断言矛盾。）
         TrackDirectorService dir2 = new TrackDirectorService();
         dir2.setConversationDistance(100);
         AgentState c = agent("C", 0, 0);
         AgentState d = agent("D", 80, 0);   // < 100 → MERGED
-        AgentState e = agent("E", 150, 0);  // ∈ [100, 200) → WEAK
+        AgentState e = agent("E", 190, 0);  // 距 C=190 / 距 D=110，均 ∈ [100, 200) → WEAK
         c.setStance(AgentState.Stance.FOR);
         d.setStance(AgentState.Stance.AGAINST);   // 立场冲突 +40 → 触发 Track
         Map<String, TrackAssignment> r2 = dir2.assign(List.of(c, d, e), Map.of());
         assertEquals(Track.Mode.MERGED, r2.get("C").type());
         assertEquals(Track.Mode.MERGED, r2.get("D").type());
-        assertEquals(Track.Mode.WEAK, r2.get("E").type(), "150px 在 100px 会话距离外 → WEAK");
+        assertEquals(Track.Mode.WEAK, r2.get("E").type(), "距两成员均在 100px 会话距离外（听觉带内）→ WEAK");
     }
 
     // ── 配置绑定：AppConfig + yml 双份 ─────────────────────────
