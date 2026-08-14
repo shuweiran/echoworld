@@ -332,6 +332,32 @@ public class ScriptController {
     }
 
     /**
+     * P-0814-H（热点/搜证点交互系统）：对地图交互点执行统一动作键交互。
+     * body: session_id（可选，缺省按 player 回退 currentSessionId）/ player / player_key（可选，C3 身份认证）/
+     *       map_id（可选，缺省当前图）/ decor_id（可选 —— 与 tile 至少其一，显式目标）/
+     *       tile（可选，"x,y" 目标格坐标 —— 无 decor_id 时按优先级链解析 decor 实体 &gt; tileProps.action &gt; 环境占位）/
+     *       x·y（可选，玩家瓦片坐标 —— 靠近校验 Chebyshev 半径，缺省跳过）。
+     * 响应：动作执行结果（dialog 文本 / menu 数据 / items 线索授予 / flags / sounds·anims 占位 / state 实例状态 /
+     *       processed 已处理 / result 汇总 / error 失败原因）。
+     */
+    @PostMapping("/interact")
+    public ResponseEntity<Map<String, Object>> interact(@RequestBody Map<String, String> body) {
+        String player = body.getOrDefault("player", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        String mapId = body.getOrDefault("map_id", "");
+        String decorId = body.getOrDefault("decor_id", "");
+        String tile = body.getOrDefault("tile", "");
+        // 玩家瓦片坐标（可选；非法/缺失 → null = 跳过靠近校验）
+        Integer px = parseIntOrNull(body.get("x"));
+        Integer py = parseIntOrNull(body.get("y"));
+        String sessionId = body.getOrDefault("session_id", playerSessions.getOrDefault(player, currentSessionId));
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.interact(sessionId, player, playerKey, mapId, decorId, tile, px, py));
+    }
+
+    /**
      * 批次 D: 人类发言入口（人机混合讨论）—— 人类发言权豁免（不过门控直接注入讨论流）；
      * 消息中 @角色名 → 目标 AI 强制发言；clue=true → 公开新线索，相关 AI 按动机触发。
      */

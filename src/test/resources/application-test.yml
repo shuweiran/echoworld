@@ -40,8 +40,50 @@ roleplay:
     parallel-agents: false
     # C-2 串行调度开关：与主 yml 同步（默认 false=并行；测试中经 setSerialRound 切换验证串行路径）
     serial: false
+    # P-0813-A: 与主 yml 同步默认值（3000ms；0=禁用）——一般模式每轮完成后延时自动跑下一轮，
+    # 玩家发言打断 pending；测试用例经 setAutoContinueMs 显式缩短延时验证调度
+    # P-0814-A: 本键仅在 playback-driven=false 时生效（定时续轮）
+    auto-continue-ms: 3000
+    # P-0814-A: 点击驱动开关——测试 yml 保持 false（旧定时行为），新行为由测试经
+    # setPlaybackDriven(true) 显式验证（与主 yml true 解耦，防 Spring 上下文测试误入等待态）
+    playback-driven: false
+    # P-0814-B: 与主 yml 同步（2D 对话组等待播出完毕超时；测试经 setGroupAwaitTimeoutMs 显式设置）
+    group-await-timeout-ms: 30000
+    # P-0813-B: 与主 yml 同步默认值（10；0=禁用）——校准轮间隔；测试用例经 setCalibrateEvery 显式设置
+    # （直接构造 RouterService 不经 Spring 时 @Value 不注入 → 默认 0=禁用，既有测试零影响）
+    # P-0813-C: 默认 6→10（与主 yml 同步）
+    calibrate-every: 10
     agent-max-tokens: 300
     arbiter-max-tokens: 150
+  pacing:
+    # P-0813-F：与主 yml 同步默认值（测试断言 roleplay.pacing.* 绑定与默认）；
+    # 测试用例可直接 setPacing 覆盖或经 AppConfig 断言。
+    enabled: true
+    director-interval-ms: 15000
+    conversation-cooldown-ms: 8000
+    round-cooldown-ms: 2000
+    group-round-cooldown-ms: 3000
+    idle-round-multiplier: 1.5
+    inactive-track-multiplier: 4.0
+    move-speed-base: 45
+    move-speed-random-range: 35
+    #   move-speed-player-base / move-speed-player-random-range=玩家角色（playerControlled）分速
+    #     （P-0814-I，默认 90+rand×15 → 90-105 px/s）——玩家 WASD/点击移动更跟手；AI 保持 45-80 降密度
+    move-speed-player-base: 90
+    move-speed-player-random-range: 15
+    #   speech-bubble-hold-ms=非玩家轨道发言的气泡停留/展示时长基准（P-0813-H，默认
+    #     4000ms；经 conversation-status 的 pacing.speechBubbleHoldMs 下发，前端可作
+    #     气泡展示时长/展示间隔参数）
+    speech-bubble-hold-ms: 4000
+  director:
+    # P-0813-I：与主 yml 同步默认值（测试断言 roleplay.director.* 绑定与默认）；
+    # 测试用例可直接经 SchedulerService 直构或 SimulationService 注入覆盖。
+    schedule-enabled: true
+    schedule-window-duration-ms: 300000
+    schedule-slots: 6
+  track:
+    # P-0815-A：与主 yml 同步默认值（测试断言 roleplay.track.conversation-distance 绑定与默认）
+    conversation-distance: 70
   mode:
     default: "free"
     language: "zh"

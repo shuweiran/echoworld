@@ -86,7 +86,7 @@ class RouterServiceAutoFirstRoundTest {
         actions.put("凯尔", "active");
         track.put("agent_actions", actions);
         when(arbiter.configureTracks(anyString(), anyList(), anyString(), anyString(),
-                anyString(), anyList(), anyList(), anySet()))
+                anyString(), anyList(), anyList(), anySet(), any()))
                 .thenReturn(new TrackConfigResult(List.of(track), "test"));
         when(arbiter.integrateOutputs(anyString(), anyList(), anyList(), anyBoolean()))
                 .thenReturn(Map.of("narration", "整合旁白"));
@@ -119,17 +119,17 @@ class RouterServiceAutoFirstRoundTest {
         assertTrue(sse.roundComplete.await(10, TimeUnit.SECONDS), "自动第一轮应在后台完成");
         assertEquals(1, router.getState().get("round"), "起局后自动第一轮 round=1");
 
-        // agent 消息入史（小铃/凯尔各一条）+ 主控整合旁白 → message_count ≥ 3
-        assertTrue((Integer) router.getState().get("message_count") >= 3,
-                "消息应含 2 条 agent + 1 条主控整合, count=" + router.getState().get("message_count"));
+        // agent 消息入史（小铃/凯尔各一条）；P-0811-G：一般模式已删除主控整合叙事 → 无 arbiter 消息
+        assertEquals(2, router.getState().get("message_count"),
+                "消息应只含 2 条 agent（一般模式无主控整合）, count=" + router.getState().get("message_count"));
 
-        // SSE 事件序列：round_start → arbiter_task → agent_output×2 → arbiter_integrate → round_complete
+        // SSE 事件序列：round_start → arbiter_task → agent_output×2 → round_complete（P-0811-G：一般模式不再推 arbiter_integrate）
         List<String> types = sse.eventTypes;
         assertTrue(types.contains("round_start"), "应推 round_start: " + types);
         assertTrue(types.contains("arbiter_task"), "应推 arbiter_task: " + types);
         long agentOutputs = types.stream().filter("agent_output"::equals).count();
         assertEquals(2, agentOutputs, "2 个 agent 各推一条 agent_output: " + types);
-        assertTrue(types.contains("arbiter_integrate"), "应推 arbiter_integrate: " + types);
+        assertFalse(types.contains("arbiter_integrate"), "一般模式应不推 arbiter_integrate（整合叙事已删除）: " + types);
         assertTrue(types.contains("round_complete"), "应推 round_complete: " + types);
         // 顺序：round_start 在 agent_output 之前、round_complete 在最后
         assertTrue(types.indexOf("round_start") < types.indexOf("agent_output"));

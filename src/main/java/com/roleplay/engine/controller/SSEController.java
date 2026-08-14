@@ -182,17 +182,27 @@ public class SSEController implements SseBroadcaster {
         broadcast("arbiter_task", Map.of("round", round, "tasks", tasks));
     }
 
-    /** agent_output → {agent_name, content, track_id, track_label, track_mode, visible_to} */
+    /** agent_output → {session_id?, agent_name, content, track_id, track_label, track_mode, visible_to} */
     public void broadcastAgentOutput(String agentName, String content, String trackId,
                                      String trackLabel, String trackMode, List<String> visibleTo) {
-        broadcast("agent_output", Map.of(
-            "agent_name", agentName,
-            "content", content == null ? "" : content,
-            "track_id", trackId == null ? "main" : trackId,
-            "track_label", trackLabel,
-            "track_mode", trackMode,
-            "visible_to", visibleTo == null ? List.of() : visibleTo
-        ));
+        broadcastAgentOutput(null, agentName, content, trackId, trackLabel, trackMode, visibleTo);
+    }
+
+    /**
+     * P-0811-G(B-2)：带会话标识的 agent_output —— 载荷含 session_id（前端可按当前会话过滤，
+     * 多会话并存时不串扰）。全局广播语义不变（仍广播给所有连接）；仅当 sessionId 非空时写入载荷。
+     */
+    public void broadcastAgentOutput(String sessionId, String agentName, String content, String trackId,
+                                     String trackLabel, String trackMode, List<String> visibleTo) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("agent_name", agentName);
+        payload.put("content", content == null ? "" : content);
+        payload.put("track_id", trackId == null ? "main" : trackId);
+        payload.put("track_label", trackLabel);
+        payload.put("track_mode", trackMode);
+        payload.put("visible_to", visibleTo == null ? List.of() : visibleTo);
+        broadcast("agent_output", payload);
     }
 
     /** agent_silent → {agent_name} */
@@ -201,19 +211,26 @@ public class SSEController implements SseBroadcaster {
     }
 
     /**
-     * P-0802-M：agent_token → {agent_name, delta, track_id, track_label, track_mode} ——
+     * P-0802-M：agent_token → {session_id?, agent_name, delta, track_id, track_label, track_mode} ——
      * LLM 流式生成增量片（SSE 推送，前端逐字实时渲染）；完整内容仍由 agent_output 结算
      * （前端收到 agent_output 后以完整文本替换增量草稿）。
+     * P-0811-G(B-2)：带会话标识的重载（多会话并存时前端按 session_id 过滤，防串扰）。
      */
     public void broadcastAgentToken(String agentName, String delta, String trackId,
                                     String trackLabel, String trackMode) {
-        broadcast("agent_token", Map.of(
-            "agent_name", agentName == null ? "" : agentName,
-            "delta", delta == null ? "" : delta,
-            "track_id", trackId == null ? "main" : trackId,
-            "track_label", trackLabel == null ? "" : trackLabel,
-            "track_mode", trackMode == null ? "merged" : trackMode
-        ));
+        broadcastAgentToken(null, agentName, delta, trackId, trackLabel, trackMode);
+    }
+
+    public void broadcastAgentToken(String sessionId, String agentName, String delta, String trackId,
+                                    String trackLabel, String trackMode) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("agent_name", agentName == null ? "" : agentName);
+        payload.put("delta", delta == null ? "" : delta);
+        payload.put("track_id", trackId == null ? "main" : trackId);
+        payload.put("track_label", trackLabel == null ? "" : trackLabel);
+        payload.put("track_mode", trackMode == null ? "merged" : trackMode);
+        broadcast("agent_token", payload);
     }
 
     /** arbiter_integrate → {round, narration} */
@@ -221,9 +238,17 @@ public class SSEController implements SseBroadcaster {
         broadcast("arbiter_integrate", Map.of("round", round, "narration", narration == null ? "" : narration));
     }
 
-    /** round_complete → {round} */
+    /** round_complete → {session_id?, round} */
     public void broadcastRoundComplete(int round) {
-        broadcast("round_complete", Map.of("round", round));
+        broadcastRoundComplete(null, round);
+    }
+
+    /** P-0811-G(B-2)：带会话标识的 round_complete（多会话并存时前端按 session_id 过滤）。 */
+    public void broadcastRoundComplete(String sessionId, int round) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("round", round);
+        broadcast("round_complete", payload);
     }
 
     /** compression → {summary} */
@@ -231,14 +256,20 @@ public class SSEController implements SseBroadcaster {
         broadcast("compression", Map.of("summary", summary == null ? "" : summary));
     }
 
-    /** user_input → {content, category, character, round} */
+    /** user_input → {session_id?, content, category, character, round} */
     public void broadcastUserInput(String content, String category, String character, int round) {
-        broadcast("user_input", Map.of(
-            "content", content == null ? "" : content,
-            "category", category == null ? "" : category,
-            "character", character == null ? "" : character,
-            "round", round
-        ));
+        broadcastUserInput(null, content, category, character, round);
+    }
+
+    /** P-0811-G(B-2)：带会话标识的 user_input（多会话并存时前端按 session_id 过滤）。 */
+    public void broadcastUserInput(String sessionId, String content, String category, String character, int round) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("content", content == null ? "" : content);
+        payload.put("category", category == null ? "" : category);
+        payload.put("character", character == null ? "" : character);
+        payload.put("round", round);
+        broadcast("user_input", payload);
     }
 
     /** auto_complete → {rounds} */

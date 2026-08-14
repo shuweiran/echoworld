@@ -172,7 +172,9 @@ public class TrackStrategy implements ConversationStrategy {
             }
 
             if (detected != Emotion.NEUTRAL) state.setEmotion(detected);
-            state.setCurrentMessage(cleanResponse);
+            // P-0813-K：玩家成员 currentMessage 是单次消费的输入通道（executeRound 已清空），
+            // 不回写其发言（防下一轮重复回放；NPC 行为不变）。
+            if (!state.isPlayerControlled()) state.setCurrentMessage(cleanResponse);
 
             if (modeOf(group, name) == Track.Mode.ISOLATED) {
                 // ISOLATED members do not participate in the group conversation:

@@ -86,7 +86,8 @@ public class DebateStrategy implements ConversationStrategy {
             }
 
             state.setEmotion(detected);
-            state.setCurrentMessage(clean);
+            // P-0813-K：玩家成员不回写 currentMessage（单次消费输入通道，见 executeRound）
+            if (!state.isPlayerControlled()) state.setCurrentMessage(clean);
             group.recordTurn(name, clean);
 
             if (detected == Emotion.ANGRY) angryCount++;

@@ -24,9 +24,13 @@ public class AgentState {
     private volatile boolean hasTarget = false;
     /** Phase 4: 手动指定的目标（/target 端点）——MovementConstraint 不得覆盖。 */
     private volatile boolean manualTarget = false;
+    /** P-0813-E：manualTarget 置位时间戳（ms）——导演轮跳过期判定用；-1 = 无手动目标。 */
+    private volatile long manualTargetSince = -1L;
     private volatile Stance stance = Stance.NEUTRAL;
     private volatile double attention = 1.0;
     private volatile boolean playerControlled = false;
+    /** P-0813-I：当前日程窗口文案（SchedulerService 每 tick 写入，SSE 可观测 + Agent 系统提示注入源）。 */
+    private volatile String scheduleText = "";
 
     public enum Stance { FOR, AGAINST, NEUTRAL }
 
@@ -88,7 +92,21 @@ public class AgentState {
     public void setHasTarget(boolean hasTarget) { this.hasTarget = hasTarget; }
 
     public boolean isManualTarget() { return manualTarget; }
-    public void setManualTarget(boolean manualTarget) { this.manualTarget = manualTarget; }
+
+    /**
+     * P-0813-E：置位/释放手动目标标记并同步时间戳（置位→now，释放→-1）。
+     * 时间戳供导演轮判断「手动目标是否仍新鲜」（不覆盖），超时后释放由导演接管。
+     */
+    public void setManualTarget(boolean manualTarget) {
+        this.manualTarget = manualTarget;
+        this.manualTargetSince = manualTarget ? System.currentTimeMillis() : -1L;
+    }
+
+    /** P-0813-E：手动目标置位时间戳（-1 = 无手动目标）。 */
+    public long getManualTargetSince() { return manualTargetSince; }
+
+    /** P-0813-E（测试支持，包可见）：直接改写时间戳（导演跳过期的单测无需等待真实时长）。 */
+    void setManualTargetSinceForTest(long ts) { this.manualTargetSince = ts; }
 
     /** Phase 4 便捷方法：设置目标点并标记已有目标。 */
     public void setTarget(double x, double y) {
@@ -106,11 +124,16 @@ public class AgentState {
     public boolean isPlayerControlled() { return playerControlled; }
     public void setPlayerControlled(boolean playerControlled) { this.playerControlled = playerControlled; }
 
+    /** P-0813-I：当前日程窗口文案（无窗口/未接管 → 空串）。 */
+    public String getScheduleText() { return scheduleText; }
+    public void setScheduleText(String scheduleText) { this.scheduleText = scheduleText == null ? "" : scheduleText; }
+
     public void clearTarget() {
         this.hasTarget = false;
         this.targetX = -1;
         this.targetY = -1;
         this.manualTarget = false;
+        this.manualTargetSince = -1L;
     }
 
     public double distanceTo(AgentState other) {
@@ -135,6 +158,7 @@ public class AgentState {
         map.put("attention", Math.round(attention * 100.0) / 100.0);
         map.put("playerControlled", playerControlled);
         map.put("manualTarget", manualTarget);
+        map.put("schedule", scheduleText);
         if (hasTarget) {
             map.put("targetX", Math.round(targetX * 100.0) / 100.0);
             map.put("targetY", Math.round(targetY * 100.0) / 100.0);

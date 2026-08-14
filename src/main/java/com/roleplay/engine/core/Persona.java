@@ -110,7 +110,9 @@ public class Persona {
         // Layer 0 行为规则
         Object layer0 = layers.get("layer0");
         if (layer0 instanceof List<?> rules && !rules.isEmpty()) {
-            sb.append("【Layer 0 行为规则（不可违背，最高优先级）】\n");
+            // P-0813-B：措辞松绑 —— 「不可违背最高优先级」标签弱化为「核心行为准则」
+            // （正说优于反说：允许自然融入与合理演变，仅核心身份不可违背）
+            sb.append("【Layer 0 核心行为准则（自然融入对话，可随剧情合理演变，但不得违背核心身份）】\n");
             int idx = 1;
             for (Object r : rules) {
                 if (r == null || String.valueOf(r).isBlank()) continue;
@@ -142,10 +144,15 @@ public class Persona {
                 appendLabeledValue(sb, e.getKey(), e.getValue(), "  - ");
             }
             if (samples instanceof List<?> lines && !lines.isEmpty()) {
+                // P-0813-B：示例降级为「语气样本」—— 渲染前加防复读指令行，且最多输出 3 条
+                // （存量数据不动，仅渲染截断；示例越少越灵活，防逐字复述）
+                sb.append("  - 使用提示：以下示例仅提示语气节奏与说话习惯，禁止逐字复述，对话中应结合当下情境即兴发挥。\n");
                 sb.append("  - 原话示例：\n");
+                int shown = 0;
                 for (Object line : lines) {
                     if (line == null || String.valueOf(line).isBlank()) continue;
                     sb.append("      • ").append(line).append("\n");
+                    if (++shown >= 3) break; // P-0813-B：示例最多输出 3 条
                 }
             }
             sb.append("\n");
@@ -188,6 +195,7 @@ public class Persona {
         sb.append("6. 语言对齐：始终使用用户输入的语言回复。\n\n");
 
         appendIdentityAndPerformance(sb, false);
+        appendPositiveClosure(sb);
         return sb.toString();
     }
 
@@ -212,16 +220,8 @@ public class Persona {
                 if (e.getKey() == null || "sampleLines".equals(e.getKey())) continue;
                 appendLabeledValue(sb, e.getKey(), e.getValue(), "  - ");
             }
-            Object samples = s2.get("sampleLines");
-            if (samples instanceof List<?> lines && !lines.isEmpty()) {
-                sb.append("  - 原话示例：\n");
-                int shown = 0;
-                for (Object line : lines) {
-                    if (line == null || String.valueOf(line).isBlank()) continue;
-                    sb.append("      • ").append(line).append("\n");
-                    if (++shown >= 2) break;
-                }
-            }
+            // P-0813-B：轻量版不再输出 sampleLines 原句（原句是全量 prompt 的复读燃料，
+            // 轻量版只保留其他表达风格字段：口头禅/句式/emoji 习惯）
             sb.append("\n");
         }
 
@@ -238,7 +238,18 @@ public class Persona {
         }
 
         appendIdentityAndPerformance(sb, true);
+        appendPositiveClosure(sb);
         return sb.toString();
+    }
+
+    /**
+     * P-0813-B：正向收尾指令（完整版与轻量版共用）—— 允许即兴发挥与不完美回应，
+     * 风格可随情境变化，不必重复固定动作或口头禅（治「复读机」，正说优于反说）。
+     */
+    private static void appendPositiveClosure(StringBuilder sb) {
+        sb.append("【行动收尾】\n");
+        sb.append("基于以上人设自然行动：说话结合当下场景与对象，允许情绪波动、即兴发挥与不完美回应；"
+                + "风格可随情境变化，不必重复固定动作或口头禅。\n");
     }
 
     /** 身份锁定 + 表演规则（旧格式尾部，五层格式复用，保持项目一贯输出约束）。 */

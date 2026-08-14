@@ -8,6 +8,7 @@ import com.roleplay.engine.interrupt.WorldEventBus;
 import com.roleplay.engine.llm.LLMClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Component;
 
@@ -58,6 +59,24 @@ public class SessionRegistry {
     private final PlayerIdentityService identityService;
     /** P-0810-09：场景目标服务（一般模式目标生成/判定，透传给会话 router 实例；null=未启用）。 */
     private final SceneGoalService sceneGoalService;
+    /** P-0813-A：自动续轮延时（roleplay.round.auto-continue-ms，毫秒；0=禁用）——
+     *  透传给会话专属 router 实例。@Value 只对 Spring bean 生效，createRouter 是 new 出来的，
+     *  必须显式注入（同 serialRound 的既有限制）。 */
+    @Value("${roleplay.round.auto-continue-ms:3000}")
+    private long autoContinueMs = 0;
+    /** P-0814-A：点击驱动对话模式开关（roleplay.round.playback-driven）——透传给会话专属 router 实例
+     *  （同 autoContinueMs 的 @Value 限制；测试 yml false=旧定时行为，生产 yml true=点击驱动）。 */
+    @Value("${roleplay.round.playback-driven:false}")
+    private boolean playbackDriven = false;
+    /** P-0813-B：校准轮间隔（roleplay.round.calibrate-every；0=禁用；默认 6）——
+     *  透传给会话专属 router 实例（同 autoContinueMs 的 @Value 限制）。 */
+    @Value("${roleplay.round.calibrate-every:6}")
+    private int calibrateEvery = 6;
+    /** P-0814-C：一般模式串行调度开关（roleplay.round.serial；D-024/D-027）——透传给会话专属
+     *  router 实例。此前缺失此透传 → 会话 router 恒走并行路径（@Value 仅对 Spring bean 生效），
+     *  而并行路径 context 未传给 LLM（已另修 AgentExecutor），双重缺陷叠加致 AI 看不到上下文。 */
+    @Value("${roleplay.round.serial:false}")
+    private boolean serialRound = false;
 
     public SessionRegistry(@Lazy RouterService defaultRouter, ArbiterService arbiter,
                            AgentExecutor executor, Compressor compressor, Monitor monitor,
@@ -112,6 +131,14 @@ public class SessionRegistry {
             lorebookService, interruptManager, eventBus, sse, identityService);
         // P-0810-09：注入场景目标服务（一般模式 init 生成 / 每轮判定）
         r.setSceneGoalService(sceneGoalService);
+        // P-0813-A：注入自动续轮延时（@Value 仅对 Spring bean 生效，此处显式透传）
+        r.setAutoContinueMs(autoContinueMs);
+        // P-0814-A：注入点击驱动开关（同上，显式透传）
+        r.setPlaybackDriven(playbackDriven);
+        // P-0814-C：注入串行调度开关（同上，显式透传；缺失时会话 router 恒并行）
+        r.setSerialRound(serialRound);
+        // P-0813-B：注入校准轮间隔（同上，显式透传）
+        r.setCalibrateEvery(calibrateEvery);
         log.info("D11: created isolated RouterService for session {}", sessionId);
         return r;
     }

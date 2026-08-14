@@ -44,6 +44,31 @@ public class ArbiterService {
                                               List<Map<String, Object>> previousTracks,
                                               List<String> goals,
                                               Set<String> restrictedAgents) {
+        return configureTracks(sceneDescription, agentNames, historySummary, mode, protagonist,
+                previousTracks, goals, restrictedAgents, null);
+    }
+
+    /**
+     * P-0811-G 主控调度增强：带 nextRoundPrediction（上一轮主控整合时对本轮出场的预测）的重载。
+     *
+     * <p>「上轮预测→下轮执行」闭环：RouterService 在 integrateOutputs 时保存主控产出的
+     * {@code next_round}（含预测出场 agents/order/mode/reason），下一轮 configureTracks 传入
+     * 本参数；prompt 强制主控优先遵守该预测分配 agent_actions（预测出场角色 active、其余按需
+     * silent），实现「谁出场/谁隔离」由主控跨轮连续决策而非每轮从零自由发挥。</p>
+     *
+     * <p>P-0811-G 主控开局分配：protagonist 模式（带玩家角色）开局不再强制 ≤3 人全员 active
+     * —— 玩家角色恒 active（L202-228），AI 角色是否出场由主控按剧情分配（可 silent），
+     * 避免开局全员抢话。其余模式保留 ≤3 人全 active 兜底。</p>
+     */
+    public TrackConfigResult configureTracks(String sceneDescription,
+                                              List<String> agentNames,
+                                              String historySummary,
+                                              String mode,
+                                              String protagonist,
+                                              List<Map<String, Object>> previousTracks,
+                                              List<String> goals,
+                                              Set<String> restrictedAgents,
+                                              Map<String, Object> nextRoundPrediction) {
         restrictedAgents = restrictedAgents != null ? restrictedAgents : Set.of();
         String prevText = "(本轮为新对话，无上一轮)";
         if (previousTracks != null && !previousTracks.isEmpty()) {
@@ -86,6 +111,29 @@ public class ArbiterService {
             String restrictedList = restrictedAgents.isEmpty() ? "（无）" :
                 String.join(", ", new TreeSet<>(restrictedAgents));
 
+            // P-0811-G：上一轮主控预测的本轮出场安排（闭环「上轮预测→下轮执行」；无预测则空）
+            String nextRoundText = "";
+            if (nextRoundPrediction != null && !nextRoundPrediction.isEmpty()) {
+                @SuppressWarnings("unchecked")
+                List<String> predAgents = (List<String>) nextRoundPrediction.getOrDefault("agents", List.of());
+                @SuppressWarnings("unchecked")
+                List<String> predOrder = (List<String>) nextRoundPrediction.getOrDefault("order", List.of());
+                String reason = String.valueOf(nextRoundPrediction.getOrDefault("reason", ""));
+                StringBuilder sb = new StringBuilder("\n━━━━ 上一轮主控预测（必须优先遵守） ━━━━\n");
+                if (!predAgents.isEmpty()) sb.append("预测本轮出场角色: ").append(String.join(", ", predAgents)).append("\n");
+                if (!predOrder.isEmpty()) sb.append("预测出场顺序: ").append(String.join(" → ", predOrder)).append("\n");
+                if (!reason.isBlank()) sb.append("预测理由: ").append(reason).append("\n");
+                sb.append("【执行要求】优先按预测把出场角色设为 active、其余可 silent；若你认为必须调整，"
+                        + "请在 reasoning 中说明理由。\n");
+                nextRoundText = sb.toString();
+            }
+            // P-0811-G：protagonist 模式（带玩家角色）开局由主控分配轨道——玩家恒 active，AI 是否出场按剧情。
+            String rotationRule = "protagonist".equals(mode)
+                    ? "\n【开局分配要求】本局带玩家角色（主角 " + (protagonist == null ? "" : protagonist) + "）。"
+                        + "玩家角色必须 active；AI 角色是否本轮出场由你按剧情分配（不必全员说话，"
+                        + "可让部分角色 silent 等待，形成对话节奏）。"
+                    : "\n【轮换要求】≤3人时全部active。4人以上每轮必须轮换active角色。";
+
             prompt = String.format("""
                 你是一个角色扮演游戏的主控（DM）。请分析当前对话状态，为本轮配置铁轨。
 
@@ -100,12 +148,14 @@ public class ArbiterService {
 
                 %s
 
+                %s
+
                 ━━━━ 角色 action ━━━━
                 - "active"  → 本轮生成回复，参与对话
                 - "silent"  → 本轮不输出，但同步轨道上下文
                 - "offline" → 完全隔离
 
-                【轮换要求】≤3人时全部active。4人以上每轮必须轮换active角色。
+                %s
                 【禁止调度角色】%s
 
                 请回复JSON：
@@ -116,6 +166,8 @@ public class ArbiterService {
                 historySummary != null ? historySummary : "(新对话)",
                 prevText,
                 goalsText,
+                nextRoundText,
+                rotationRule,
                 restrictedList);
         }
 
@@ -236,7 +288,9 @@ public class ArbiterService {
             @SuppressWarnings("unchecked")
             Map<String, String> actions = (Map<String, String>) t.get("agent_actions");
             actions.keySet().removeIf(n -> !finalAgentNames.contains(n));
-            if (agents.size() <= 3 && List.of("merged", "weak").contains(t.get("mode"))) {
+            // P-0811-G：protagonist 模式（带玩家角色开局）不强制 ≤3 全 active——
+            // 主控按剧情分配（AI 角色可 silent 形成节奏，玩家恒 active 见上方强制）；其余模式保留兜底。
+            if (!"protagonist".equals(mode) && agents.size() <= 3 && List.of("merged", "weak").contains(t.get("mode"))) {
                 agents.forEach(n -> actions.put(n, "active"));
             }
             boolean hasActive = actions.values().stream().anyMatch("active"::equals);
@@ -255,6 +309,40 @@ public class ArbiterService {
                     if (actions.containsKey(name)) {
                         actions.put(name, "offline");
                         reasoning += " [硬性禁止：" + name + "强制offline]";
+                    }
+                }
+            }
+        }
+
+        // P-0811-G 闭环兜底：「上轮预测→下轮执行」——若 LLM 未遵守上轮预测（预测出场角色全未被调 active），
+        // 强制预测名单首位角色 active（保证主控跨轮决策不因 LLM 漂移而失效）；restricted/offline 角色除外。
+        if (nextRoundPrediction != null && !nextRoundPrediction.isEmpty()) {
+            @SuppressWarnings("unchecked")
+            List<String> predAgents = (List<String>) nextRoundPrediction.getOrDefault("agents", List.of());
+            if (!predAgents.isEmpty()) {
+                boolean anyPredActive = false;
+                for (Map<String, Object> t : tracks) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, String> actions = (Map<String, String>) t.get("agent_actions");
+                    if (predAgents.stream().anyMatch(n -> "active".equals(actions.get(n)))) {
+                        anyPredActive = true;
+                        break;
+                    }
+                }
+                if (!anyPredActive) {
+                    String first = predAgents.get(0);
+                    if (finalAgentNames.contains(first) && !restrictedAgents.contains(first)) {
+                        for (Map<String, Object> t : tracks) {
+                            @SuppressWarnings("unchecked")
+                            List<String> agents = (List<String>) t.get("agents");
+                            if (agents.contains(first)) {
+                                @SuppressWarnings("unchecked")
+                                Map<String, String> actions = (Map<String, String>) t.get("agent_actions");
+                                actions.put(first, "active");
+                                reasoning += " [预测执行兜底：" + first + "设为active]";
+                                break;
+                            }
+                        }
                     }
                 }
             }

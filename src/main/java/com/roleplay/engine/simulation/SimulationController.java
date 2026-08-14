@@ -2,6 +2,8 @@ package com.roleplay.engine.simulation;
 
 import com.roleplay.engine.controller.CharacterController;
 import com.roleplay.engine.core.Persona;
+import com.roleplay.engine.service.RouterService;
+import com.roleplay.engine.service.SessionRegistry;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -25,15 +27,25 @@ public class SimulationController {
     private final SimulationService simulationService;
     private final SimulationWorld world;
     private final CharacterController characterController;
+    /** P-0814-A：会话注册表（playback_done 无 group_id 时推进一般模式 RouterService 轮次）。 */
+    private final SessionRegistry sessions;
     private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<SimulationWorld.WorldSnapshot> recentSnapshots = new CopyOnWriteArrayList<>();
     private static final int MAX_RECENT_SNAPSHOTS = 100;
 
     public SimulationController(SimulationService simulationService, SimulationWorld world,
                                 CharacterController characterController) {
+        this(simulationService, world, characterController, null);
+    }
+
+    /** Spring 使用 4 参注入版（SessionRegistry 供 playback_done 路由）；3 参旧构造保留委托（测试/直构零破坏）。 */
+    @org.springframework.beans.factory.annotation.Autowired
+    public SimulationController(SimulationService simulationService, SimulationWorld world,
+                                CharacterController characterController, SessionRegistry sessions) {
         this.simulationService = simulationService;
         this.world = world;
         this.characterController = characterController;
+        this.sessions = sessions;
 
         world.addTickListener(snapshot -> {
             Map<String, Object> event = snapshot.toMap();
@@ -64,11 +76,12 @@ public class SimulationController {
      * <pre>{@code
      * {
      *   "characters": [
-     *     {"name": "\u5c0f\u660e", "persona": "\u5f00\u6717\u5916\u5411\u7684\u5e74\u8f7b\u4eba", "voice": "\u8bf4\u8bdd\u8f7b\u677e\u6d3b\u6cfc", "background": "\u7a0b\u5e8f\u5458"},
+     *     {"name": "\u5c0f\u660e", "persona": "\u5f00\u6717\u5916\u5411\u7684\u5e74\u8f7b\u4eba", "voice": "\u8bf4\u8bdd\u8f7b\u677e\u6d3b\u6cca", "background": "\u7a0b\u5e8f\u5458"},
      *     {"name": "\u5c0f\u7ea2", "persona": "\u6e29\u67d4\u7ec6\u5fc3\u7684\u5973\u5b69", "voice": "\u8bf4\u8bdd\u8f7b\u58f0\u7ec6\u8bed", "background": "\u5b66\u751f"}
      *   ],
      *   "scene": "park",
      *   "player_name": "me"     // 可选（P0-1）：显式玩家名，同名 agent 标记为玩家控制；缺省按旧规则
+     *   "map": { ... }          // 可选（P-0811-G）：契约 v1 地图 → collision 瓦片转障碍注入模拟世界（替代预置场景）
      * }
      * }</pre>
      */
@@ -81,6 +94,25 @@ public class SimulationController {
         // P-0802-P2：可选 player_id —— 角色库改名后按 player_id 解析当前角色名标记 playerControlled
         //（无 player_id 或未绑定 → 零行为变化，走现状 playerName 逻辑）
         String playerId = body.get("player_id") != null ? String.valueOf(body.get("player_id")) : null;
+        // P-0811-G：可选契约 v1 地图 → collision 瓦片转障碍注入模拟世界（动态模拟用 LLM 布局）
+        List<Obstacle> customObstacles = null;
+        String mapLabel = null;
+        if (body.get("map") instanceof Map<?, ?> m && !m.isEmpty()) {
+            try {
+                int[][] collision = mapCollisionGrid(m);
+                if (collision != null) {
+                    int tileSize = m.get("tile_size") instanceof Number n ? n.intValue() : 32;
+                    Object nameObj = m.get("name");
+                    String mapName = nameObj == null ? "LLM地图" : String.valueOf(nameObj);
+                    customObstacles = Obstacle.fromCollisionGrid(collision, tileSize, mapName);
+                    mapLabel = mapName;
+                }
+            } catch (Exception e) {
+                // 地图解析失败 → 回退预置场景（不阻塞加载）
+                customObstacles = null;
+                mapLabel = null;
+            }
+        }
 
         List<Persona> personas = new ArrayList<>();
         for (Map<String, String> ch : characterList) {
@@ -94,8 +126,27 @@ public class SimulationController {
             personas.add(p);
         }
 
-        simulationService.initWithPersonas(personas, sceneName, playerName, playerId);
+        simulationService.initWithPersonas(personas, sceneName, playerName, playerId, customObstacles, mapLabel);
         return Map.of("status", "ok", "message", "Loaded " + personas.size() + " characters into simulation");
+    }
+
+    /** P-0811-G：从契约 v1 地图 map 读取 collision 网格（int[height][width]）。解析失败返回 null。 */
+    private int[][] mapCollisionGrid(Map<?, ?> m) {
+        if (!(m.get("layers") instanceof Map<?, ?> layers)) return null;
+        if (!(layers.get("collision") instanceof List<?> rows)) return null;
+        int height = rows.size();
+        int[][] grid = new int[height][];
+        for (int i = 0; i < height; i++) {
+            Object r = rows.get(i);
+            if (!(r instanceof List<?> row)) return null;
+            int[] g = new int[row.size()];
+            for (int j = 0; j < row.size(); j++) {
+                Object v = row.get(j);
+                g[j] = (v instanceof Number num) ? num.intValue() : 0;
+            }
+            grid[i] = g;
+        }
+        return grid;
     }
 
     @PostMapping("/start")
@@ -162,6 +213,44 @@ public class SimulationController {
         // Phase 4: 手动目标标记——MovementConstraint 不得覆盖玩家手动指定。
         state.setManualTarget(true);
         return Map.of("status", "ok");
+    }
+
+    /**
+     * P-0814-I：持续方向移动（WASD/方向键）——玩家按住方向键时前端高频调用（约 120ms 一次）。
+     * <pre>{@code POST /api/simulation/move-dir/{agentName}  {"dx":1,"dy":0,"step":90}}
+     * 语义：以服务端权威坐标为准，目标点 = 当前坐标 + 归一化方向 × 步长（默认 90px，上限 200px），
+     * 并置位 manualTarget（每次调用刷新时间戳 → 持续按住时不会被 MANUAL_TARGET_HOLD_MS 60s
+     * 超时释放给导演接管）；松开方向键即停止调用 → 60s 后恢复导演接管（既有语义）。</pre>
+     */
+    @PostMapping("/move-dir/{agentName}")
+    public Map<String, Object> moveDir(
+            @PathVariable String agentName,
+            @RequestBody Map<String, Double> body) {
+        AgentState state = world.getState(agentName);
+        if (state == null) return Map.of("status", "error", "message", "Agent not found");
+        double dx = body.getOrDefault("dx", 0.0);
+        double dy = body.getOrDefault("dy", 0.0);
+        double step = body.getOrDefault("step", 0.0);
+        double len = Math.sqrt(dx * dx + dy * dy);
+        if (len < 0.01) {
+            // 无有效方向：仅刷新 manualTarget 时间戳（防按住期间被导演接管），不改变目标
+            state.setManualTarget(true);
+            return Map.of("status", "ok", "targetX", state.getTargetX(), "targetY", state.getTargetY());
+        }
+        if (step <= 0) step = 90.0;
+        step = Math.min(step, 200.0);
+        double nx = dx / len;
+        double ny = dy / len;
+        double tx = state.getX() + nx * step;
+        double ty = state.getY() + ny * step;
+        tx = Math.max(10, Math.min(SimulationWorld.WORLD_WIDTH - 10, tx));
+        ty = Math.max(10, Math.min(SimulationWorld.WORLD_HEIGHT - 10, ty));
+        state.setTargetX(tx);
+        state.setTargetY(ty);
+        state.setHasTarget(true);
+        // 手动目标标记：MovementConstraint/导演/日程均跳过（D-006/P-0813-E），时间戳随每次调用刷新
+        state.setManualTarget(true);
+        return Map.of("status", "ok", "targetX", Math.round(tx * 100.0) / 100.0, "targetY", Math.round(ty * 100.0) / 100.0);
     }
 
     @PostMapping("/emotion/{agentName}")
@@ -262,6 +351,42 @@ public class SimulationController {
     @GetMapping("/conversation-status")
     public Map<String, Object> getConversationStatus() {
         return simulationService.getConversationStatus();
+    }
+
+    /**
+     * P-0814-A：点击驱动对话模式 —— 前端「播出完毕」信号（一轮展示完成 → 请求生成下一轮）。
+     * <pre>{@code POST /api/simulation/playback_done
+     * body: {"session_id":"...", "group_id":"..."}}  // 两者至少一者有效
+     *  - group_id 非空 → 2D 世界对话组推进（ConversationManager 轮间门：该组下一轮）；
+     *  - 否则 → 一般模式 RouterService 轮次推进（onPlaybackDone：下一轮）。
+     * 200 → {"ok":true,"advanced":true|false}（advanced=false 时含 error：组不存在/未等待/重复信号等）</pre>
+     * 幂等：非等待态重复信号被忽略（不产生多余轮次）。
+     */
+    @PostMapping("/playback_done")
+    public Map<String, Object> playbackDone(@RequestBody(required = false) Map<String, Object> body) {
+        String groupId = body != null && body.get("group_id") != null ? String.valueOf(body.get("group_id")) : null;
+        String sessionId = body != null && body.get("session_id") != null ? String.valueOf(body.get("session_id")) : null;
+
+        if (groupId != null && !groupId.isBlank()) {
+            boolean ok = simulationService.notifyPlaybackDone(groupId);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("ok", true);
+            m.put("group_id", groupId);
+            m.put("advanced", ok);
+            if (!ok) m.put("error", "group not found or not awaiting playback");
+            return m;
+        }
+
+        if (sessions == null) {
+            return Map.of("ok", false, "advanced", false, "error", "session registry unavailable");
+        }
+        RouterService router = sessions.get(sessionId);
+        boolean ok = router != null && router.onPlaybackDone();
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("ok", true);
+        m.put("advanced", ok);
+        if (!ok) m.put("error", "not awaiting playback (already advanced / non-general mode / stopped)");
+        return m;
     }
 
     /**

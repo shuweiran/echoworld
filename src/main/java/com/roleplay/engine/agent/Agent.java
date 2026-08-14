@@ -31,6 +31,9 @@ public class Agent {
     private volatile boolean isGenerating = false;
     /** P-0810-09：当前角色的隐藏目标（场景目标机制）—— buildContext/生成路径注入系统提示，不暴露给玩家。 */
     private volatile String hiddenGoal = null;
+    /** P-0813-I：当前行为窗口文案提供者（2D 世界由 SimulationService 注册，读 AgentState.scheduleText）。
+     *  非 null 且返回非空时，系统提示追加【当前行为窗口】段；null/空 → 原 prompt 零变化。 */
+    private volatile java.util.function.Supplier<String> scheduleContextSupplier = null;
 
     public Agent(Persona persona, String role, LLMClient llmClient) {
         this.persona = persona;
@@ -66,6 +69,30 @@ public class Agent {
         if (hiddenGoal == null || hiddenGoal.isBlank()) return systemContent;
         return systemContent + "\n\n【隐藏目标】\n你的目标：" + hiddenGoal
                 + "\n（不要主动暴露给玩家，用行为和言语自然引导剧情推进）";
+    }
+
+    // ── P-0813-I：当前行为窗口（混合架构——主控日程骨架，角色 LLM 只填台词与细节） ──────
+
+    /** 设置行为窗口文案提供者（SimulationService 接线；null 清除=回退原 prompt）。 */
+    public void setScheduleContextSupplier(java.util.function.Supplier<String> supplier) {
+        this.scheduleContextSupplier = supplier;
+    }
+
+    public java.util.function.Supplier<String> getScheduleContextSupplier() {
+        return scheduleContextSupplier;
+    }
+
+    /**
+     * 系统提示追加【当前行为窗口】段（你在哪/正在做什么/允许的自由度）。
+     * 窗口段显式约束「不要自行离开区域或更换行为」——弱化角色自行决定下一步行动的自由度
+     * （P-0813-I：节奏可控 + 个性保留，台词仍自由）；无窗口/未接线 → 原样返回零变化。
+     */
+    private String appendScheduleWindow(String systemContent) {
+        java.util.function.Supplier<String> s = scheduleContextSupplier;
+        if (s == null) return systemContent;
+        String window = s.get();
+        if (window == null || window.isBlank()) return systemContent;
+        return systemContent + "\n\n" + window;
     }
 
     // ── P-0810-23-D2：发言超长提醒（仅下一轮生效，玩家无感知） ──────────────
@@ -114,7 +141,7 @@ public class Agent {
         List<Message> messages = new ArrayList<>();
 
         // 1. System prompt from persona
-        String systemContent = appendReminder(appendHiddenGoal(persona.buildSystemPrompt()));
+        String systemContent = appendReminder(appendHiddenGoal(appendScheduleWindow(persona.buildSystemPrompt())));
         if (sceneDescription != null && !sceneDescription.isEmpty()) {
             systemContent += "\n\n【当前场景】\n" + sceneDescription;
         }
@@ -127,7 +154,11 @@ public class Agent {
         // 2. Conversation history
         if (history != null) {
             for (Message m : history) {
-                if (m.getRole() == Message.Role.SYSTEM) continue;
+                if (m.getRole() == Message.Role.SYSTEM) {
+                    // P-0813-B：校准提醒（内容以「【校准提醒】」开头）是注入会话历史的系统级指令，
+                    // 必须进入 LLM 上下文（防漂移）；其余 SYSTEM 消息（关系图等）维持跳过语义零变化
+                    if (m.getContent() == null || !m.getContent().startsWith("【校准提醒】")) continue;
+                }
                 messages.add(m);
             }
         }
@@ -234,7 +265,7 @@ public class Agent {
         try {
             if (token != null) token.checkpoint();
             List<Message> messages = List.of(
-                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(persona.buildSystemPrompt()))),
+                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(appendScheduleWindow(persona.buildSystemPrompt())))),
                 new Message(Message.Role.USER, "user", context)
             );
             completed = token != null
@@ -262,7 +293,7 @@ public class Agent {
         try {
             if (token != null) token.checkpoint();
             List<Message> messages = List.of(
-                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(persona.buildSystemPrompt()))),
+                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(appendScheduleWindow(persona.buildSystemPrompt())))),
                 new Message(Message.Role.USER, "user", context)
             );
             completed = llmClient.callStream(messages, token, onDelta);

@@ -14,6 +14,9 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  * Phase 3 Track Director — 轨道决策（谁知道什么）。
  *
@@ -35,6 +38,8 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class TrackDirectorService {
 
+    private static final Logger log = LoggerFactory.getLogger(TrackDirectorService.class);
+
     /** 与任何目标都不构成冲突的"良性"目标（普通日常行为）。 */
     private static final Set<String> BENIGN_GOALS = Set.of(
             WorldDirectorService.GOAL_WANDER,
@@ -51,7 +56,7 @@ public class TrackDirectorService {
             Set.of("争夺", "回避"));
 
     private final InteractionDetector detector = new InteractionDetector();
-    private final SpatialTrackResolver spatialResolver;
+    private SpatialTrackResolver spatialResolver;
 
     /** 秘密任务成员：强制 ISOLATED。 */
     private final Set<String> secretAgents = ConcurrentHashMap.newKeySet();
@@ -68,6 +73,16 @@ public class TrackDirectorService {
      */
     public TrackDirectorService(SpatialTrackResolver spatialResolver) {
         this.spatialResolver = spatialResolver == null ? new SpatialTrackResolver() : spatialResolver;
+    }
+
+    /**
+     * P-0815-A：注入会话距离（px，roleplay.track.conversation-distance）——重建空间解析器。
+     * 运行时配置（AppConfig.TrackConfig）经 SimulationService 接线调用；
+     * 缺省/非法值回退 {@link SpatialTrackResolver#DEFAULT_CONVERSATION_DISTANCE}。
+     */
+    public void setConversationDistance(double conversationDistance) {
+        this.spatialResolver = new SpatialTrackResolver(conversationDistance);
+        log.info("TrackDirector conversationDistance -> {} px", this.spatialResolver.getConversationDistance());
     }
 
     // ── 秘密任务注入 ───────────────────────────────────────────

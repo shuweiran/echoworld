@@ -406,6 +406,70 @@ class ImageGenServiceTest {
         svc2.shutdown();
     }
 
+    /**
+     * P-0811-G(C-2)：SSE 终态广播 —— 任务 DONE 推 ai_image_ready（含 characterId/url），
+     * FAILED 推 ai_image_error（含 characterId/error）；未注入广播器零影响。
+     */
+    static class FakeBroadcaster implements com.roleplay.engine.broadcast.SseBroadcaster {
+        final List<String> events = new CopyOnWriteArrayList<>();
+        final List<Map<String, Object>> payloads = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void broadcast(String eventType, Object data) {
+            events.add(eventType);
+            payloads.add((Map<String, Object>) data);
+        }
+    }
+
+    @Test
+    @DisplayName("S-9 P-0811-G(C-2)：DONE→ai_image_ready / FAILED→ai_image_error；未注入不广播")
+    void sseEventBroadcastOnTerminal() throws Exception {
+        // ① 成功任务 → ai_image_ready（characterId + avatar url）
+        Path dir = Files.createTempDirectory("aiimg-sse-ok");
+        FakeComfyClient client = new FakeComfyClient();
+        ImageGenService svc = newService(client, dir);
+        FakeBroadcaster sse = new FakeBroadcaster();
+        svc.setSseBroadcaster(sse);
+        svc.registerCharacter("heroine", "小铃", "银发", "anime");
+        svc.triggerGenerate("heroine");
+        ImageGenService.GenTask done = awaitDone(svc, "heroine");
+        assertEquals(ImageGenService.GenTask.Status.DONE, done.status());
+        assertEquals(1, sse.events.size(), "成功任务应推 1 条事件");
+        assertEquals("ai_image_ready", sse.events.get(0));
+        assertEquals("heroine", sse.payloads.get(0).get("characterId"));
+        assertNotNull(sse.payloads.get(0).get("url"), "ai_image_ready 应含 avatar url");
+        svc.shutdown();
+
+        // ② 失败任务 → ai_image_error（characterId + error）
+        Path dir2 = Files.createTempDirectory("aiimg-sse-fail");
+        FakeComfyClient failing = new FakeComfyClient() {
+            @Override
+            public List<String> generateOnce(WorkflowSpec spec, Path outputDir, String fileName) throws IOException {
+                throw new IOException("ComfyUI 不可用（模拟）");
+            }
+        };
+        ImageGenService svc2 = newService(failing, dir2);
+        FakeBroadcaster sse2 = new FakeBroadcaster();
+        svc2.setSseBroadcaster(sse2);
+        svc2.registerCharacter("bad", "失败角色", "外貌", "风格");
+        svc2.triggerGenerate("bad");
+        ImageGenService.GenTask ft = awaitDone(svc2, "bad");
+        assertEquals(ImageGenService.GenTask.Status.FAILED, ft.status());
+        assertEquals(1, sse2.events.size());
+        assertEquals("ai_image_error", sse2.events.get(0));
+        assertEquals("bad", sse2.payloads.get(0).get("characterId"));
+        assertTrue(String.valueOf(sse2.payloads.get(0).get("error")).contains("不可用"));
+        svc2.shutdown();
+
+        // ③ 未注入广播器 → 不抛异常、不广播（零影响）
+        ImageGenService svc3 = newService(new FakeComfyClient(), Files.createTempDirectory("aiimg-sse-none"));
+        svc3.registerCharacter("nobody", "无广播", "外貌", "风格");
+        svc3.triggerGenerate("nobody");
+        ImageGenService.GenTask t3 = awaitDone(svc3, "nobody");
+        assertEquals(ImageGenService.GenTask.Status.DONE, t3.status());
+        svc3.shutdown();
+    }
+
     /** P-0810-04：假抠背景器（记录调用次数，可配置抛异常）。 */
     static class FakeRmbg extends RmbgRemover {
         int calls;

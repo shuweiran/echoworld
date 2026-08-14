@@ -1,8 +1,10 @@
 package com.roleplay.engine.aiimage;
 
+import com.roleplay.engine.broadcast.SseBroadcaster;
 import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -144,6 +146,8 @@ public class ImageGenService {
     private RmbgRemover rmbg;
     /** P-0810-04：抠背景总开关（yml roleplay.ai-image.rmbg-enabled，默认 true）。 */
     private volatile boolean rmbgEnabled;
+    /** P-0811-G(C-2)：SSE 广播器（生成完成/失败推 ai_image_ready/ai_image_error；测试直构不注入=null 跳过）。 */
+    private volatile SseBroadcaster sse;
 
     public ImageGenService(ComfyUIClient comfyClient, AiImageProperties props) {
         this.comfyClient = comfyClient;
@@ -169,6 +173,12 @@ public class ImageGenService {
     /** P-0810-04：测试注入用（默认由构造器从 props 直构）。 */
     public void setRmbgRemover(RmbgRemover remover) {
         this.rmbg = remover == null ? new RmbgRemover((String) null) : remover;
+    }
+
+    /** P-0811-G(C-2)：SSE 广播器注入（Spring 自动装配；测试直构不注入=null 跳过）。 */
+    @Autowired(required = false)
+    public void setSseBroadcaster(SseBroadcaster broadcaster) {
+        this.sse = broadcaster;
     }
 
     /** P-0810-04：抠背景开关（测试/运行时切换；false=只存原图）。 */
@@ -251,17 +261,40 @@ public class ImageGenService {
             task.status = GenTask.Status.DONE;
             task.finishedAt = System.currentTimeMillis();
             log.info("AI 生图角色完成: id={} 共 7 张（avatar 文生图 + 6 表情 img2img）", profile.id());
+            broadcastImageEvent("ai_image_ready", profile.id(), null);
         } catch (Exception e) {
             task.status = GenTask.Status.FAILED;
             task.finishedAt = System.currentTimeMillis();
             task.error = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
             log.warn("AI 生图角色失败: id={} frame={} err={}", profile.id(), task.progress, task.error);
+            broadcastImageEvent("ai_image_error", profile.id(), task.error);
         } catch (Throwable t) {
             // 防御性兜底：worker 任何未预期异常（含 Error）都标记 FAILED，防任务永久卡 RUNNING
             task.status = GenTask.Status.FAILED;
             task.finishedAt = System.currentTimeMillis();
             task.error = "UNCAUGHT: " + t;
             log.error("AI 生图 worker 未捕获异常: id={}", profile.id(), t);
+            broadcastImageEvent("ai_image_error", profile.id(), task.error);
+        }
+    }
+
+    /** P-0811-G(C-2)：任务终态推送 ai_image_ready/ai_image_error（SSE 全局广播；无注入器跳过）。 */
+    private void broadcastImageEvent(String event, String characterId, String error) {
+        if (sse == null) return;
+        try {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("characterId", characterId);
+            if (error != null && !error.isBlank()) {
+                payload.put("error", error);
+            } else {
+                String url = imagesOf(characterId).get("avatar");
+                if (url != null) payload.put("url", url);
+                payload.put("frame", "avatar");
+                payload.put("type", "avatar");
+            }
+            sse.broadcast(event, payload);
+        } catch (Exception ex) {
+            log.warn("AI 生图 SSE 广播失败: event={} id={} err={}", event, characterId, ex.getMessage());
         }
     }
 

@@ -9,6 +9,8 @@ public class ConversationGroup {
 
     private final String groupId;
     private final ConversationMode mode;
+    /** 组类型（P-0815-A）：默认 AI_AUTO；joinGroup → USER_JOINED；剧本杀讨论 → SCRIPT_DISCUSSION。 */
+    private volatile GroupKind kind = GroupKind.AI_AUTO;
     private final LinkedHashMap<String, AgentState> participants;
     private final Set<String> frozenAgents;
     private volatile int turnCount = 0;
@@ -54,6 +56,9 @@ public class ConversationGroup {
 
     public String getGroupId() { return groupId; }
     public ConversationMode getMode() { return mode; }
+    /** 组类型（P-0815-A，见 {@link GroupKind}）。 */
+    public GroupKind getKind() { return kind; }
+    public void setKind(GroupKind kind) { this.kind = kind == null ? GroupKind.AI_AUTO : kind; }
     public Map<String, AgentState> getParticipants() { return participants; }
     /** 参与者上限；Integer.MAX_VALUE=不限（方案A 加入时满员校验用）。 */
     public int getMaxParticipants() { return maxParticipants; }
@@ -147,4 +152,54 @@ public class ConversationGroup {
     }
 
     public long idleMs() { return System.currentTimeMillis() - lastActivity; }
+
+    // ═══════════════════════════════════════════════════════════
+    //  P-0814-A：播放驱动轮间门（点击驱动对话模式）
+    // ═══════════════════════════════════════════════════════════
+    // 一轮生成完 → 组循环 awaitPlayback() 阻塞等待「播出完毕」信号（signalPlaybackDone）
+    // → 收到信号后进入下一轮。stop/解散时 active=false + wakePlaybackWaiters() 唤醒返回。
+
+    private final Object playbackMonitor = new Object();
+    /** 「播出完毕」信号计数（持续置位/counter：每次 signalPlaybackDone 递增，每次 awaitPlayback
+     *  唤醒消费一个）。P-0814-B：改为计数器消除「布尔置位+进入清位」双重丢失竞态——
+     *  连点 N 次信号逐轮消费（每信号至多推进一轮）；信号在组生成期间到达不再被丢。 */
+    private int playbackSignalCount = 0;
+    /** 当前是否处于等待播出完毕状态（tick 据此跳过 idle 超时解散，导演思考/播放期间组不拆）。 */
+    private volatile boolean awaitingPlayback = false;
+
+    /** 阻塞等待「播出完毕」信号（playback-driven 组轮间门）。active=false/stop 时被唤醒返回。
+     *  P-0814-B：等待期间到达的每个信号唤醒一轮（计数器逐轮消费，不丢轮）；
+     *  消费在同步块内完成（与 signalPlaybackDone 互斥，无「唤醒后清位吞新信号」竞态）。 */
+    public void awaitPlayback() throws InterruptedException {
+        synchronized (playbackMonitor) {
+            awaitingPlayback = true;
+            try {
+                while (playbackSignalCount == 0 && active) {
+                    playbackMonitor.wait();
+                }
+                if (playbackSignalCount > 0) playbackSignalCount--; // 消费一个信号
+            } finally {
+                awaitingPlayback = false;
+            }
+        }
+    }
+
+    /** 播放完毕信号 → 计数+1 并唤醒等待中的轮次循环（持续置位：无等待者时信号保持，
+     *  下一轮 awaitPlayback 进入即通过；幂等，可重复调用；每信号至多推进一轮）。 */
+    public void signalPlaybackDone() {
+        synchronized (playbackMonitor) {
+            playbackSignalCount++;
+            playbackMonitor.notifyAll();
+        }
+    }
+
+    /** 停止/解散时唤醒等待者（调用方应先 setActive(false) 保证等待循环退出）。 */
+    public void wakePlaybackWaiters() {
+        synchronized (playbackMonitor) {
+            playbackMonitor.notifyAll();
+        }
+    }
+
+    /** 当前是否处于等待播出完毕状态。 */
+    public boolean isAwaitingPlayback() { return awaitingPlayback; }
 }

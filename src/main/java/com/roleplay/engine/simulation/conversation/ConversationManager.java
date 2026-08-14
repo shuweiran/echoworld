@@ -28,8 +28,16 @@ public class ConversationManager {
 
     private static final long GROUP_IDLE_TIMEOUT_MS = 30_000;
     private static final long CONVERSATION_COOLDOWN_MS = 5_000;
-    /** Phase 1 Track fusion: 两两距离 < 5 格 → 可对话 (requirement doc). */
-    private static final double CONVERSATION_DISTANCE_THRESHOLD = 5.0;
+    /** Phase 1 Track fusion: 两两距离 < 70px → 可对话（P-0815-A：由原「5 格」注释修正为 px 语义，
+     *  与 SpatialTrackResolver.DEFAULT_CONVERSATION_DISTANCE 同值；legacy 路径（trackDirector==null）使用）。 */
+    private static final double CONVERSATION_DISTANCE_THRESHOLD = 70.0;
+
+    /** 调研报告 2.4 #3：玩家 joinGroup 距组最近成员的最大距离（px，对齐前端 findApproachableGroups
+     *  成员 100px / 群中心 120px 语义，取宽松端 120）。超距拒绝（防“人在千里外也能入组”）。 */
+    private static final double JOIN_GROUP_MAX_DISTANCE = 120.0;
+    /** 调研报告 2.4 #3：玩家消息自动建 DYAD 时，最近 AI 的最大距离（px）。超距不建组
+     *  （玩家在地图一角，最近的 AI 在几百 px 外也会被拉进 1v1 组的修复）。 */
+    private static final double MAX_AUTO_DYAD_DISTANCE = 200.0;
 
     private final Map<ConversationMode, ConversationStrategy> strategies = new EnumMap<>(ConversationMode.class);
     private final Map<String, ConversationGroup> activeGroups = new ConcurrentHashMap<>();
@@ -57,6 +65,180 @@ public class ConversationManager {
     /** 方案B 共存开关：init 注入的 AnnouncementService（可空）。executeRound 在
      *  split 模式下抑制方案A 回调，避免与 SpeechStrategy 内联广播重复推送。 */
     private AnnouncementService announcementService;
+
+    // ── P-0813-F：节奏控制（roleplay.pacing.*）─────────────────────
+    // 仅 2D 模拟世界（SimulationService 构造时显式 setPacing 注入）；
+    // 剧本杀/狼人杀各局自有的 ConversationManager 实例不注入 → pacingEnabled=false
+    // → 轮次间隔/组对冷却全部回退原硬编码行为（模式守卫，零影响）。
+    /** 节奏控制总开关（默认 false=未注入，回退原行为）。 */
+    private volatile boolean pacingEnabled = false;
+    /** 对话轮次基础间隔 ms（DYAD 等，默认 2000=原硬编码值）。 */
+    private volatile long pacingRoundCooldownMs = 2_000;
+    /** 群聊轮次基础间隔 ms（GROUP_DISCUSSION，默认 3000=原硬编码值）。 */
+    private volatile long pacingGroupRoundCooldownMs = 3_000;
+    /** 组对再次自动建组冷却 ms（默认 5000=原硬编码值）。 */
+    private volatile long pacingConversationCooldownMs = CONVERSATION_COOLDOWN_MS;
+    /** 未进入对话（无玩家对话轨道）时轮次间隔倍率（默认 1.0=不降频，由注入方给实际值）。 */
+    private volatile double pacingIdleMultiplier = 1.0;
+    /** 进入对话后非当前轨道的轮次间隔倍率（默认 1.0=不降频，由注入方给实际值）。 */
+    private volatile double pacingInactiveMultiplier = 1.0;
+
+    // ── P-0813-H：其他轨道（非玩家轨道）对话节奏拉长 + 气泡停留时长下发 ──
+    // 需求更正（主人澄清）：不做全局串行队列——多个对话群同时存在、同时推进（并行保持）；
+    // 轨道内成员轮流发言（现状）保持不变；玩家所在轨道全速，其他轨道轮次间隔大幅拉长
+    // （inactive 倍率 ×3~×5，比 F 的 ×2 更强，配置可调），并把其他轨道发言的
+    // 展示间隔/气泡停留时长参数暴露给前端（conversation-status 下发）。
+    /** 非玩家轨道发言的气泡停留/展示时长基准 ms（roleplay.pacing.speech-bubble-hold-ms，
+     *  默认 4000；经 getStatus 下发，前端可用作气泡展示时长/展示间隔）。 */
+    private volatile long pacingSpeechBubbleHoldMs = 4_000;
+
+    /** P-0814-A：点击驱动对话模式开关（roleplay.round.playback-driven）——仅 2D 模拟世界
+     *  （SimulationService 构造时显式 setPlaybackDriven 注入）；剧本杀/狼人杀各局自有的
+     *  ConversationManager 实例不注入 → false=旧行为（pacing 间隔自动连跑），零影响。
+     *  true：组轮次循环一轮生成完即停，等 {@link #notifyPlaybackDone(String)} 信号再下一轮。 */
+    private volatile boolean playbackDriven = false;
+
+    /** P-0814-B：无玩家组「等待播出完毕」超时（roleplay.round.group-await-timeout-ms，默认 30000）。
+     *  仅 2D 世界注入；等待中的无玩家组（AI-AI / 单 AI）超过该时长被 tick 自动解散（防 awaitPlayback
+     *  永久阻塞、组内角色冻结）；有玩家成员的组不自动解散（玩家输入/点击唤醒，见 wakeGroupForAgent）。 */
+    private volatile long groupAwaitTimeoutMs = 30_000;
+
+    /** P-0814-B：注入无玩家组等待播出完毕超时（SimulationService 构造时显式注入；未注入=默认 30s）。 */
+    public void setGroupAwaitTimeoutMs(long ms) {
+        this.groupAwaitTimeoutMs = Math.max(1, ms);
+    }
+
+    /** P-0814-B：当前等待播出完毕超时（测试/监控用）。 */
+    long getGroupAwaitTimeoutMs() { return groupAwaitTimeoutMs; }
+
+    /** P-0814-B：组内是否含玩家控制成员（无玩家组等待超时自动解散的判定依据）。 */
+    private boolean groupHasPlayer(ConversationGroup group) {
+        for (AgentState s : group.getParticipantList()) {
+            if (s.isPlayerControlled()) return true;
+        }
+        return false;
+    }
+
+    /** P-0814-B：玩家输入唤醒所在组等待（AI-user 解卡；「输入=点击」语义）——
+     *  玩家消息经 {@code SimulationService.sendUserMessage} 存入 currentMessage 后调用本方法：
+     *  组在等待播出完毕 → 信号置位唤醒（该输入下一轮被 executeRound 消费）；组在生成中 →
+     *  信号保持（下一轮等待时立即通过，不丢输入=点击语义）。组不存在/非活跃 → false。
+     *
+     * @return true=已找到玩家所在活跃组并送达信号；false=玩家不在任何活跃组（tick 将按既有
+     *         路径用玩家消息自动建 DYAD 组）
+     */
+    public boolean wakeGroupForAgent(String agentName) {
+        if (agentName == null || agentName.isBlank()) return false;
+        for (ConversationGroup g : activeGroups.values()) {
+            if (g.isActive() && g.containsAgent(agentName)) {
+                g.signalPlaybackDone();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * P-0813-F：注入节奏控制参数（仅 2D 模拟世界调用；剧本杀/狼人杀各局实例不调用=禁用）。
+     *
+     * @param enabled            总开关（roleplay.pacing.enabled）
+     * @param roundCooldownMs    DYAD 等轮次基础间隔
+     * @param groupRoundCooldownMs 群聊轮次基础间隔
+     * @param conversationCooldownMs 组对再次建组冷却
+     * @param idleMultiplier     未进入对话时的轮次间隔倍率
+     * @param inactiveMultiplier 进入对话后非当前轨道倍率（P-0813-H：默认 ×4 大幅拉长对话时间）
+     */
+    public void setPacing(boolean enabled, long roundCooldownMs, long groupRoundCooldownMs,
+                          long conversationCooldownMs, double idleMultiplier, double inactiveMultiplier) {
+        this.pacingEnabled = enabled;
+        this.pacingRoundCooldownMs = Math.max(1, roundCooldownMs);
+        this.pacingGroupRoundCooldownMs = Math.max(1, groupRoundCooldownMs);
+        this.pacingConversationCooldownMs = Math.max(1, conversationCooldownMs);
+        this.pacingIdleMultiplier = Math.max(1.0, idleMultiplier);
+        this.pacingInactiveMultiplier = Math.max(1.0, inactiveMultiplier);
+        log.info("ConversationManager pacing {} (round={}ms group={}ms cooldown={}ms idle=×{} inactive=×{})",
+                enabled ? "enabled" : "disabled", pacingRoundCooldownMs, pacingGroupRoundCooldownMs,
+                pacingConversationCooldownMs, pacingIdleMultiplier, pacingInactiveMultiplier);
+    }
+
+    /** P-0813-H：注入非玩家轨道发言的气泡停留/展示时长基准（conversation-status 下发前端）。 */
+    public void setSpeechBubbleHoldMs(long ms) {
+        this.pacingSpeechBubbleHoldMs = Math.max(1, ms);
+    }
+
+    /** P-0814-A：注入点击驱动开关（仅 2D 模拟世界；剧本杀/狼人杀实例不调用 → false 旧行为）。 */
+    public void setPlaybackDriven(boolean playbackDriven) {
+        this.playbackDriven = playbackDriven;
+        log.info("ConversationManager playback-driven {}", playbackDriven ? "enabled" : "disabled");
+    }
+
+    /** P-0814-A: 当前是否点击驱动模式。 */
+    public boolean isPlaybackDriven() { return playbackDriven; }
+
+    /**
+     * P-0814-A：播放完毕信号（前端「播出完毕」→ POST /api/simulation/playback_done → 本方法）——
+     * 唤醒该对话组等待中的轮次循环，生成下一轮（一轮=组内各成员按发言顺序各一句）。
+     * 幂等：组不存在或未处于等待态 → false（信号忽略，不产生多余轮次）。
+     *
+     * @return true=信号已送达等待中的组；false=组不存在/未等待
+     */
+    public boolean notifyPlaybackDone(String groupId) {
+        if (groupId == null || groupId.isBlank()) return false;
+        ConversationGroup g = activeGroups.get(groupId);
+        if (g == null) return false;
+        g.signalPlaybackDone();
+        return true;
+    }
+
+    /** P-0813-F：节奏控制是否启用（2D 世界注入；剧本杀/狼人杀各局实例=false）。 */
+    public boolean isPacingEnabled() { return pacingEnabled; }
+
+    /**
+     * P-0813-F：当前对话轨道 = 含玩家控制成员的活跃群组（玩家进入对话 → 该轨道全速）；
+     * 无 → null（未进入对话，全部轨道按未对话态节奏）。
+     */
+    public ConversationGroup getCurrentPlayerGroup() {
+        for (ConversationGroup g : activeGroups.values()) {
+            if (!g.isActive()) continue;
+            for (AgentState s : g.getParticipantList()) {
+                if (s.isPlayerControlled()) return g;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * P-0813-F：轮次间隔计算（对话密度时序控制）。P-0813-H 需求更正：不做全局串行队列，
+     * 多对话群并行推进；本方法只负责节奏——玩家所在轨道全速、其他轨道间隔大幅拉长。
+     *
+     * <ul>
+     *   <li>pacing 未注入（剧本杀/狼人杀各局实例）→ 原硬编码行为（GROUP_DISCUSSION 3000 / 其余 2000）；</li>
+     *   <li>无玩家对话轨道（未进入对话）→ 所有轨道 ×{@link #pacingIdleMultiplier}（降低密度）；</li>
+     *   <li>有玩家对话轨道 → 当前轨道全速（基础间隔），其余轨道
+     *       ×{@link #pacingInactiveMultiplier}（P-0813-H 默认 ×4：大幅拉长对话时间/降低密度）。</li>
+     * </ul>
+     *
+     * <p>包可见供单测直调（不依赖真实轮次循环时序）。
+     */
+    long computeRoundCooldownMs(ConversationGroup group, ConversationMode mode) {
+        long base = mode == ConversationMode.GROUP_DISCUSSION ? 3_000 : 2_000;
+        if (!pacingEnabled) return base;
+        long pacedBase = mode == ConversationMode.GROUP_DISCUSSION
+                ? pacingGroupRoundCooldownMs : pacingRoundCooldownMs;
+        ConversationGroup current = getCurrentPlayerGroup();
+        if (current == null) {
+            return (long) (pacedBase * pacingIdleMultiplier);
+        }
+        if (group != null && group.getGroupId().equals(current.getGroupId())) {
+            return pacedBase;
+        }
+        return (long) (pacedBase * pacingInactiveMultiplier);
+    }
+
+    /** P-0813-F：组对再次自动建组冷却（pacing 注入时用配置值，否则原硬编码 5000）。 */
+    private long effectiveConversationCooldownMs() {
+        return pacingEnabled ? pacingConversationCooldownMs : CONVERSATION_COOLDOWN_MS;
+    }
 
     /**
      * P-0810-17（B1）：剧本杀讨论发言逐轮实时回调（讨论组专用，与 speechBroadcastListener 分离——
@@ -105,9 +287,14 @@ public class ConversationManager {
         this.agentTaskManager = agentTaskManager;
     }
 
-    /** D1: 停止全部群组生成（模拟停止时调用，配合 InterruptManager.cancelAll）。 */
+    /** D1: 停止全部群组生成（模拟停止时调用，配合 InterruptManager.cancelAll）。
+     *  P-0814-A：同时唤醒等待「播出完毕」的组循环（active=false + notify），防播放驱动线程悬挂。 */
     public void stopAll() {
         stopped = true;
+        for (ConversationGroup g : activeGroups.values()) {
+            g.setActive(false);
+            g.wakePlaybackWaiters();
+        }
         log.info("ConversationManager stopped ({} active groups)", activeGroups.size());
     }
 
@@ -175,9 +362,11 @@ public class ConversationManager {
 
     /**
      * 方案A：玩家加入现有对话组（唯一入口：POST /api/simulation/group/{groupId}/join）。
-     * 校验链：组存在且活跃 → 玩家对应角色存在且在场 → 未在组内 → 组未满 → 加入。
+     * 校验链：组存在且活跃 → 玩家对应角色存在且在场 → 未在组内 → 组未满 →
+     * 距最近成员 < JOIN_GROUP_MAX_DISTANCE（P-0815-A 距离校验）→ 加入。
      * 加入后：在场状态与既有 startGroup 路径一致（inConversation=true + 冻结 + 速度清零），
-     * 组内轨道重算（玩家与 NPC 同等按距离/规则判定）；tick 不得踢出（见 tick 的 isBusy 防护）。
+     * 组内轨道重算（玩家与 NPC 同等按距离/规则判定）；组标记 USER_JOINED（P-0815-A 组类型）；
+     * tick 不得踢出（见 tick 的 isBusy 防护）。
      * 并发安全：成员表变更与后台 executeRound 的读取经组对象锁互斥（addParticipant/getParticipantList）。
      */
     public JoinResult joinGroup(String groupId, String playerName) {
@@ -190,8 +379,17 @@ public class ConversationManager {
         if (group.getParticipantCount() >= group.getMaxParticipants()) {
             return JoinResult.fail("group full: " + groupId);
         }
+        // P-0815-A：距离校验（调研报告 2.4 #3）——玩家与组最近成员距离 < JOIN_GROUP_MAX_DISTANCE，
+        // 超距拒绝（前端 findApproachableGroups 只做展示层限制，后端校验是本原；
+        // 校验在 addParticipant 之前，拒绝不产生任何成员表副作用）。
+        if (!nearGroup(player, group)) {
+            return JoinResult.fail("too far from group: " + groupId
+                    + " (nearest member distance >= " + JOIN_GROUP_MAX_DISTANCE + "px)");
+        }
         boolean added = group.addParticipant(player);
         if (!added) return JoinResult.fail("join rejected by group: " + groupId);
+        // P-0815-A：玩家加入的组标记 USER_JOINED（组类型区分，getStatus 下发 kind）。
+        group.setKind(GroupKind.USER_JOINED);
         player.setInConversation(true);
         player.setVx(0);
         player.setVy(0);
@@ -226,6 +424,15 @@ public class ConversationManager {
         log.info("Player {} left group {} | members={}", playerName, groupId,
                 group.getParticipantList().stream().map(AgentState::getAgentName).toList());
         return JoinResult.ok(group);
+    }
+
+    /** 玩家与组内最近成员距离 < {@link #JOIN_GROUP_MAX_DISTANCE}（px）才允许加入。 */
+    private boolean nearGroup(AgentState player, ConversationGroup group) {
+        double best = Double.MAX_VALUE;
+        for (AgentState m : group.getParticipantList()) {
+            best = Math.min(best, player.distanceTo(m));
+        }
+        return best < JOIN_GROUP_MAX_DISTANCE;
     }
 
     /** 重算组内全部成员的轨道分配（join/leave 后即时生效；每 tick 由 SimulationOrchestrator 再回写）。 */
@@ -279,7 +486,9 @@ public class ConversationManager {
             for (AgentState a : available.values()) {
                 if (a.isPlayerControlled()) continue;
                 double d = player.distanceTo(a);
-                if (d < minDist) { minDist = d; nearest = a; }
+                // P-0815-A：自动 DYAD 距离上限（调研报告 2.4 #3）——nearest 超过
+                // MAX_AUTO_DYAD_DISTANCE 不建组（玩家在角落时最近的 AI 也可能几百 px 外）。
+                if (d < MAX_AUTO_DYAD_DISTANCE && d < minDist) { minDist = d; nearest = a; }
             }
             if (nearest != null) {
                 String gid = player.getAgentName() + "+" + nearest.getAgentName();
@@ -298,7 +507,7 @@ public class ConversationManager {
 
             String pairKey = makePairKey(cand.members());
             if (recentPairCooldowns.containsKey(pairKey)
-                    && now - recentPairCooldowns.get(pairKey) < CONVERSATION_COOLDOWN_MS) {
+                    && now - recentPairCooldowns.get(pairKey) < effectiveConversationCooldownMs()) {
                 continue;
             }
 
@@ -307,7 +516,18 @@ public class ConversationManager {
 
         List<String> toRemove = new ArrayList<>();
         for (ConversationGroup group : activeGroups.values()) {
-            if (!group.isActive() || group.idleMs() > GROUP_IDLE_TIMEOUT_MS) {
+            if (!group.isActive()) {
+                toRemove.add(group.getGroupId());
+            } else if (group.isAwaitingPlayback()) {
+                // P-0814-B：等待「播出完毕」的组——有玩家成员不自动解散（玩家输入/点击唤醒，
+                // AI-user 解卡）；无玩家成员（AI-AI / 单 AI 组）等待超时自动解散——
+                // 修复「tick idle 解散守卫对等待组跳过 → 组永不解散、角色冻结」的卡死。
+                if (!groupHasPlayer(group) && group.idleMs() > groupAwaitTimeoutMs) {
+                    toRemove.add(group.getGroupId());
+                }
+            } else if (group.idleMs() > GROUP_IDLE_TIMEOUT_MS) {
+                // P-0814-A：导演思考/播放期间组不拆（等待态跳过 idle 解散）——
+                // 非等待态的普通 idle 超时解散保持原语义。
                 toRemove.add(group.getGroupId());
             }
         }
@@ -366,8 +586,17 @@ public class ConversationManager {
             while (group.isActive() && strategy.shouldContinue(group) && !stopped) {
                 try {
                     executeRound(group, strategy);
-                    long cooldown = finalMode == ConversationMode.GROUP_DISCUSSION ? 3000 : 2000;
-                    Thread.sleep(cooldown);
+                    if (playbackDriven) {
+                        // P-0814-A：点击驱动 —— 一轮生成完即停，等「播出完毕」信号（notifyPlaybackDone）
+                        // 再生成下一轮；无玩家/未点击时组保持等待（tick 跳过 idle 解散），
+                        // stop/解散时 active=false 唤醒返回。
+                        group.awaitPlayback();
+                    } else {
+                        // P-0813-F：轮次间隔由节奏控制计算（未注入=原 3000/2000；
+                        // 未进入对话=全轨道×idle 倍率；对话中=当前轨道全速、其余×inactive 倍率——
+                        // P-0813-H 需求更正：其余轨道不挂起，并行推进但间隔大幅拉长）。
+                        Thread.sleep(computeRoundCooldownMs(group, finalMode));
+                    }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;
@@ -405,6 +634,18 @@ public class ConversationManager {
             group.setActive(false);
             return;
         }
+        // P-0814-B（调序修复）：玩家消息先入史再构建 AI 上下文——玩家发言消费当轮即进组
+        // messageHistory，prepareContext 构建的上下文（MERGED 对话记录/WEAK 摘要）包含玩家本轮
+        // 发言；此前顺序（先 prepareContext 后消费玩家消息）导致玩家发言被消费那一轮 AI 看不到、
+        // 下一轮才看到（错位一轮）。入史后 currentMessage 清空 → 下方玩家分支自然跳过
+        // （不再进 responses → processResults 不会重复记录；ISOLATED 语义零变化）。
+        for (AgentState s : group.getParticipantList()) {
+            if (!s.isPlayerControlled()) continue;
+            String msg = s.getCurrentMessage();
+            if (msg == null || msg.isEmpty() || msg.startsWith("(\u4e3b\u63a7")) continue;
+            group.recordTurn(s.getAgentName(), msg);
+            s.setCurrentMessage(null);
+        }
         Map<String, Map<String, String>> agentContexts = new ConcurrentHashMap<>();
         strategy.prepareContext(group, agentContexts);
         if (contextCapture != null) {
@@ -437,9 +678,13 @@ public class ConversationManager {
                 String existingMsg = playerState.getCurrentMessage();
                 if (existingMsg != null && !existingMsg.isEmpty() && !existingMsg.startsWith("(\u4e3b\u63a7")) {
                     responses.put(name, existingMsg);
-                } else {
-                    responses.put(name, "...");
+                    // P-0813-K：单次消费——玩家消息仅进当前轮（加入的群轨道一次），
+                    // 消费后即清空，防后续轮次把同一句重复回放（群聊/1v1 同链路）；
+                    // processResults 对玩家成员不再回写 currentMessage（各策略已加守卫）。
+                    playerState.setCurrentMessage(null);
                 }
+                // P-0813-K：玩家无新消息时完全跳过（不产生 "..." 占位轮次）——
+                // 玩家发言只在真实发言时进群轨道，沉默不刷屏；AI 成员正常继续。
                 latch.countDown();
                 continue;
             }
@@ -565,9 +810,25 @@ public class ConversationManager {
     public ConversationGroup createScriptDiscussionGroup(
             String groupId, List<AgentState> members,
             Map<String, TrackAssignment> trackAssignments) {
+        return createScriptDiscussionGroup(groupId, members, trackAssignments, GroupKind.SCRIPT_DISCUSSION);
+    }
+
+    /**
+     * 建组阶段（同步）：创建固定成员讨论组并注册到 activeGroups。
+     * 轨道分配由调用方显式给出（剧本杀：持秘密角色 WEAK / 未持 MERGED），
+     * 不经过空间听觉与 ModeClassifier。
+     *
+     * <p>P-0815-A：kind 可显式指定（剧本杀/狼人杀讨论；缺省 3 参委托 SCRIPT_DISCUSSION 零破坏）。
+     *
+     * @return 讨论组（供 {@link #runScriptDiscussionRounds} 驱动）
+     */
+    public ConversationGroup createScriptDiscussionGroup(
+            String groupId, List<AgentState> members,
+            Map<String, TrackAssignment> trackAssignments, GroupKind kind) {
         ConversationGroup group = new ConversationGroup(
                 groupId, ConversationMode.GROUP_DISCUSSION, members);
         group.setTrackAssignments(trackAssignments == null ? Map.of() : trackAssignments);
+        group.setKind(kind == null ? GroupKind.SCRIPT_DISCUSSION : kind);
 
         for (AgentState s : members) {
             s.setInConversation(true);
@@ -662,9 +923,17 @@ public class ConversationManager {
      */
     public record RoundGateDecision(Map<String, Boolean> speakMap, Set<String> skipSpeakers) {}
 
+    /**
+     * 解散群组（P-0813-H：包可见——串行队列推进单测直调；内部调用点不变）。
+     * 解散后重算串行状态（若解散的是当前 RUNNING 群，队列下一个晋升）。
+     */
     private void dissolveGroup(String groupId) {
         ConversationGroup group = activeGroups.remove(groupId);
         if (group == null) return;
+
+        // P-0814-A：解散即唤醒该组等待中的轮次循环（active=false 后 notify，等待循环退出）
+        group.setActive(false);
+        group.wakePlaybackWaiters();
 
         for (AgentState s : group.getParticipantList()) {
             s.setInConversation(false);
@@ -709,7 +978,20 @@ public class ConversationManager {
             Map<String, Object> gs = new LinkedHashMap<>();
             gs.put("id", g.getGroupId());
             gs.put("mode", g.getMode().name());
-            gs.put("participants", g.getParticipantList().stream().map(AgentState::getAgentName).toList());
+            // P-0815-A：组类型（AI_AUTO / USER_JOINED / SCRIPT_DISCUSSION / WEREWOLF_DISCUSSION）
+            gs.put("kind", g.getKind().name());
+            // P-0815-A：participants 保持 string[]（旧契约不动，前端 includes 消费兼容）；
+            // 新增 participantInfo 逐项附 isPlayer 标记（AI 组 vs 用户组区分，前端未知字段不崩）。
+            List<AgentState> participantStates = g.getParticipantList();
+            gs.put("participants", participantStates.stream().map(AgentState::getAgentName).toList());
+            List<Map<String, Object>> participantInfo = new ArrayList<>();
+            for (AgentState s : participantStates) {
+                Map<String, Object> pi = new LinkedHashMap<>();
+                pi.put("name", s.getAgentName());
+                pi.put("isPlayer", s.isPlayerControlled());
+                participantInfo.add(pi);
+            }
+            gs.put("participantInfo", participantInfo);
             gs.put("rounds", g.getRoundCount());
             gs.put("turns", g.getTurnCount());
             gs.put("idleMs", g.idleMs());
@@ -720,6 +1002,26 @@ public class ConversationManager {
             groupList.add(gs);
         }
         status.put("groups", groupList);
+        // P-0813-F：对话状态可查询（前端「接近提示→点击进入对话」配合）：
+        // currentTrack=当前对话轨道（含玩家的活跃群组 id，空=未进入对话）；
+        // pacing={state: in-dialogue|idle|disabled, 倍率/间隔}。
+        ConversationGroup current = getCurrentPlayerGroup();
+        status.put("currentTrack", current != null ? current.getGroupId() : "");
+        status.put("pacingEnabled", pacingEnabled);
+        Map<String, Object> pacing = new LinkedHashMap<>();
+        if (pacingEnabled) {
+            pacing.put("state", current != null ? "in-dialogue" : "idle");
+            pacing.put("idleMultiplier", pacingIdleMultiplier);
+            pacing.put("inactiveMultiplier", pacingInactiveMultiplier);
+            pacing.put("roundCooldownMs", pacingRoundCooldownMs);
+            pacing.put("groupRoundCooldownMs", pacingGroupRoundCooldownMs);
+            pacing.put("conversationCooldownMs", pacingConversationCooldownMs);
+            // P-0813-H：非玩家轨道发言的气泡停留/展示时长基准（前端可用作气泡展示时长/展示间隔）
+            pacing.put("speechBubbleHoldMs", pacingSpeechBubbleHoldMs);
+        } else {
+            pacing.put("state", "disabled");
+        }
+        status.put("pacing", pacing);
         return status;
     }
 }

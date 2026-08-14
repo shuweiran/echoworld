@@ -16,7 +16,12 @@ import java.util.Map;
  *   <li>走廊点越界（错误）、相邻点非四邻接（警告）</li>
  *   <li>热点落在不可通行格（碰撞=1）→ 错误</li>
  *   <li>出生点落在不可通行格 → 错误</li>
+ *   <li>tileProps（v0.2）："x,y" 键可解析且不越界、值为对象字典</li>
+ *   <li>decor（v0.2）：id 非空且唯一、tile 合法且不嵌墙（ground=2）、type 非空字符串</li>
+ *   <li>spawnMarkers（v0.2）：每类坐标列表合法（整数、越界拒绝）</li>
+ *   <li>warps（v0.2）：from 合法；to 为 [mapId字符串, x, y] 且 x/y 整数</li>
  * </ol>
+ * v0.2 新键缺失 = 不校验 = 通过（保持 v1 语义）。
  *
  * <p>输出 {@code {ok, errors[], warnings[]}}；LLM 输出不合法（ok=false）时走重试/兜底（ScriptMapService）。
  */
@@ -222,6 +227,124 @@ public final class MapValidator {
                     errors.add("spawn_points[" + i + "] (" + MapContract.str(s.get("id"), "") + ") 越界");
                 } else if (inBounds && !walkable(col, W, H, sx, sy)) {
                     errors.add("spawn_points[" + i + "] (" + MapContract.str(s.get("id"), "") + ") 落在不可通行格");
+                }
+            }
+        }
+
+        // 8) tileProps（v0.2 可选键）：键为 "x,y" 且可解析、0≤x<width、0≤y<height；值必须为 Map（属性字典）
+        Object tileProps = map.get("tileProps");
+        if (tileProps != null && !(tileProps instanceof Map<?, ?>)) {
+            errors.add("tileProps 必须为对象（键为 \"x,y\" 字符串，值为属性字典）");
+        } else if (tileProps instanceof Map<?, ?> tp) {
+            for (Map.Entry<?, ?> e : tp.entrySet()) {
+                String key = String.valueOf(e.getKey());
+                int[] xy = MapContract.tileKey(key);
+                if (xy == null) {
+                    errors.add("tileProps 键 \"" + key + "\" 不是 \"x,y\" 坐标格式");
+                    continue;
+                }
+                if (inBounds && (xy[0] < 0 || xy[1] < 0 || xy[0] >= W || xy[1] >= H)) {
+                    errors.add("tileProps 键 \"" + key + "\" 坐标越界");
+                }
+                if (!(e.getValue() instanceof Map<?, ?>)) {
+                    errors.add("tileProps[" + key + "] 值必须为对象（属性字典）");
+                }
+            }
+        }
+
+        // 9) decor（v0.2 可选键）：id 非空且唯一；tile [x,y] 合法；type 非空字符串；tile 不嵌墙（ground=2 冲突拒绝）
+        Object decor = map.get("decor");
+        if (decor != null && !(decor instanceof List<?>)) {
+            errors.add("decor 必须为数组");
+        } else if (decor instanceof List<?> decorList) {
+            java.util.Set<String> seenIds = new java.util.HashSet<>();
+            for (int i = 0; i < decorList.size(); i++) {
+                Object o = decorList.get(i);
+                if (!(o instanceof Map<?, ?> d)) {
+                    errors.add("decor[" + i + "] 不是对象");
+                    continue;
+                }
+                String id = MapContract.str(d.get("id"), "");
+                if (id.isBlank()) {
+                    errors.add("decor[" + i + "] 缺少 id");
+                } else if (!seenIds.add(id)) {
+                    errors.add("decor[" + i + "] id \"" + id + "\" 重复");
+                }
+                String type = MapContract.str(d.get("type"), "");
+                if (type.isBlank()) {
+                    errors.add("decor[" + i + "] 缺少 type");
+                }
+                Object tile = d.get("tile");
+                if (!(tile instanceof List<?> t) || t.size() != 2
+                        || !(t.get(0) instanceof Number) || !(t.get(1) instanceof Number)) {
+                    errors.add("decor[" + i + "] tile 必须为 [x, y] 整数对");
+                    continue;
+                }
+                int dx = ((Number) t.get(0)).intValue();
+                int dy = ((Number) t.get(1)).intValue();
+                if (inBounds && (dx < 0 || dy < 0 || dx >= W || dy >= H)) {
+                    errors.add("decor[" + i + "] (" + id + ") tile 越界");
+                } else if (inBounds && ground != null && dy < ground.length && dx < ground[dy].length
+                        && ground[dy][dx] == MapContract.TILE_WALL) {
+                    errors.add("decor[" + i + "] (" + id + ") tile 落在墙格（ground=2），装饰不能嵌墙");
+                }
+            }
+        }
+
+        // 10) spawnMarkers（v0.2 可选键）：每类标记坐标列表合法（整数、越界拒绝）
+        Object markers = map.get("spawnMarkers");
+        if (markers != null && !(markers instanceof Map<?, ?>)) {
+            errors.add("spawnMarkers 必须为对象（键为类别名，值为坐标数组 [[x,y],...]）");
+        } else if (markers instanceof Map<?, ?> sm) {
+            for (Map.Entry<?, ?> e : sm.entrySet()) {
+                String cat = String.valueOf(e.getKey());
+                if (!(e.getValue() instanceof List<?> pts)) {
+                    errors.add("spawnMarkers[" + cat + "] 必须为坐标数组 [[x,y],...]");
+                    continue;
+                }
+                for (int k = 0; k < pts.size(); k++) {
+                    Object p = pts.get(k);
+                    if (!(p instanceof List<?> pp) || pp.size() != 2
+                            || !(pp.get(0) instanceof Number) || !(pp.get(1) instanceof Number)) {
+                        errors.add("spawnMarkers[" + cat + "] 点 " + k + " 必须为 [x, y] 整数对");
+                        break;
+                    }
+                    int mx = ((Number) pp.get(0)).intValue();
+                    int my = ((Number) pp.get(1)).intValue();
+                    if (inBounds && (mx < 0 || my < 0 || mx >= W || my >= H)) {
+                        errors.add("spawnMarkers[" + cat + "] 点 " + k + " 越界");
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 11) warps（v0.2 可选键）：from 坐标合法；to 为 [mapId字符串, x, y] 且 x/y 整数
+        Object warps = map.get("warps");
+        if (warps != null && !(warps instanceof List<?>)) {
+            errors.add("warps 必须为数组");
+        } else if (warps instanceof List<?> warpList) {
+            for (int i = 0; i < warpList.size(); i++) {
+                Object o = warpList.get(i);
+                if (!(o instanceof Map<?, ?> w)) {
+                    errors.add("warps[" + i + "] 不是对象");
+                    continue;
+                }
+                Object from = w.get("from");
+                if (!(from instanceof List<?> f) || f.size() != 2
+                        || !(f.get(0) instanceof Number) || !(f.get(1) instanceof Number)) {
+                    errors.add("warps[" + i + "] from 必须为 [x, y] 整数对");
+                } else {
+                    int fx = ((Number) f.get(0)).intValue();
+                    int fy = ((Number) f.get(1)).intValue();
+                    if (inBounds && (fx < 0 || fy < 0 || fx >= W || fy >= H)) {
+                        errors.add("warps[" + i + "] from 越界");
+                    }
+                }
+                Object to = w.get("to");
+                if (!(to instanceof List<?> t) || t.size() != 3 || !(t.get(0) instanceof String)
+                        || !(t.get(1) instanceof Number) || !(t.get(2) instanceof Number)) {
+                    errors.add("warps[" + i + "] to 必须为 [mapId字符串, x, y]");
                 }
             }
         }

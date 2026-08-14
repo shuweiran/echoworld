@@ -81,7 +81,10 @@ public class SpeechStrategy implements ConversationStrategy {
             if (speechContent.length() > 300) speechContent = speechContent.substring(0, 300);
             AgentState speakerState = group.getParticipant(speaker);
             if (speakerState != null) {
-                speakerState.setCurrentMessage("【演讲】" + speechContent);
+                // P-0813-K：玩家成员不回写 currentMessage（单次消费输入通道，见 executeRound）
+                if (!speakerState.isPlayerControlled()) {
+                    speakerState.setCurrentMessage("【演讲】" + speechContent);
+                }
                 group.recordTurn(speaker, speechContent);
                 // 方案B（分步落地）：演讲产出内联接区域广播——携带 speaker 坐标与半径，
                 // 远近判定复用 HearingSystem 语义（谁在半径内谁收到，远处角色/前端按距离衰减展示）；
@@ -96,7 +99,8 @@ public class SpeechStrategy implements ConversationStrategy {
             String reaction = responses.get(listener.getAgentName());
             if (reaction == null) continue;
             if (reaction.length() > 100) reaction = reaction.substring(0, 100);
-            listener.setCurrentMessage(reaction);
+            // P-0813-K：玩家成员不回写 currentMessage（单次消费输入通道，见 executeRound）
+            if (!listener.isPlayerControlled()) listener.setCurrentMessage(reaction);
 
             double att = listener.getAttention();
             if (reaction.contains("鼓掌") || reaction.contains("好") || reaction.contains("精彩")) {

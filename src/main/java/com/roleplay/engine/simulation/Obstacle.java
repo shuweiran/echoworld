@@ -81,6 +81,68 @@ public class Obstacle {
 
     // ── Scene presets ─────────────────────────────────────────
 
+    /**
+     * P-0811-G：把 LLM 地图 collision 瓦片网格（0=可走/非0=碰撞，height×width）转换为模拟世界
+     * 的矩形 Obstacle。瓦片合并策略：逐行合并连续碰撞瓦片为横向矩形（水平扫描线），
+     * 再对相邻行同列区间做竖向合并（降低 Obstacle 数量、减少寻路开销）。
+     *
+     * <p>坐标缩放：模拟世界 1000×600，地图瓦片网格 width×height —— 缩放系数 = min(1000/width, 600/height)，
+     * 每个瓦片 = tileSizePx 像素（模拟世界坐标），障碍矩形居中偏移保证整体贴边。
+     *
+     * @param collision 碰撞网格（int[height][width]，0=空/非0=墙）
+     * @param tileSizePx 瓦片像素边长（契约 tile_size，用于换算；世界 1000×600 内放大）
+     * @param label 障碍标签（场景名）
+     * @return 合并后的 Obstacle 列表（最多 MAX_MERGE 个，超出仅保留大块）
+     */
+    public static List<Obstacle> fromCollisionGrid(int[][] collision, int tileSizePx, String label) {
+        List<Obstacle> out = new ArrayList<>();
+        if (collision == null || collision.length == 0) return out;
+        int h = collision.length;
+        int w = collision[0].length;
+        if (w == 0 || h == 0) return out;
+        // 世界坐标缩放：模拟世界 1000×600 铺满整个地图（x/y 独立等分，无留白）——
+        // P-0811-G 修复：此前 min 缩放 + 居中留白，角色出生/移动落在 offset 留白区 → 「角色挤出地图外」。
+        // 铺满后地图边界 = 世界边界，角色始终在地图内。
+        double tileW = WORLD_W / (double) w;
+        double tileH = WORLD_H / (double) h;
+        double offsetX = 0.0;
+        double offsetY = 0.0;
+
+        // 标记已并入障碍的瓦片
+        boolean[][] used = new boolean[h][w];
+        for (int y = 0; y < h; y++) {
+            for (int x = 0; x < w; x++) {
+                if (collision[y][x] == 0 || used[y][x]) continue;
+                // 横向扩展
+                int xEnd = x;
+                while (xEnd + 1 < w && collision[y][xEnd + 1] != 0 && !used[y][xEnd + 1]) xEnd++;
+                // 纵向扩展（对齐 x..xEnd 整段）
+                int yEnd = y;
+                outer:
+                while (yEnd + 1 < h) {
+                    for (int cx = x; cx <= xEnd; cx++) {
+                        if (collision[yEnd + 1][cx] == 0 || used[yEnd + 1][cx]) break outer;
+                    }
+                    yEnd++;
+                }
+                // 标记
+                for (int ry = y; ry <= yEnd; ry++) {
+                    for (int cx = x; cx <= xEnd; cx++) used[ry][cx] = true;
+                }
+                double ox = offsetX + x * tileW;
+                double oy = offsetY + y * tileH;
+                double ow = (xEnd - x + 1) * tileW;
+                double oh = (yEnd - y + 1) * tileH;
+                out.add(new Obstacle(Type.WALL, ox, oy, ow, oh, true,
+                        label == null || label.isBlank() ? "墙" : label));
+            }
+        }
+        return out;
+    }
+
+    private static final double WORLD_W = 1000.0;
+    private static final double WORLD_H = 600.0;
+
     public static List<Obstacle> createScene(String sceneName, double worldW, double worldH) {
         return switch (sceneName.toLowerCase()) {
             case "park" -> parkScene(worldW, worldH);

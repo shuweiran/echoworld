@@ -46,7 +46,7 @@ class RouterServiceSuggestTest {
     private RouterService newRouter(LLMClient llm) {
         ArbiterService arbiter = mock(ArbiterService.class);
         when(arbiter.configureTracks(anyString(), anyList(), anyString(), anyString(),
-                anyString(), anyList(), anyList(), anySet()))
+                anyString(), anyList(), anyList(), anySet(), any()))
                 .thenAnswer(inv -> {
                     @SuppressWarnings("unchecked")
                     List<String> names = inv.getArgument(1);

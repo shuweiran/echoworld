@@ -8,7 +8,11 @@ import java.util.*;
 
 public class ModeClassifier {
 
-    private static final double CLOSE_THRESHOLD = 150.0;
+    /** 组内任意成员对距离上限（px）：听力连通分量是传递闭包，链式可听（每跳 80-130px）会把
+     *  相距 400px+ 的成员拉进同一组——本阈值做组内空间直径校验（调研报告-移动与分组问题.md
+     *  2.4 #1，默认 250-300px 区间取 300）。原 CLOSE_THRESHOLD=150 定义为近距分组阈值但从未接线
+     *  （B14），本次改造接线并调整到报告建议区间。 */
+    static final double MAX_GROUP_DIAMETER = 300.0;
 
     public List<GroupCandidate> classify(List<HearingSystem.HearingResult> hearing,
                                           Map<String, AgentState> allStates) {
@@ -39,6 +43,10 @@ public class ModeClassifier {
                 if (s != null && !s.isInConversation()) members.add(s);
             }
             if (members.size() < 2) continue;
+
+            // 组内空间直径校验：任意成员对距离 < MAX_GROUP_DIAMETER（px）——
+            // 禁止听力链式传递（A↔B↔C）导致相距 400px+ 的成员同组（超距不允许成组）。
+            if (!withinDiameter(members)) continue;
 
             if (!willingToTalk(members)) continue;
 
@@ -119,6 +127,18 @@ public class ModeClassifier {
             }
         }
         return listeners >= 2;
+    }
+
+    /** 组内任意成员对距离 < {@link #MAX_GROUP_DIAMETER}（px）。超距 → 不成组。 */
+    private boolean withinDiameter(List<AgentState> members) {
+        for (int i = 0; i < members.size(); i++) {
+            for (int j = i + 1; j < members.size(); j++) {
+                if (members.get(i).distanceTo(members.get(j)) >= MAX_GROUP_DIAMETER) {
+                    return false;
+                }
+            }
+        }
+        return true;
     }
 
     private boolean willingToTalk(List<AgentState> members) {

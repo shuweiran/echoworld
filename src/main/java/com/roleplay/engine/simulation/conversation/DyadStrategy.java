@@ -66,7 +66,8 @@ public class DyadStrategy implements ConversationStrategy {
             }
 
             if (detected != Emotion.NEUTRAL) state.setEmotion(detected);
-            state.setCurrentMessage(cleanResponse);
+            // P-0813-K：玩家成员不回写 currentMessage（单次消费输入通道，见 executeRound）
+            if (!state.isPlayerControlled()) state.setCurrentMessage(cleanResponse);
             group.recordTurn(name, cleanResponse);
         }
     }
@@ -103,7 +104,22 @@ public class DyadStrategy implements ConversationStrategy {
             sb.append("\n");
         }
 
-        sb.append(other.getAgentName()).append("刚才说：").append(other.getCurrentMessage()).append("\n\n");
+        // P-0813-K：玩家成员发言单次消费后 currentMessage 可能为 null（见 executeRound），
+        // 空则回退到对话记录最近一句，避免 prompt 出现字面 "null"。
+        String otherMsg = other.getCurrentMessage();
+        if (otherMsg == null || otherMsg.isBlank()) {
+            List<Map<String, String>> hist = group.getMessageHistory();
+            for (int i = hist.size() - 1; i >= 0; i--) {
+                Map<String, String> h = hist.get(i);
+                if (h != null && h.get("speaker") != null
+                        && h.get("speaker").equals(other.getAgentName())
+                        && h.get("message") != null && !h.get("message").isBlank()) {
+                    otherMsg = h.get("message");
+                    break;
+                }
+            }
+        }
+        sb.append(other.getAgentName()).append("刚才说：").append(otherMsg == null ? "……" : otherMsg).append("\n\n");
         sb.append("请以第一人称简短回复（50字内），末尾加【情绪：xxx】标注你的情绪。");
         sb.append("不要抢话，自然回应对方说的内容。");
 

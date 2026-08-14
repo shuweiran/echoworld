@@ -62,7 +62,10 @@ public class SimulationOrchestrator {
      *
      * <ol>
      *   <li>World Director：规则式更新角色目标（角色想做什么）</li>
-     *   <li>Track Director：InteractionDetector 评分 + SpatialTrackResolver 分配（谁知道什么）</li>
+     *   <li>Track Director：InteractionDetector 评分 + SpatialTrackResolver 分配（谁知道什么）
+     *       ——P-0815-A：不再把全场景 agents 一次性喂给 assign 做 allMerged（无触发时全员两两互见、
+     *       与距离无关）；改为「每个活动对话组 + 每个听力连通分量」分别 assign：无敏感触发时
+     *       MERGED 只覆盖同分量成员，单人分量（无听力接触）直接 ISOLATED。</li>
      *   <li>将分配结果回写当前活动群组（Phase 2 TrackStrategy 读取并构建隔离上下文）</li>
      * </ol>
      */
@@ -73,16 +76,82 @@ public class SimulationOrchestrator {
         // 1. World Director 更新角色目标。
         Map<String, String> goals = worldDirector.updateGoals(world, agents, now);
 
-        // 2. Track Director 生成 Track 关系（内部含 InteractionDetector 评分 + 空间分配）。
-        Map<String, TrackAssignment> assignments = trackDirector.assign(agents, goals);
+        // P-0815-A：空间网格重建（听力计算前置；生产每 tick 已由 MovementSystem.update 重建，
+        // 此处幂等重建保证 orchestrator.tick 直调（单元测试/时序差异）时分量计算确定性）。
+        world.getSpatialGrid().rebuild(agents);
 
-        // 3. 回写活动群组：2D 群聊自动按轨道隔离（TrackStrategy 每轮读取）。
+        // 2. Track Director 生成 Track 关系——按活动组 + 听力连通分量分别分配。
+        Map<String, TrackAssignment> assignments = new java.util.LinkedHashMap<>();
+
+        // 2a. 每个活动对话组独立分配（组内轨道决定谁知道什么；applyToGroup 同时回写组对象）。
+        java.util.Set<String> groupMembers = new java.util.HashSet<>();
         if (conversationManager != null) {
             for (ConversationGroup group : conversationManager.getActiveGroups()) {
-                applyToGroup(group);
+                for (AgentState m : group.getParticipantList()) {
+                    groupMembers.add(m.getAgentName());
+                }
+            }
+            for (ConversationGroup group : conversationManager.getActiveGroups()) {
+                assignments.putAll(applyToGroup(group));
             }
         }
+
+        // 2b. 组外 agent 按听力连通分量分别 assign：无触发时 MERGED 只覆盖同分量成员；
+        //     单人分量（无任何听力接触）→ ISOLATED（不再全场景 allMerged 两两互见）。
+        List<AgentState> freeAgents = new ArrayList<>();
+        for (AgentState a : agents) {
+            if (!groupMembers.contains(a.getAgentName())) freeAgents.add(a);
+        }
+        for (List<AgentState> component : hearingComponents(freeAgents)) {
+            if (component.size() == 1) {
+                AgentState lone = component.get(0);
+                assignments.put(lone.getAgentName(), TrackAssignment.isolated(
+                        lone.getAgentName(), "完全隔离（无听力接触）"));
+            } else {
+                assignments.putAll(trackDirector.assign(component, goals));
+            }
+        }
+
+        // 3. 回写活动群组：2D 群聊自动按轨道隔离（TrackStrategy 每轮读取）。
+        //    （applyToGroup 已在 2a 完成回写，此处仅保留语义注释。）
         return assignments;
+    }
+
+    /**
+     * 听力连通分量（调研报告 2.4 #4）：对输入角色跑 HearingSystem 声学判定，
+     * canHear 边建无向图后求连通分量（与 ModeClassifier 同款传递闭包语义，
+     * 但输入=组外 agent；链式可听成组由分量直径/组分配语义自然约束）。
+     */
+    private List<List<AgentState>> hearingComponents(List<AgentState> agents) {
+        List<List<AgentState>> components = new ArrayList<>();
+        if (agents == null || agents.isEmpty()) return components;
+
+        Map<String, List<String>> adjacency = new java.util.LinkedHashMap<>();
+        for (HearingSystem.HearingResult h : world.getHearingSystem().computeAudibility(agents)) {
+            if (!h.canHear()) continue;
+            adjacency.computeIfAbsent(h.speakerName(), k -> new ArrayList<>()).add(h.listenerName());
+            adjacency.computeIfAbsent(h.listenerName(), k -> new ArrayList<>()).add(h.speakerName());
+        }
+
+        java.util.Set<String> visited = new java.util.HashSet<>();
+        for (AgentState start : agents) {
+            String startName = start.getAgentName();
+            if (visited.contains(startName)) continue;
+            List<AgentState> component = new ArrayList<>();
+            java.util.ArrayDeque<String> queue = new java.util.ArrayDeque<>();
+            queue.add(startName);
+            while (!queue.isEmpty()) {
+                String cur = queue.poll();
+                if (!visited.add(cur)) continue;
+                AgentState st = world.getState(cur);
+                if (st != null) component.add(st);
+                for (String neighbor : adjacency.getOrDefault(cur, List.of())) {
+                    if (!visited.contains(neighbor)) queue.add(neighbor);
+                }
+            }
+            components.add(component);
+        }
+        return components;
     }
 
     /**

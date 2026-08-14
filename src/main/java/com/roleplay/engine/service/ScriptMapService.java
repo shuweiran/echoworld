@@ -532,6 +532,20 @@ public class ScriptMapService {
               target 为目标地图 id（如 \"map_2\"），同样必须落在可通行格上
             - spawn_points[]：{id, type(player/npc), x, y}，1 个玩家出生点 + 2-4 个 npc 出生点，必须在可通行格上
 
+            可选增强键（v0.2 扩展，P-0814-F；全部可省略——不输出任何增强键也完全合法；输出则必须满足约束）：
+            - layers.objects：Front 层静态装饰类型名二维数组（与 ground 同尺寸；元素为字符串或 null，
+              如 [["tree_oak", null, "fence"], ...]；类型用简单英文标识符：tree_oak/fence/flower_bed/pillar/bench/lamp）
+            - layers.overlay：AlwaysFront 前景遮罩二维数组（与 ground 同尺寸；元素为字符串或 null，如 "canopy"）
+            - tileProps：每格属性字典（稀疏，只写非默认格）：{"x,y": {"blocked": true, "water": true,
+              "action": "examine", "args": "wall_painting"}}——键必须为 "x,y" 坐标字符串，值必须为对象字典
+            - decor：显式装饰/交互物列表：[{"id": "chest_1", "type": "chest", "tile": [6,10],
+              "state": {"locked": true}, "onInteract": {"dialog": "..."}, "once": false, "radius": 1}]
+              ——id 全局唯一且非空、type 为简单英文标识符、tile 为 [x,y] 且不能落在墙格（ground=2）上
+            - spawnMarkers：生成器指示：{"grass": [[2,2],[3,2]], "debris": [[30,40]]}（类别名为键，值为坐标数组）
+            - warps：传送点（可省略）：[{"from": [63,20], "to": ["town", 10, 30]}]（to 为 [地图id字符串, x, y]）
+            约束：所有坐标必须 0≤x<width、0≤y<height；瓦片 id 只允许 1-5（layers.ground 内）；
+            objects/overlay/decor.type 是字符串类型名不是瓦片 id
+
             返回JSON格式（不要任何markdown标记，纯JSON；不输出 layers 网格）：
             {\"map_version\": 1, \"map_id\": \"脚本地图\", \"name\": \"地图名\", \"theme\": \"主题描述\",
              \"tile_size\": 32, \"width\": %d, \"height\": %d,
@@ -539,7 +553,9 @@ public class ScriptMapService {
                         \"doors\": [{\"side\": \"bottom\", \"offset\": 0.5}], \"tags\": [\"searchable\"]}],
              \"corridors\": [],
              \"zones\": [{\"id\": \"z_1\", \"name\": \"客厅八仙桌\", \"type\": \"search\", \"x\": 3, \"y\": 3, \"radius\": 1, \"clue_location\": \"客厅\", \"prompt\": \"...\"}],
-             \"spawn_points\": [{\"id\": \"sp_player\", \"type\": \"player\", \"x\": 2, \"y\": 2}]}
+             \"spawn_points\": [{\"id\": \"sp_player\", \"type\": \"player\", \"x\": 2, \"y\": 2}],
+             \"decor\": [{\"id\": \"decor_1\", \"type\": \"bench\", \"tile\": [2, 2]}],
+             \"spawnMarkers\": {\"grass\": [[3, 3]]}}
             """.formatted(theme, bg, locs, clues, sizeHint, width > 0 ? width : 24, height > 0 ? height : 16);
     }
 

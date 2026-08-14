@@ -88,7 +88,7 @@ class HistorySessionTest {
         // 按调用实际传入的 agentNames 构建单 MERGED 轨道（每会话 router 只含自己的角色 →
         // 消息天然隔离，避免共享 mock 把两局角色全塞进同一轨道）
         when(arbiter.configureTracks(anyString(), anyList(), anyString(), anyString(),
-                anyString(), anyList(), anyList(), anySet()))
+                anyString(), anyList(), anyList(), anySet(), any()))
                 .thenAnswer(inv -> {
                     @SuppressWarnings("unchecked")
                     List<String> names = inv.getArgument(1);

@@ -240,6 +240,198 @@ class MapValidatorTest {
         assertTrue(MapValidator.validateMap(empty).ok());
     }
 
+    // ═══════════════════════════════════════════════════════════
+    //  v0.2 扩展键校验（P-0814-F）
+    //  ═══════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("tileProps：合法通过 / 越界拒绝 / 键格式非法拒绝 / 值非对象拒绝")
+    void tilePropsChecks() {
+        Map<String, Object> m = validMap();
+        m.put("tileProps", Map.of("1,1", Map.of("blocked", true)));
+        assertTrue(MapValidator.validateMap(m).ok(), "合法 tileProps 通过");
+
+        m = validMap();
+        m.put("tileProps", Map.of("5,1", Map.of("blocked", true)));
+        MapValidator.Result r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("tileProps") && e.contains("越界")));
+
+        m = validMap();
+        m.put("tileProps", Map.of("abc", Map.of()));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("不是 \"x,y\" 坐标格式")));
+
+        m = validMap();
+        m.put("tileProps", Map.of("1,1", "not-a-dict"));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("值必须为对象")));
+
+        m = validMap();
+        m.put("tileProps", List.of(1, 2));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("tileProps 必须为对象")));
+    }
+
+    @Test
+    @DisplayName("decor：合法通过 / id 重复拒绝 / 缺 id 拒绝 / 嵌墙拒绝 / tile 越界拒绝 / 缺 type 拒绝")
+    void decorChecks() {
+        Map<String, Object> m = validMap();
+        m.put("decor", List.of(
+            Map.of("id", "d1", "type", "bench", "tile", List.of(1, 1)),
+            Map.of("id", "d2", "type", "lamp", "tile", List.of(0, 2), "once", true, "radius", 1)));
+        assertTrue(MapValidator.validateMap(m).ok(), "合法 decor 通过");
+
+        // id 重复
+        m = validMap();
+        m.put("decor", List.of(
+            Map.of("id", "d1", "type", "bench", "tile", List.of(1, 1)),
+            Map.of("id", "d1", "type", "lamp", "tile", List.of(0, 2))));
+        MapValidator.Result r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("重复")));
+
+        // 缺 id
+        m = validMap();
+        m.put("decor", List.of(Map.of("type", "bench", "tile", List.of(1, 1))));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("缺少 id")));
+
+        // 嵌墙（ground=2）
+        m = validMap();
+        m.put("layers", Map.of(
+            "ground", List.of(List.of(2, 1, 1), List.of(1, 1, 1), List.of(1, 1, 1)),
+            "collision", List.of(List.of(1, 0, 0), List.of(0, 0, 0), List.of(0, 0, 0))));
+        m.put("decor", List.of(Map.of("id", "d1", "type", "bench", "tile", List.of(0, 0))));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("不能嵌墙")), "errors=" + r.errors());
+
+        // tile 越界
+        m = validMap();
+        m.put("decor", List.of(Map.of("id", "d1", "type", "bench", "tile", List.of(9, 9))));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("越界")));
+
+        // 缺 type
+        m = validMap();
+        m.put("decor", List.of(Map.of("id", "d1", "tile", List.of(1, 1))));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("缺少 type")));
+
+        // tile 非 [x,y] 整数对
+        m = validMap();
+        m.put("decor", List.of(Map.of("id", "d1", "type", "bench", "tile", List.of("a", 1))));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("tile 必须为")));
+    }
+
+    @Test
+    @DisplayName("spawnMarkers：合法通过 / 越界拒绝 / 坐标格式非法拒绝 / 值非数组拒绝")
+    void spawnMarkerChecks() {
+        Map<String, Object> m = validMap();
+        m.put("spawnMarkers", Map.of("grass", List.of(List.of(0, 0), List.of(2, 2)), "debris", List.of(List.of(1, 1))));
+        assertTrue(MapValidator.validateMap(m).ok(), "合法 spawnMarkers 通过");
+
+        m = validMap();
+        m.put("spawnMarkers", Map.of("grass", List.of(List.of(0, 0), List.of(9, 9))));
+        MapValidator.Result r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("越界")));
+
+        m = validMap();
+        m.put("spawnMarkers", Map.of("grass", List.of(List.of(0), List.of(1, 1))));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("整数对")));
+
+        m = validMap();
+        m.put("spawnMarkers", Map.of("grass", "oops"));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("坐标数组")));
+
+        m = validMap();
+        m.put("spawnMarkers", List.of(1, 2));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("spawnMarkers 必须为对象")));
+    }
+
+    @Test
+    @DisplayName("warps：合法通过 / from 越界拒绝 / from 格式非法拒绝 / to 格式非法拒绝")
+    void warpChecks() {
+        Map<String, Object> m = validMap();
+        m.put("warps", List.of(Map.of("from", List.of(2, 2), "to", List.of("town", 10, 30))));
+        assertTrue(MapValidator.validateMap(m).ok(), "合法 warps 通过");
+
+        m = validMap();
+        m.put("warps", List.of(Map.of("from", List.of(9, 9), "to", List.of("town", 10, 30))));
+        MapValidator.Result r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("from 越界")));
+
+        m = validMap();
+        m.put("warps", List.of(Map.of("from", List.of(1), "to", List.of("town", 10, 30))));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("from 必须为")));
+
+        m = validMap();
+        m.put("warps", List.of(Map.of("from", List.of(1, 1), "to", List.of(10, 30))));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("to 必须为")));
+
+        m = validMap();
+        m.put("warps", List.of(Map.of("from", List.of(1, 1), "to", List.of(10, 30, 40))));
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("to 必须为")), "mapId 必须为字符串：errors=" + r.errors());
+
+        m = validMap();
+        m.put("warps", "oops");
+        r = MapValidator.validateMap(m);
+        assertFalse(r.ok());
+        assertTrue(r.errors().stream().anyMatch(e -> e.contains("warps 必须为数组")));
+    }
+
+    @Test
+    @DisplayName("v0.2 新键缺失 → 不校验 → 通过（保持 v1 语义）")
+    void v02KeysMissingPass() {
+        // validMap() 本身无任何 v0.2 键 → 纯 v1 语义照常通过
+        assertTrue(MapValidator.validateMap(validMap()).ok());
+        // 显式空值（normalize 兜底形状）同样通过
+        Map<String, Object> m = validMap();
+        m.put("tileProps", Map.of());
+        m.put("decor", List.of());
+        m.put("spawnMarkers", Map.of());
+        m.put("warps", List.of());
+        Map<String, Object> layers = new LinkedHashMap<>((Map<String, Object>) m.get("layers"));
+        layers.put("objects", List.of());
+        layers.put("overlay", List.of());
+        m.put("layers", layers);
+        assertTrue(MapValidator.validateMap(m).ok());
+    }
+
+    @Test
+    @DisplayName("BSP v0.2 输出可通过校验（spawnMarkers/decor/warps 自洽）")
+    void bspV02PassesValidation() {
+        Map<String, Object> bsp = BspMapGenerator.generate(BspMapGenerator.Options.defaults(20260801L));
+        assertTrue(bsp.get("spawnMarkers") instanceof Map<?, ?>);
+        assertTrue(bsp.get("decor") instanceof List<?>);
+        assertTrue(bsp.get("warps") instanceof List<?>);
+        MapValidator.Result r = MapValidator.validateMap(bsp);
+        assertTrue(r.ok(), "errors=" + r.errors());
+    }
+
     @Test
     @DisplayName("宽容解析归一：缺省兜底 + 类型规整")
     void normalizeLenient() {

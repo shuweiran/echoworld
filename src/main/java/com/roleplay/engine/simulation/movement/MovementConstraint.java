@@ -51,6 +51,10 @@ public class MovementConstraint {
     public static final double WEAK_TARGET_FACTOR_FAR = 0.8;
     /** GroupAnchor：leader 后方 follow slot 的间隔（格）。 */
     public static final double SLOT_SPACING = 16.0;
+    /** P-0815-A：MERGED 成员距 leader 超过该距离（px）不强制归队（保持原位，防瞬移式聚拢）。
+     *  调研报告 2.4 #6——全场景 allMerged 下相距 400px+ 的成员也会被物理拉到 leader 队形；
+     *  超距成员本轮不输出目标（MovementSystem 按自由漫游），待自然靠近后再归队。 */
+    public static final double MERGED_MAX_FOLLOW_DISTANCE = 300.0;
     /** 距期望位置小于该值时不再输出目标（防抖动）。 */
     public static final double ARRIVAL_EPSILON = 8.0;
 
@@ -201,6 +205,13 @@ public class MovementConstraint {
                 .toList();
         int k = followerNames.indexOf(self.getAgentName()) + 1;
         double dir = angleFor(leaderName);
+
+        // P-0815-A：距离守卫——成员距 leader 超过 MERGED_MAX_FOLLOW_DISTANCE（px）不强制归队
+        // （保持原位，避免远处成员被瞬移式聚拢到队形；等自然靠近后再归队）。
+        if (distance(self, leader.getX(), leader.getY()) > MERGED_MAX_FOLLOW_DISTANCE) {
+            return null;
+        }
+
         double tx = leader.getX() + Math.cos(dir) * SLOT_SPACING * k;
         double ty = leader.getY() + Math.sin(dir) * SLOT_SPACING * k;
 

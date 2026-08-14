@@ -13,6 +13,24 @@ import java.util.Map;
  * rooms/corridors/zones/spawn_points 缺失视为空数组、zone radius 缺失按 1。
  *
  * <p>本类与前端 phaser_validate/js/bsp.js 的契约保持一致（阶段 0 定稿 v1，字段表冻结）。
+ *
+ * <p><b>v0.2 扩展键（P-0814-F，依据调研《星露谷地图数据物品交互》M1/M2/M3）</b>：
+ * 以下键全部<b>可选</b>，缺失一律兜底为空（旧 v1 数据照常通过，零破坏）：
+ * <ul>
+ *   <li>{@code layers.objects}：Front 层静态装饰类型名二维数组（List&lt;List&lt;String&gt;&gt;，元素可 null），
+ *       与 ground 同尺寸（如 "tree_oak"/"fence"/"flower_bed"）——渲染层使用，无碰撞语义；</li>
+ *   <li>{@code layers.overlay}：AlwaysFront 前景遮罩二维数组（可 null 元素，如 "canopy"）；</li>
+ *   <li>{@code tileProps}：每格属性字典 Map&lt;String,Object&gt;，键为 "x,y" 字符串、值为属性字典
+ *       （blocked/water/action/args 等，宽容解析不做白名单）——星露谷「瓦片挂字符串属性」范式（M3）；</li>
+ *   <li>{@code decor}：显式装饰/交互物 List&lt;Map&gt;：{id, type, tile:[x,y], state?{...}, onInteract?{...}, once?, radius?}；</li>
+ *   <li>{@code spawnMarkers}：生成器指示 Map&lt;String,List&lt;List&lt;Integer&gt;&gt;&gt;，如 {"grass":[[2,2]],"debris":[[30,40]]}
+ *       ——LLM 低成本铺装饰（M2）；</li>
+ *   <li>{@code warps}：传送点 List&lt;Map&gt;：{from:[x,y], to:[mapId,x,y]}（契约支持 + 校验，生成器暂不产出）。</li>
+ * </ul>
+ * map_version 策略：<b>保持 CURRENT_VERSION=1 不变</b>（扩展兼容模式——旧前端按 v1 渲染忽略新键；
+ * 新键是增强不是破坏性变更，D-014 版本纪律）。
+ * 瓦片 id 约束：tiles.png 实际只有 5 格，<b>不允许引入 tiles.png 没有的瓦片 id</b>（渲染会花屏）；
+ * 装饰用字符串类型键表达（objects/overlay/decor.type），瓦片 id 保持 1-5。
  */
 public final class MapContract {
 
@@ -70,12 +88,25 @@ public final class MapContract {
         Object c = raw.get("layers") instanceof Map<?, ?> lm2 ? lm2.get("collision") : null;
         layers.put("ground", g instanceof List<?> ? g : List.of());
         layers.put("collision", c instanceof List<?> ? c : List.of());
+        // v0.2 扩展键（可选，缺失兜底为空）：Front 静态装饰层 / AlwaysFront 前景遮罩层
+        Object objs = raw.get("layers") instanceof Map<?, ?> lm3 ? lm3.get("objects") : null;
+        Object ovl = raw.get("layers") instanceof Map<?, ?> lm4 ? lm4.get("overlay") : null;
+        layers.put("objects", objs instanceof List<?> ? objs : List.of());
+        layers.put("overlay", ovl instanceof List<?> ? ovl : List.of());
         m.put("layers", layers);
 
         m.put("rooms", listOf(raw.get("rooms")));
         m.put("corridors", listOf(raw.get("corridors")));
         m.put("zones", listOf(raw.get("zones")));
         m.put("spawn_points", listOf(raw.get("spawn_points")));
+
+        // v0.2 扩展键（可选，缺失兜底为空；宽容解析不做白名单）
+        Object tp = raw.get("tileProps");
+        m.put("tileProps", tp instanceof Map<?, ?> ? tp : Map.of());
+        m.put("decor", listOf(raw.get("decor")));
+        Object sm = raw.get("spawnMarkers");
+        m.put("spawnMarkers", sm instanceof Map<?, ?> ? sm : Map.of());
+        m.put("warps", listOf(raw.get("warps")));
 
         if (raw.get("generator") instanceof Map<?, ?> gen) {
             m.put("generator", gen);
@@ -111,11 +142,18 @@ public final class MapContract {
         }
         layers.put("ground", toIntList(ground));
         layers.put("collision", toIntList(collision));
+        // v0.2 扩展键空默认（与 normalize 兜底一致）
+        layers.put("objects", List.of());
+        layers.put("overlay", List.of());
         m.put("layers", layers);
         m.put("rooms", List.of());
         m.put("corridors", List.of());
         m.put("zones", List.of());
         m.put("spawn_points", List.of());
+        m.put("tileProps", Map.of());
+        m.put("decor", List.of());
+        m.put("spawnMarkers", Map.of());
+        m.put("warps", List.of());
         m.put("generator", Map.of("kind", "empty", "note", "空地图兜底"));
         return m;
     }
@@ -159,6 +197,40 @@ public final class MapContract {
             for (int j = 0; j < row.size(); j++) out[i][j] = row.get(j);
         }
         return out;
+    }
+
+    /** 读取字符串二维层为 List&lt;List&lt;String&gt;&gt;（元素可为 null；非规范形状返回 null，由校验器报错）。 */
+    @SuppressWarnings("unchecked")
+    public static List<List<String>> strGrid(Object o) {
+        if (!(o instanceof List<?> rows)) return null;
+        List<List<String>> grid = new ArrayList<>();
+        for (Object r : rows) {
+            if (!(r instanceof List<?> row)) return null;
+            List<String> rr = new ArrayList<>();
+            for (Object v : row) {
+                rr.add(v == null ? null : String.valueOf(v));
+            }
+            grid.add(rr);
+        }
+        return grid;
+    }
+
+    /**
+     * 解析 tileProps 的 "x,y" 键为 [x, y] 整数对；非法（非数字/缺逗号/多逗号）返回 null。
+     * 不做坐标越界校验（越界由校验器报错）。
+     */
+    public static int[] tileKey(String key) {
+        if (key == null) return null;
+        int comma = key.indexOf(',');
+        if (comma <= 0 || comma == key.length() - 1) return null;
+        if (key.indexOf(',', comma + 1) >= 0) return null;
+        try {
+            int x = Integer.parseInt(key.substring(0, comma).trim());
+            int y = Integer.parseInt(key.substring(comma + 1).trim());
+            return new int[]{x, y};
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     public static int intOf(Object o, int def) {

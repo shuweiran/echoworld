@@ -164,6 +164,19 @@ public class SimulationWorld {
         log.info("Scene changed to: {} ({} obstacles)", sceneName, obstacles.size());
     }
 
+    /**
+     * P-0811-G：注入自定义障碍（LLM 地图 collision 瓦片转矩形 Obstacle）。
+     * 覆盖预置场景；scene 名保留为"custom:<label>"便于识别。传空列表 = 清空障碍（无墙世界）。
+     */
+    public void setCustomObstacles(List<Obstacle> custom, String label) {
+        this.obstacles = custom == null || custom.isEmpty()
+                ? new CopyOnWriteArrayList<>()
+                : new CopyOnWriteArrayList<>(custom);
+        this.currentScene = label == null || label.isBlank() ? "custom" : "custom:" + label;
+        this.movementSystem.setObstacles(this.obstacles);
+        log.info("Custom obstacles set: {} (label={})", obstacles.size(), currentScene);
+    }
+
     private void tick() {
         if (!running) return;
         tickCount++;

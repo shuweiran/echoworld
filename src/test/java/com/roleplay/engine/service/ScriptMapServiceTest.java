@@ -235,6 +235,120 @@ class ScriptMapServiceTest {
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  v0.2 扩展键（P-0814-F）
+    //  ═══════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("V1: LLM 输出含 v0.2 新键 → 契约通过（新键透传保留，generator.kind=llm）")
+    void llmV02KeysPass() {
+        LLMClient llm = mock(LLMClient.class);
+        Map<String, Object> m = validLlmMap();
+        // layers.objects/overlay（10×8 字符串层，可 null）
+        List<List<Object>> objects = new ArrayList<>();
+        List<List<Object>> overlay = new ArrayList<>();
+        for (int y = 0; y < 8; y++) {
+            List<Object> o = new ArrayList<>();
+            List<Object> ov = new ArrayList<>();
+            for (int x = 0; x < 10; x++) {
+                o.add((x == 2 && y == 1) ? "tree_oak" : null);
+                ov.add((x == 4 && y == 0) ? "canopy" : null);
+            }
+            objects.add(o);
+            overlay.add(ov);
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> layers = new LinkedHashMap<>((Map<String, Object>) m.get("layers"));
+        layers.put("objects", objects);
+        layers.put("overlay", overlay);
+        m.put("layers", layers);
+        m.put("tileProps", Map.of("2,1", Map.of("action", "examine")));
+        m.put("decor", List.of(Map.of("id", "d1", "type", "bench", "tile", List.of(3, 2))));
+        m.put("spawnMarkers", Map.of("grass", List.of(List.of(1, 1))));
+        m.put("warps", List.of(Map.of("from", List.of(8, 6), "to", List.of("map_2", 0, 0))));
+        when(llm.callJson(anyString(), anyInt())).thenReturn(m);
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(m);
+
+        ScriptMapService svc = new ScriptMapService(llm);
+        ScriptMapService.MapResult r = svc.generateMap("民国", List.of("客厅", "书房"), List.of("客厅", "书房"), 42L);
+        assertFalse(r.usedBsp(), "含新键的合法输出不应降级");
+        assertTrue(r.validation().ok(), "errors=" + r.validation().errors());
+        assertTrue(r.map().get("generator") instanceof Map<?, ?> g && "llm".equals(g.get("kind")));
+        Map<?, ?> outLayers = (Map<?, ?>) r.map().get("layers");
+        List<List<String>> objs = MapContract.strGrid(outLayers.get("objects"));
+        assertEquals("tree_oak", objs.get(1).get(2), "objects 透传保留（围合墙重建 layers 不丢新键）");
+        List<List<String>> ovl = MapContract.strGrid(outLayers.get("overlay"));
+        assertEquals("canopy", ovl.get(0).get(4), "overlay 透传保留");
+        assertTrue(r.map().get("tileProps") instanceof Map<?, ?>
+                && ((Map<?, ?>) r.map().get("tileProps")).containsKey("2,1"), "tileProps 透传保留");
+        assertEquals(1, ((List<?>) r.map().get("decor")).size(), "decor 透传保留");
+        assertTrue(r.map().get("spawnMarkers") instanceof Map<?, ?>);
+        assertEquals(1, ((List<?>) r.map().get("warps")).size(), "warps 透传保留");
+    }
+
+    @Test
+    @DisplayName("V2: LLM 输出无 v0.2 新键 → 零回归（normalize 兜底空键，校验通过）")
+    void llmWithoutV02KeysZeroRegression() {
+        ScriptMapService svc = new ScriptMapService(validLlm());
+        ScriptMapService.MapResult r = svc.generateMap("民国", List.of("客厅", "书房"), List.of("客厅", "书房"), 42L);
+        assertFalse(r.usedBsp());
+        assertTrue(r.validation().ok(), "errors=" + r.validation().errors());
+        assertTrue(r.map().get("generator") instanceof Map<?, ?> g && "llm".equals(g.get("kind")));
+        // normalize 兜底：新键为空默认（缺失=合法，v1 语义零破坏）
+        assertEquals(Map.of(), r.map().get("tileProps"));
+        assertEquals(List.of(), r.map().get("decor"));
+        assertEquals(Map.of(), r.map().get("spawnMarkers"));
+        assertEquals(List.of(), r.map().get("warps"));
+        Map<?, ?> layers = (Map<?, ?>) r.map().get("layers");
+        assertEquals(List.of(), layers.get("objects"));
+        assertEquals(List.of(), layers.get("overlay"));
+    }
+
+    @Test
+    @DisplayName("V3: LLM 输出含非法 v0.2 新键（decor id 重复）→ 校验失败 → BSP 兜底")
+    void llmInvalidV02KeysFallBackToBsp() {
+        LLMClient llm = mock(LLMClient.class);
+        Map<String, Object> m = validLlmMap();
+        m.put("decor", List.of(
+            Map.of("id", "d1", "type", "bench", "tile", List.of(1, 1)),
+            Map.of("id", "d1", "type", "lamp", "tile", List.of(2, 2))));
+        when(llm.callJson(anyString(), anyInt())).thenReturn(m);
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(m);
+        ScriptMapService svc = new ScriptMapService(llm);
+        ScriptMapService.MapResult r = svc.generateMap("民国", List.of("客厅"), List.of("客厅"), 7L);
+        assertTrue(r.usedBsp(), "decor id 重复校验失败应降级 BSP");
+        assertTrue(r.fallbackReasons().stream().anyMatch(s -> s.contains("校验失败")), "fallback 原因含校验失败");
+        assertTrue(r.map().get("generator") instanceof Map<?, ?> g && "bsp".equals(g.get("kind")));
+        assertTrue(r.validation().ok(), "BSP 兜底输出自洽 errors=" + r.validation().errors());
+    }
+
+    @Test
+    @DisplayName("V4: LLM 输出含非法 v0.2 新键（tileProps 越界）→ 校验失败 → BSP 兜底")
+    void llmInvalidTilePropsFallBackToBsp() {
+        LLMClient llm = mock(LLMClient.class);
+        Map<String, Object> m = validLlmMap();
+        m.put("tileProps", Map.of("99,99", Map.of("blocked", true)));
+        when(llm.callJson(anyString(), anyInt())).thenReturn(m);
+        when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(m);
+        ScriptMapService svc = new ScriptMapService(llm);
+        ScriptMapService.MapResult r = svc.generateMap("民国", List.of("客厅"), List.of("客厅"), 7L);
+        assertTrue(r.usedBsp(), "tileProps 越界校验失败应降级 BSP");
+        assertTrue(r.fallbackReasons().stream().anyMatch(s -> s.contains("校验失败")));
+        assertTrue(r.map().get("generator") instanceof Map<?, ?> g && "bsp".equals(g.get("kind")));
+    }
+
+    @Test
+    @DisplayName("V5: buildPrompt 含 v0.2 可选增强键指导段（坐标约束/瓦片 id 1-5/decor 英文标识符）")
+    void promptHasV02Guidance() {
+        String p = ScriptMapService.buildPrompt("民国", List.of("客厅"), List.of("客厅"), 20, 16);
+        assertTrue(p.contains("可选增强键"), "prompt 应含可选增强键段");
+        assertTrue(p.contains("layers.objects") && p.contains("layers.overlay"), "prompt 提及 objects/overlay");
+        assertTrue(p.contains("tileProps") && p.contains("decor") && p.contains("spawnMarkers") && p.contains("warps"));
+        assertTrue(p.contains("0≤x<width、0≤y<height"), "坐标约束明确");
+        assertTrue(p.contains("瓦片 id 只允许 1-5"), "瓦片 id 只允许 1-5 明确");
+        assertTrue(p.contains("不输出任何增强键也完全合法"), "可选语义明确（不输出也合法）");
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  M5-M7: ScriptGameService.generateMap + controller 端点
     //  ═══════════════════════════════════════════════════════════
 

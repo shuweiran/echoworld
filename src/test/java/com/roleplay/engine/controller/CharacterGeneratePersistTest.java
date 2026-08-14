@@ -117,7 +117,7 @@ class CharacterGeneratePersistTest {
         Persona p = new Persona("小铃");
         cc.attachPersonaCard(p);
         assertTrue(p.hasLayers());
-        assertTrue(p.buildSystemPrompt().contains("【Layer 0 行为规则"), "五层卡进系统提示");
+        assertTrue(p.buildSystemPrompt().contains("【Layer 0 核心行为准则"), "五层卡进系统提示");
 
         // 卡落盘文件存在（data/persona/{角色名}.json，UTF-8 无 BOM）
         Path file = tempDir.resolve("小铃.json");
@@ -196,7 +196,7 @@ class CharacterGeneratePersistTest {
             Persona p = new Persona("小铃");
             PersonaCardLoader.attach(p, null);
             assertTrue(p.hasLayers(), "attach 生效");
-            assertTrue(p.buildSystemPrompt().contains("【Layer 0 行为规则"));
+            assertTrue(p.buildSystemPrompt().contains("【Layer 0 核心行为准则"));
             assertTrue(p.buildSystemPrompt().contains("先道歉再重做"), "层内容来自外部卡");
             assertEquals("银发紫瞳，系着围裙", p.getAppearance(), "表层外观回填");
 

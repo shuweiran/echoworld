@@ -113,7 +113,7 @@ class SceneGoalStatusTest {
         actions.put("凯尔", "active");
         track.put("agent_actions", actions);
         when(arbiter.configureTracks(anyString(), anyList(), anyString(), anyString(),
-                anyString(), anyList(), anyList(), anySet()))
+                anyString(), anyList(), anyList(), anySet(), any()))
                 .thenReturn(new TrackConfigResult(List.of(track), "test"));
         when(arbiter.integrateOutputs(anyString(), anyList(), anyList(), anyBoolean()))
                 .thenReturn(Map.of("narration", "整合旁白"));

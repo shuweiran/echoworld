@@ -145,7 +145,7 @@ class GeneratorCharacterFiveLayerTest {
         cc.attachPersonaCard(p);
         assertTrue(p.hasLayers(), "生成卡挂载后 Persona 有五层");
         String prompt = p.buildSystemPrompt();
-        assertTrue(prompt.contains("【Layer 0 行为规则"), "系统提示含 Layer0");
+        assertTrue(prompt.contains("【Layer 0 核心行为准则"), "系统提示含 Layer0");
         assertTrue(prompt.contains("先道歉再重做"), "Layer0 规则内容");
         assertTrue(prompt.contains("【Layer 1 身份】"), "系统提示含 Layer1");
         assertTrue(prompt.contains("和风咖啡馆「铃屋」"), "Layer1 身份内容");
@@ -255,7 +255,7 @@ class GeneratorCharacterFiveLayerTest {
         cc3.attachPersonaCard(p3);
         assertTrue(p3.hasLayers());
         String prompt3 = p3.buildSystemPrompt();
-        assertTrue(prompt3.contains("【Layer 0 行为规则"), "部分层渲染 Layer0");
+        assertTrue(prompt3.contains("【Layer 0 核心行为准则"), "部分层渲染 Layer0");
         assertFalse(prompt3.contains("【Layer 4 冲突链与雷区"), "缺层不渲染（不炸）");
 
         // 完全失败（callJson 空 map）→ 回退旧 4 字段默认行为不崩，controller 不挂卡不炸
@@ -294,7 +294,7 @@ class GeneratorCharacterFiveLayerTest {
         cc.attachPersonaCard(p);
         assertTrue(p.hasLayers());
         String prompt = p.buildSystemPrompt(); // 字符串 layer1 被跳过、layer0 正常渲染，不炸
-        assertTrue(prompt.contains("【Layer 0 行为规则"));
+        assertTrue(prompt.contains("【Layer 0 核心行为准则"));
         assertTrue(prompt.contains("笑而不答"));
     }
 
@@ -310,5 +310,43 @@ class GeneratorCharacterFiveLayerTest {
         verify(llm).callJson(anyString(), tokenCaptor.capture());
         assertTrue(tokenCaptor.getValue() >= 2000,
                 "D-023 纪律：五层 persona 大 JSON 的 maxTokens 必须 ≥2000（实际 " + tokenCaptor.getValue() + "）");
+    }
+
+    // ── ⑥ humanDetails 高频动作权重调低（P-0813-C） ─────────────
+
+    @Test
+    @DisplayName("⑥ 单角色生成 prompt：humanDetails 约束——动作/习惯最多 1 条 + 特定情境才触发 + 多可变表达")
+    void characterPromptHasHumanDetailsConstraints() {
+        LLMClient llm = mockLlm(fullFiveLayerCard());
+        GeneratorService g = new GeneratorService(llm);
+        g.generateCharacter("咖啡师", "老街咖啡馆", "木质装修");
+        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(llm).callJson(promptCaptor.capture(), any());
+        String prompt = promptCaptor.getValue();
+        // schema 行内约束
+        assertTrue(prompt.contains("肢体动作/小习惯最多 1 条"), "schema 行注明动作/习惯最多 1 条");
+        assertTrue(prompt.contains("特定情境才触发"), "schema 行要求绑定特定情境才触发");
+        assertTrue(prompt.contains("高频固定开场动作"), "schema 行禁止高频固定开场动作");
+        // 补充要求段
+        assertTrue(prompt.contains("补充要求（人味细节设计，重要）"), "prompt 含补充要求段");
+        assertTrue(prompt.contains("紧张时会不自觉推眼镜"), "给出情境化示例（如「紧张时会不自觉推眼镜」）");
+        assertTrue(prompt.contains("多个可变说法"), "要求多个可变说法");
+        assertTrue(prompt.contains("单一固定模板"), "禁止单一固定模板");
+    }
+
+    @Test
+    @DisplayName("⑥ 场景配套角色 prompt：humanDetails 约束同步生效（适用于每个角色）")
+    void scenePromptHasHumanDetailsConstraints() {
+        LLMClient llm = mockLlm(fullFiveLayerCard());
+        GeneratorService g = new GeneratorService(llm);
+        g.generateScene("老街咖啡馆", "夏末傍晚");
+        ArgumentCaptor<String> promptCaptor = ArgumentCaptor.forClass(String.class);
+        verify(llm).callJson(promptCaptor.capture(), any());
+        String prompt = promptCaptor.getValue();
+        assertTrue(prompt.contains("肢体动作/小习惯最多 1 条"), "场景 prompt 同样要求动作/习惯最多 1 条");
+        assertTrue(prompt.contains("特定情境才触发"), "场景 prompt 要求特定情境才触发");
+        assertTrue(prompt.contains("补充要求（人味细节设计，重要，适用于每个角色）"), "场景 prompt 含补充要求段");
+        assertTrue(prompt.contains("多个可变说法"), "场景 prompt 要求多可变表达");
+        assertTrue(prompt.contains("单一固定模板"), "场景 prompt 禁止单一固定模板");
     }
 }

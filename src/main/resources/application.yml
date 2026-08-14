@@ -63,8 +63,69 @@ roleplay:
     # （主人 2026-08-02 反馈“前端还是并联输出”→ 确认根因即本开关默认 false，现按需求开启串行；
     #  如需切回并行只改回 false 并重启服务即可）
     serial: true
+    # P-0813-A: 一般模式自动续轮延时（毫秒；0=禁用；默认 3000）——每轮完成后延时自动跑下一轮
+    # （导演模式 AI 自主推进），玩家发言打断 pending 任务；狼人杀/剧本杀走各自状态机不误触发
+    # P-0814-A: playback-driven=true（默认）时本键被忽略——不再定时自续，改为等「播出完毕」信号
+    auto-continue-ms: 3000
+    # P-0814-A: 点击驱动对话模式总开关（默认 true=主人拍板新语义）——一轮生成完即停，
+    # 收到前端「播出完毕」信号（POST /api/simulation/playback_done）后才生成下一轮；
+    # 无玩家（导演模式）播完即停等导演点击；2D 对话组同步生效（不再拉入轨道即自动连跑）。
+    # false=回退旧行为（auto-continue-ms 定时自续 + 2D pacing 间隔自动连跑）
+    playback-driven: true
+    # P-0814-B: 2D 对话组「等待播出完毕」超时（毫秒；默认 30000）——无玩家成员组（AI-AI/单 AI）
+    # 等待超时自动解散（防 awaitPlayback 永久阻塞角色冻结）；有玩家成员组不自动解散（玩家输入/点击唤醒）
+    group-await-timeout-ms: 30000
+    # P-0813-B: 校准轮间隔（0=禁用；默认 10）——每 N 个 AI 自主推进轮（无玩家输入）注入校准提醒
+    # （layer0 前 3 条 + 反差 + 角色关系，Author's Note 式防漂移；玩家发言轮不计数；会话重建计数重置）
+    # P-0813-C: 默认 6→10（调低校准注入频率，给角色更长的自然发挥窗口）
+    calibrate-every: 10
     agent-max-tokens: 300
     arbiter-max-tokens: 150
+  pacing:
+    # P-0813-F：2D 世界节奏控制（仅 2D 模拟世界生效；剧本杀/狼人杀各局自有引擎不接此配置=零影响）：
+    #   enabled=总开关（false=全部按原硬编码行为）；
+    #   director-interval-ms=导演（主控）LLM 轮次间隔（原 10000；默认 15000=降低目标覆盖频率）；
+    #   conversation-cooldown-ms=同一对角色解散后再次自动组对话冷却（原 5000；默认 8000=降低对话建立密度）；
+    #   round-cooldown-ms=对话轮次基础间隔（DYAD 等，原 2000；进入对话后当前轨道全速用此值）；
+    #   group-round-cooldown-ms=群聊轮次基础间隔（原 3000）；
+    #   idle-round-multiplier=未进入对话时轮次间隔倍率（默认 1.5=所有轨道放慢，降低未对话态密度）；
+    #   inactive-track-multiplier=进入对话后非玩家轨道轮次间隔倍率（P-0813-H 需求更正：
+    #     默认 2.0→4.0——多轨道并行保持、不挂起，但非玩家轨道轮次间隔大幅拉长（对话时间
+    #     延长、密度降低），比 F 的 ×2 更强，可调 ×3~×5）；
+    #   move-speed-base / move-speed-random-range=2D 角色移动速度基准+随机幅度（原 50+rand×60；
+    #     默认 45+rand×35 → 45-80 px/s，世界观感更平缓）。玩家手动目标（/target）不受降频影响。
+    enabled: true
+    director-interval-ms: 15000
+    conversation-cooldown-ms: 8000
+    round-cooldown-ms: 2000
+    group-round-cooldown-ms: 3000
+    idle-round-multiplier: 1.5
+    inactive-track-multiplier: 4.0
+    move-speed-base: 45
+    move-speed-random-range: 35
+    #   move-speed-player-base / move-speed-player-random-range=玩家角色（playerControlled）分速
+    #     （P-0814-I，默认 90+rand×15 → 90-105 px/s）——玩家 WASD/点击移动更跟手；AI 保持 45-80 降密度
+    move-speed-player-base: 90
+    move-speed-player-random-range: 15
+    #   speech-bubble-hold-ms=非玩家轨道发言的气泡停留/展示时长基准（P-0813-H，默认
+    #     4000ms；经 conversation-status 的 pacing.speechBubbleHoldMs 下发，前端可作
+    #     气泡展示时长/展示间隔参数）
+    speech-bubble-hold-ms: 4000
+  director:
+    # P-0813-I：主控日程（混合架构——主控驱动的「时刻→地点→行为」日程骨架）：
+    #   schedule-enabled=总开关（默认 true；false=回退原行为：导演 LLM 每轮重决策移动目标）；
+    #   schedule-window-duration-ms=窗口时长（默认 300000ms=5 分钟，时段索引=now/时长%slots）；
+    #   schedule-slots=时段数量（默认 6）——每角色一张日程表=6 个窗口（对齐星露谷一天 4-6 个日程点）。
+    schedule-enabled: true
+    schedule-window-duration-ms: 300000
+    schedule-slots: 6
+  track:
+    # P-0815-A：轨道系统空间会话距离（px，默认 70）——两两距离 < 该值 → MERGED（可对话，
+    #   可见对方）；修正历史单位错位（需求文档「5 格」中的「格」与世界像素坐标混用，5.0 按
+    #   px 用时 5px≈贴脸，近距离对话 MERGED 几乎永不触发）。经 SimulationService 接线到
+    #   TrackDirectorService.setConversationDistance（重建 SpatialTrackResolver，
+    #   ConversationManager legacy 路径常量同值 70）。
+    conversation-distance: 70
   mode:
     default: "free"
     language: "zh"

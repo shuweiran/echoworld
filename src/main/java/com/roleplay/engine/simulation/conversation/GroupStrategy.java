@@ -99,7 +99,8 @@ public class GroupStrategy implements ConversationStrategy {
             }
 
             if (detected != Emotion.NEUTRAL) state.setEmotion(detected);
-            state.setCurrentMessage(cleanResponse);
+            // P-0813-K：玩家成员不回写 currentMessage（单次消费输入通道，见 executeRound）
+            if (!state.isPlayerControlled()) state.setCurrentMessage(cleanResponse);
             group.recordTurn(name, cleanResponse);
             group.setEngagement(name, group.getEngagement(name) * 0.9 + 0.1);
         }

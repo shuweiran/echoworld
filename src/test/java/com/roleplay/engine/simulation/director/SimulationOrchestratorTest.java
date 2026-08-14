@@ -35,7 +35,9 @@ class SimulationOrchestratorTest {
 
     private SimulationWorld worldWithAgents(String... names) {
         SimulationWorld world = new SimulationWorld();
-        double[][] coords = {{0, 0}, {3, 0}, {50, 0}, {500, 0}};
+        // P-0815-A：C 原 50px 在会话距离修正为 70px（px 语义）后落入 MERGED 带，
+        // WEAK 旁观用例移到 100px（∈ [70, 200) 听觉带中部）。
+        double[][] coords = {{0, 0}, {3, 0}, {100, 0}, {500, 0}};
         for (int i = 0; i < names.length; i++) {
             Persona persona = new Persona(names[i], "测试人格" + names[i]);
             Agent agent = new Agent(persona, "test", null);   // null LLM: test-only
@@ -117,7 +119,7 @@ class SimulationOrchestratorTest {
 
         assertEquals(Track.Mode.ISOLATED, group.getTrackAssignment("B").type());
         assertTrue(group.getTrackAssignment("B").contextNote().contains("秘密任务"));
-        // A(0,0)/B(3,0) 近距 MERGED（B 被秘密覆盖），C(50,0) 旁观 WEAK。
+        // A(0,0)/B(3,0) 近距 MERGED（B 被秘密覆盖），C(100,0) 旁观 WEAK。
         assertEquals(Track.Mode.MERGED, group.getTrackAssignment("A").type());
         assertEquals(Track.Mode.WEAK, group.getTrackAssignment("C").type());
     }

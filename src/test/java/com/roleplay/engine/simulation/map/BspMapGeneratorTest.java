@@ -31,10 +31,70 @@ class BspMapGeneratorTest {
     void determinism() {
         Map<String, Object> a1 = BspMapGenerator.generate(BspMapGenerator.Options.defaults(42L));
         Map<String, Object> a2 = BspMapGenerator.generate(BspMapGenerator.Options.defaults(42L));
-        assertEquals(a1, a2, "同 seed 必须完全一致");
+        assertEquals(a1, a2, "同 seed 必须完全一致（含 v0.2 spawnMarkers/decor 新键）");
 
         Map<String, Object> b1 = BspMapGenerator.generate(BspMapGenerator.Options.defaults(43L));
         assertNotEquals(a1.get("map_id"), b1.get("map_id"));
+        // v0.2 新键同样随 seed 变化（装饰布局不同）
+        assertNotEquals(a1.get("spawnMarkers"), b1.get("spawnMarkers"));
+        assertNotEquals(a1.get("decor"), b1.get("decor"));
+    }
+
+    @Test
+    @DisplayName("v0.2：spawnMarkers 数量>0 且坐标合法（草 ~2% / 杂物 ~0.5% 密度）")
+    void spawnMarkersValid() {
+        Map<String, Object> m = BspMapGenerator.generate(BspMapGenerator.Options.defaults(20260801L));
+        Map<?, ?> sm = (Map<?, ?>) m.get("spawnMarkers");
+        assertTrue(sm.get("grass") instanceof List<?> grass && !((List<?>) grass).isEmpty(),
+                "grass 标记数量 >0（默认 24×16 可撒格 ≈150，~2% ≈3）");
+        assertTrue(sm.get("debris") instanceof List<?>, "debris 类别键存在");
+        int W = (Integer) m.get("width"), H = (Integer) m.get("height");
+        for (Object cat : sm.keySet()) {
+            for (Object p : (List<?>) sm.get(cat)) {
+                List<?> pt = (List<?>) p;
+                int x = ((Number) pt.get(0)).intValue();
+                int y = ((Number) pt.get(1)).intValue();
+                assertTrue(x >= 0 && y >= 0 && x < W && y < H, cat + " 标记 " + x + "," + y + " 越界");
+            }
+        }
+    }
+
+    @Test
+    @DisplayName("v0.2：decor 数量≥房间数，且全部不嵌墙（ground≠2、collision=0）")
+    void decorValid() {
+        Map<String, Object> m = BspMapGenerator.generate(BspMapGenerator.Options.defaults(20260801L));
+        List<?> rooms = (List<?>) m.get("rooms");
+        List<?> decor = (List<?>) m.get("decor");
+        assertTrue(decor.size() >= rooms.size(), "decor " + decor.size() + " 应 ≥ 房间数 " + rooms.size());
+        Map<?, ?> layers = (Map<?, ?>) m.get("layers");
+        int[][] ground = grid(layers.get("ground"));
+        int[][] collision = grid(layers.get("collision"));
+        java.util.Set<String> ids = new HashSet<>();
+        for (Object o : decor) {
+            Map<?, ?> d = (Map<?, ?>) o;
+            assertTrue(ids.add(String.valueOf(d.get("id"))), "decor id 唯一：" + d.get("id"));
+            assertTrue(String.valueOf(d.get("type")).matches("pillar|flower_bed|bench|lamp"),
+                    "type 取自类型池：" + d.get("type"));
+            List<?> tile = (List<?>) d.get("tile");
+            int x = ((Number) tile.get(0)).intValue();
+            int y = ((Number) tile.get(1)).intValue();
+            assertNotEquals(2, ground[y][x], "decor " + d.get("id") + " 不能嵌墙（ground=2）");
+            assertEquals(0, collision[y][x], "decor " + d.get("id") + " 必须可通行");
+        }
+    }
+
+    @Test
+    @DisplayName("v0.2：ground 多瓦片铺装（至少 2 种非墙瓦片）")
+    void groundMultiTile() {
+        Map<String, Object> m = BspMapGenerator.generate(BspMapGenerator.Options.defaults(20260801L));
+        int[][] ground = grid(((Map<?, ?>) m.get("layers")).get("ground"));
+        java.util.Set<Integer> tiles = new HashSet<>();
+        for (int[] row : ground) {
+            for (int t : row) {
+                if (t != MapContract.TILE_WALL) tiles.add(t);
+            }
+        }
+        assertTrue(tiles.size() >= 2, "非墙瓦片种类 ≥2（房间交替铺装 + 走廊石板 + 外部草地），实际=" + tiles);
     }
 
     @Test

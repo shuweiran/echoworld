@@ -59,7 +59,7 @@ public class GeneratorService {
               - voice：说话风格（string，30-60字）
               - background：背景故事（string，50-80字）
               - contrast：反差设定（object：surface 表面形象 / actual 真实内在 / hint 反差触发提示）
-              - humanDetails：人味细节（array of string，3-6条）
+              - humanDetails：人味细节（array of string，3-6条：小缺点/小习惯/口头禅/情绪化表达。注意：肢体动作/小习惯最多 1 条，且必须绑定特定情境才触发，禁止写成每轮必现的高频固定开场动作）
               - layer0：行为规则（array of string，5-8条）
               - layer1：身份（object）
               - layer2：表达风格（object）
@@ -67,6 +67,12 @@ public class GeneratorService {
               - layer4：冲突链与雷区（object）
 
             只返回 JSON，不要其他文字。
+
+            补充要求（人味细节设计，重要，适用于每个角色）：
+            - 肢体动作/小习惯（如推眼镜、摸耳钉、转笔）最多 1 条，且必须设计为「特定情境才触发」
+              （如「紧张时会不自觉推眼镜」「尴尬时摸耳钉」），禁止写成无情境限制、每轮必现的高频固定开场动作。
+            - 口头禅/固定句式/动作若每轮必现会破坏自然感：同类表达应提供多个可变说法，
+              让角色在不同情境下轮换使用，不要写死为单一固定模板。
             """, context, kw);
 
         // D-023 纪律：场景+4~6 角色大 JSON 用 300 必截断 → 4000（与剧本/角色生成同档）
@@ -166,7 +172,7 @@ public class GeneratorService {
             - voice：说话风格（string，30-60字）
             - background：背景故事（string，50-80字）
             - contrast：反差设定（object：surface 表面形象 / actual 真实内在 / hint 反差触发提示）
-            - humanDetails：人味细节（array of string，3-6条：小缺点/小习惯/口头禅/情绪化表达）
+            - humanDetails：人味细节（array of string，3-6条：小缺点/小习惯/口头禅/情绪化表达。注意：肢体动作/小习惯最多 1 条，且必须绑定特定情境才触发，禁止写成每轮必现的高频固定开场动作）
             - layer0：行为规则（array of string，5-8条，每条为「当[场景]时，你[具体行为]」句式，最高优先级）
             - layer1：身份（object：gender 性别与代词 / age 年龄 / identity 身份 / world 世界背景 / relation 与玩家的关系）
             - layer2：表达风格（object：catchphrases 口头禅 array / sentenceStyle 句长句式 / emojiHabits 语气词与emoji习惯 / sampleLines 原话示例 array 至少4条）
@@ -174,6 +180,12 @@ public class GeneratorService {
             - layer4：冲突链与雷区（object：triggers 触发点 array / conflictSequence 冲突序列 / coldWar 冷战模式 / reconcileSignal 和解信号 / boundaries 边界与雷区 array）
 
             只返回 JSON，不要其他文字。
+
+            补充要求（人味细节设计，重要）：
+            - 肢体动作/小习惯（如推眼镜、摸耳钉、转笔）最多 1 条，且必须设计为「特定情境才触发」
+              （如「紧张时会不自觉推眼镜」「尴尬时摸耳钉」），禁止写成无情境限制、每轮必现的高频固定开场动作。
+            - 口头禅/固定句式/动作若每轮必现会破坏自然感：同类表达应提供多个可变说法，
+              让角色在不同情境下轮换使用，不要写死为单一固定模板。
             """, userHint);
 
         // D-023 纪律：结构化大 JSON 用 400 必截断 → 4000（LLMClient 上限内，与剧本生成同档）

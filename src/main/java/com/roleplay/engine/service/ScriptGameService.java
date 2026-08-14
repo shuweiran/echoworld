@@ -17,6 +17,7 @@ import com.roleplay.engine.simulation.conversation.ConversationManager;
 import com.roleplay.engine.simulation.conversation.SpeechGate;
 import com.roleplay.engine.simulation.director.WorldDirectorService;
 import com.roleplay.engine.simulation.map.MapContract;
+import com.roleplay.engine.simulation.map.interact.MapInteractService;
 import com.roleplay.engine.simulation.track.TrackAssignment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -353,6 +354,10 @@ public class ScriptGameService {
         String currentMapId = "";
         /** P-0803-E 方案 B: 搜证足迹 —— 全局已搜过的地点（地图绿点恢复 + 面板/地图双通道同步，契约 §5 消费端）。 */
         final java.util.Set<String> searchedLocations = new java.util.LinkedHashSet<>();
+        /** P-0814-H: 热点交互一次性 flag（对齐 searchedLocations 幂等标记范式 —— flag 动作写入、conditions.requireFlag 读取；随快照落库）。 */
+        final java.util.Set<String> decorFlags = new java.util.LinkedHashSet<>();
+        /** P-0814-H: decor 实例运行时状态（键 "mapId|decorId" → 状态 map；once 处理后含 processed=true；随快照落库，场景存热点实例状态）。 */
+        final Map<String, Map<String, Object>> decorStates = new LinkedHashMap<>();
 
         public Map<String, Object> toMap(String playerName) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -424,6 +429,13 @@ public class ScriptGameService {
             }
             if (!maps.isEmpty()) {
                 m.put("map_ids", new ArrayList<>(maps.keySet()));
+            }
+            // P-0814-H: decor 实例运行时状态 + 一次性 flag（前端已处理置灰/条件展示数据源；附加键不破坏既有契约，旧对局无此键）
+            if (!decorStates.isEmpty()) {
+                m.put("decor_states", new LinkedHashMap<>(decorStates));
+            }
+            if (!decorFlags.isEmpty()) {
+                m.put("decor_flags", new ArrayList<>(decorFlags));
             }
             if (!discussionTranscript.isEmpty()) {
                 m.put("discussion", new ArrayList<>(discussionTranscript));
@@ -979,6 +991,114 @@ public class ScriptGameService {
         result.put("result", "搜证成功：获得 " + foundIds.size() + " 条线索，消耗 " + cost + " AP");
         result.put("ap", game.playerAp.get(player));
         result.put("ap_cost", cost);
+        return result;
+    }
+
+    /**
+     * P-0814-H（热点/搜证点交互系统，核心借鉴清单 4/5 = I1 统一交互链 + I2 数据驱动 + I3 三层持久化）：
+     * 玩家对地图交互点（decor 实体 / tileProps 瓦片动作 / 环境占位）执行统一动作键交互。
+     *
+     * <p>全链路逻辑（半径判定 Chebyshev / 优先级链 / once 幂等 / conditions 门 / 动作分发表）在
+     * {@link com.roleplay.engine.simulation.map.interact.MapInteractService}（纯逻辑、单测直测）；
+     * 本方法只做对局级校验 + 状态落地（GameContext 匿名实现）：
+     * ① 热点实例状态（state 字段变更）→ game.decorStates（随快照落库，场景存热点实例状态）；
+     * ② 一次性 flag → game.decorFlags（对齐 searchedLocations 幂等标记范式，不新造持久化体系）；
+     * ③ 玩家持有（addItem 授予线索）→ game.playerClues（对齐既有线索持有机制）；
+     * 快照恢复时三者一并恢复（restoreFromSnapshot）。
+     *
+     * @param mapId   目标地图 id（可空 —— 缺省当前图；多图注册表键）
+     * @param decorId 显式目标 decor id（可空 —— 缺省走 tile 坐标解析）
+     * @param tile    目标格坐标 "x,y"（可空 —— 与 decor_id 至少其一）
+     * @param px, py  玩家瓦片坐标（可空 —— 缺省跳过靠近校验，客户端上报尽力而为，对齐 switchMap）
+     */
+    public Map<String, Object> interact(String sessionId, String player, String playerKey,
+                                        String mapId, String decorId, String tile, Integer px, Integer py) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        String targetMapId = (mapId == null || mapId.isBlank()) ? game.currentMapId : mapId.trim();
+        if (targetMapId.isBlank()) return Map.of("error", "地图尚未生成");
+        Map<String, Object> data = game.maps.get(targetMapId);
+        if (data == null) return Map.of("error", "地图不存在: " + targetMapId);
+        if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
+        if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
+        Map<String, Object> access = checkPlayerAccess(sessionId, player, playerKey);
+        if (access != null) return access;
+
+        Map<String, Object> result = MapInteractService.interact(targetMapId, data, player, decorId, tile, px, py,
+                new MapInteractService.GameContext() {
+                    @Override
+                    public boolean grantClue(String p, String clueId, Map<String, Object> clueData) {
+                        List<String> mine = game.playerClues.computeIfAbsent(p, k -> new ArrayList<>());
+                        if (mine.contains(clueId)) return false;
+                        // 线索存在 → 直接授予；不存在且携带 title/content → 补建新线索（数据驱动 addItem）
+                        Map<String, Object> existing = null;
+                        for (Map<String, Object> c : game.clues) {
+                            if (clueId.equals(c.get("id"))) {
+                                existing = c;
+                                break;
+                            }
+                        }
+                        if (existing == null && clueData != null && !clueData.isEmpty()) {
+                            Map<String, Object> nc = new LinkedHashMap<>();
+                            nc.put("id", clueId);
+                            nc.put("title", clueData.getOrDefault("title", clueId));
+                            nc.put("content", clueData.getOrDefault("content", ""));
+                            nc.put("location", clueData.getOrDefault("location", ""));
+                            nc.put("public", false);
+                            game.clues.add(nc);
+                            existing = nc;
+                        }
+                        if (existing == null) return false; // 未知线索 id 且无数据 → 无法授予
+                        mine.add(clueId);
+                        return true;
+                    }
+
+                    @Override
+                    public String clueTitle(String clueId) {
+                        for (Map<String, Object> c : game.clues) {
+                            if (clueId.equals(c.get("id"))) {
+                                Object t = c.get("title");
+                                return t == null ? null : String.valueOf(t);
+                            }
+                        }
+                        return null;
+                    }
+
+                    @Override
+                    public boolean hasFlag(String flag) {
+                        return game.decorFlags.contains(flag);
+                    }
+
+                    @Override
+                    public void writeFlag(String flag) {
+                        game.decorFlags.add(flag);
+                    }
+
+                    @Override
+                    public boolean isProcessed(String mid, String did) {
+                        Map<String, Object> st = game.decorStates.get(mid + "|" + did);
+                        return st != null && Boolean.TRUE.equals(st.get("processed"));
+                    }
+
+                    @Override
+                    public void setProcessed(String mid, String did) {
+                        game.decorStates.computeIfAbsent(mid + "|" + did, k -> new LinkedHashMap<>()).put("processed", true);
+                    }
+
+                    @Override
+                    public Map<String, Object> runtimeState(String mid, String did) {
+                        Map<String, Object> st = game.decorStates.get(mid + "|" + did);
+                        return st == null ? Map.of() : new LinkedHashMap<>(st);
+                    }
+
+                    @Override
+                    public void setRuntimeState(String mid, String did, Map<String, Object> merged) {
+                        game.decorStates.put(mid + "|" + did, new LinkedHashMap<>(merged));
+                    }
+                });
+        // P-0814-H: 交互状态变更随快照落库（三层持久化：实例状态 decorStates / 一次性 flag decorFlags /
+        // 玩家持有 playerClues；databaseService 为 null 时 saveSnapshot 内部跳过）
+        saveSnapshot(game);
         return result;
     }
 
@@ -3048,6 +3168,9 @@ public class ScriptGameService {
         content.put("map_height", game.mapHeight);
         // P-0803-E 方案 B: 搜证足迹落快照（旧快照无此键 → 恢复为空集合，前端零影响）
         content.put("searched_locations", new ArrayList<>(game.searchedLocations));
+        // P-0814-H: 热点交互一次性 flag + decor 实例运行时状态随快照落库（旧快照无此键 → 恢复为空，零影响）
+        content.put("decor_flags", new ArrayList<>(game.decorFlags));
+        content.put("decor_states", new LinkedHashMap<>(game.decorStates));
         // P-0803-K: 多图注册表随快照落库（每图数据 + 溯源 + 足迹；旧快照无此键 → 恢复空注册表仅当前图）
         List<Map<String, Object>> mapsList = new ArrayList<>();
         for (Map.Entry<String, Map<String, Object>> e : game.maps.entrySet()) {
@@ -3174,6 +3297,20 @@ public class ScriptGameService {
             for (Object o : sl) {
                 String s = str(o);
                 if (s != null && !s.isBlank()) game.searchedLocations.add(s);
+            }
+        }
+        // P-0814-H: 热点交互一次性 flag + decor 实例运行时状态恢复（旧快照无此键 → 空，零影响）
+        if (c.get("decor_flags") instanceof List<?> dl) {
+            for (Object o : dl) {
+                String s = str(o);
+                if (s != null && !s.isBlank()) game.decorFlags.add(s);
+            }
+        }
+        if (c.get("decor_states") instanceof Map<?, ?> ds) {
+            for (Map.Entry<?, ?> e : ds.entrySet()) {
+                if (e.getKey() != null && e.getValue() instanceof Map<?, ?> v) {
+                    game.decorStates.put(str(e.getKey()), mapOf(v));
+                }
             }
         }
         // P-0803-K: 多图注册表恢复（旧快照无 maps 键 → 空注册表；map_data 存在时以当前图为唯一项）

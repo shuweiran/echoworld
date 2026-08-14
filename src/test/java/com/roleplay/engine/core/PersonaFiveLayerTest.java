@@ -63,7 +63,7 @@ class PersonaFiveLayerTest {
         assertTrue(prompt.contains("【反差设定】"), "反差设定段");
         assertTrue(prompt.contains("表面温柔体贴"), "反差-表面");
         assertTrue(prompt.contains("实际胜负欲强"), "反差-实际");
-        assertTrue(prompt.contains("【Layer 0 行为规则"), "Layer0 行为规则段");
+        assertTrue(prompt.contains("【Layer 0 核心行为准则"), "Layer0 行为规则段");
         assertTrue(prompt.contains("先道歉再重做，不辩解"), "Layer0 规则内容");
         assertTrue(prompt.contains("【Layer 1 身份】"), "Layer1 身份段");
         assertTrue(prompt.contains("咖啡馆店主"), "Layer1 身份内容");
@@ -113,7 +113,7 @@ class PersonaFiveLayerTest {
         assertTrue(prompt.contains("【说话风格】"), "旧格式说话风格");
         assertTrue(prompt.contains("【背景故事】"), "旧格式背景故事");
         assertTrue(prompt.contains("【身份锁定】"), "身份锁定");
-        assertFalse(prompt.contains("【Layer 0 行为规则"), "无五层段");
+        assertFalse(prompt.contains("【Layer 0 核心行为准则"), "无五层段");
 
         // 轻量提示同样回退旧格式
         String light = p.buildLightweightPrompt();
@@ -220,7 +220,7 @@ class PersonaFiveLayerTest {
                 assertFalse(p.getPersonaDesc().isEmpty(), name + " personaDesc 回填");
                 // 五层数据在系统提示中完整可见
                 String prompt = p.buildSystemPrompt();
-                assertTrue(prompt.contains("【Layer 0 行为规则"), name + " 提示含 Layer0");
+                assertTrue(prompt.contains("【Layer 0 核心行为准则"), name + " 提示含 Layer0");
                 assertTrue(prompt.contains("【反差设定】"), name + " 提示含反差");
                 assertTrue(prompt.contains("人味细节"), name + " 提示含人味");
                 assertTrue(prompt.contains("允许情绪波动"), name + " 提示含允许情绪波动");

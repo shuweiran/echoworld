@@ -319,9 +319,14 @@ public class AgentExecutor {
                     String context = contextBuilder.buildContext(
                             agentName, trackMode, trackId, config);
                     if (token != null) token.checkpoint();
+                    // P-0814-C 修复：并行路径此前构建 context 但未传给 generateSync（只传 persona
+                    // 轻量人设 + 空 history，D-024 记录未修的欠账）→ AI 生成看不到场景/对话历史/玩家
+                    // 消息（“AI 无视玩家质问、乱发挥”根因）。修复：context 作为 USER 消息传入，与
+                    // 串行路径 generateWithContextStream（system=完整人设, user=context）同构。
                     return agent.generateSync(
-                            agent.getPersona().buildLightweightPrompt(),
-                            List.of(), trackMode, List.of(), "", null, "", token);
+                            null,
+                            List.of(new Message(Message.Role.USER, "user", context)),
+                            trackMode, List.of(), "", null, "", token);
                 };
 
                 tasks.add(new AgentTask(agentName, trackId, trackMode, priority, callable));

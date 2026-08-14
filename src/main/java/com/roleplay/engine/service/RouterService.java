@@ -34,6 +34,11 @@ import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -79,6 +84,54 @@ public class RouterService {
     @Value("${roleplay.llm.remind-threshold:150}")
     private int remindThreshold;
 
+    /** P-0813-A：自动续轮延时（roleplay.round.auto-continue-ms，毫秒；<=0 禁用；默认 3000）。
+     *  一般模式每轮完成后延时自动跑下一轮（导演模式 AI 自主推进）；玩家发言/stop/新会话打断 pending 任务。
+     *  注意：@Value 仅对 Spring bean（默认单例 router）生效；SessionRegistry createRouter new 出来的
+     *  会话实例由 SessionRegistry 经 {@link #setAutoContinueMs(long)} 显式注入（同 serialRound 模式）。 */
+    @Value("${roleplay.round.auto-continue-ms:3000}")
+    private long autoContinueMs;
+
+    /** P-0814-A：点击驱动对话模式开关（roleplay.round.playback-driven；默认 false=回退旧行为，
+     *  生产 yml 置 true=主人拍板新语义）。true：一轮生成完即停、不再定时自续，置「等待播出完毕」
+     *  标志，由 POST /api/simulation/playback_done → {@link #onPlaybackDone()} 驱动下一轮；
+     *  auto-continue-ms 被忽略。false：D-056 旧行为（auto-continue-ms 定时自续）。
+     *  注意：@Value 仅对 Spring bean 生效；SessionRegistry createRouter new 出来的会话实例
+     *  经 {@link #setPlaybackDriven(boolean)} 显式注入（同 autoContinueMs 模式）。 */
+    @Value("${roleplay.round.playback-driven:false}")
+    private boolean playbackDriven;
+
+    /** P-0813-B：校准轮间隔（roleplay.round.calibrate-every；默认 6，0=禁用）。
+     *  每 calibrate-every 个「AI 自主推进轮」（无玩家输入的轮次）向会话消息列表注入校准提醒
+     *  （layer0 前 3 条 + 反差 + 角色关系，Author's Note 式尾部注入防漂移）；
+     *  玩家发言轮不计数不触发；initSession/loadSession 重置计数（会话重建不误触发）。
+     *  注意：@Value 仅对 Spring bean 生效；SessionRegistry createRouter new 出来的会话实例
+     *  经 {@link #setCalibrateEvery(int)} 显式注入（同 autoContinueMs 模式）。 */
+    @Value("${roleplay.round.calibrate-every:6}")
+    private int calibrateEvery;
+
+    /** P-0813-B：距上次校准已推进的 AI 轮数（仅无玩家输入的轮次计数；initSession/loadSession 重置）。 */
+    private int roundsSinceCalibration = 0;
+
+    /** P-0813-A：自动续轮共享调度器（2 daemon 线程；按 session 隔离 —— 每个会话 RouterService 实例只
+     *  调度/取消自己的 pending 任务，runRound 方法级同步保证同会话续轮与玩家发言串行互斥；
+     *  共享而非每实例一个调度器，避免 SessionRegistry 会话只增不减导致的线程泄漏）。 */
+    private static final ScheduledExecutorService AUTO_CONTINUE_SCHEDULER =
+            Executors.newScheduledThreadPool(2, r -> {
+                Thread t = new Thread(r, "router-auto-continue");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** P-0813-A：待执行的自动续轮任务（null=无；schedule 时替换、cancel 时置空 —— 每会话至多一个 pending）。 */
+    private volatile ScheduledFuture<?> pendingAutoContinue = null;
+    /** P-0813-A：调度续轮时所处的轮次 —— 触发时若轮次已推进（玩家发言/手动驱动先执行）则放弃本次续轮（防重复）。 */
+    private volatile int autoContinueScheduledRound = 0;
+    /** P-0813-A：手动批量轮次进行中（runTurns/runAutoRounds）→ 轮末不再调度自动续轮（防批量后多跑一轮）。 */
+    private volatile boolean manualRoundBatch = false;
+    /** P-0814-A：播放驱动模式下「等待播出完毕」标志——本轮生成完即置位，
+     *  onPlaybackDone 消费后清除；玩家发言/stop/新会话/手动批量清除（防串场/防重复轮）。 */
+    private volatile boolean awaitingPlayback = false;
+
     private volatile boolean running = false;
     /** P-0810-14: 起局后自动第一轮（AI 开场白）已触发标志 —— 每会话仅触发一次（initSession 重置）。 */
     private volatile boolean autoFirstRoundFired = false;
@@ -90,6 +143,8 @@ public class RouterService {
     private String sceneDescription = "";
     private int roundCount = 0;
     private List<Map<String, Object>> previousTracks = new ArrayList<>();
+    /** P-0811-G：上一轮主控整合时对本轮出场的预测（next_round）——下轮 configureTracks 注入闭环。 */
+    private volatile Map<String, Object> pendingNextRound = null;
     private String sessionId = "";
     // D5: 剧本杀当前对局 —— 用于把 secrets 发放到对应角色上下文（仅 script 模式生效）
     private ScriptGameService.ScriptGame scriptGame = null;
@@ -147,6 +202,8 @@ public class RouterService {
         this.previousTracks = new ArrayList<>();
         this.goals = new ArrayList<>();
         this.restrictedAgents = new HashSet<>();
+        // P-0811-G：新会话清空上一轮出场预测（旧会话预测不串场）
+        this.pendingNextRound = null;
         this.running = true;
         // P-0810-09: 新会话重置目标集（旧会话残留目标不串场）
         this.sceneGoals = null;
@@ -157,6 +214,12 @@ public class RouterService {
         this.roundHistory.clear();
         // P-0810-14: 新会话重置自动开场标志（每会话起局后自动第一轮仅触发一次）
         this.autoFirstRoundFired = false;
+        // P-0813-A: 新会话重置自动续轮 pending —— 同一 router 实例重初始化时，旧会话遗留的续轮任务不得续跑（防泄漏/防串场）
+        cancelPendingAutoContinue();
+        // P-0814-A: 新会话重置「等待播出完毕」标志（旧会话等待态不串场）
+        this.awaitingPlayback = false;
+        // P-0813-B: 新会话重置校准计数 —— 会话重建不误触发（旧会话已校准轮数不串场）
+        this.roundsSinceCalibration = 0;
 
         agents.clear();
         List<String> agentNames = new ArrayList<>();
@@ -189,12 +252,21 @@ public class RouterService {
             agents.put(a.getName(), a);
         }
         running = true;
+        // P-0813-A: 加载会话同样清理遗留的自动续轮任务（防旧会话 pending 在新会话上误触发）
+        cancelPendingAutoContinue();
+        // P-0814-A: 加载会话同样清除「等待播出完毕」标志（防旧会话等待态误触发）
+        this.awaitingPlayback = false;
+        // P-0813-B: 加载会话重置校准计数 —— 恢复的会话从头计数，不因旧轮数立刻触发校准
+        this.roundsSinceCalibration = 0;
         log.info("Loaded session {}", sessionId);
     }
 
     public Map<String, Object> getState() {
         Map<String, Object> s = new LinkedHashMap<>();
         s.put("status", running ? "running" : "idle");
+        // P-0814-C：暴露「等待播出完毕」状态（playback-driven 轮间门）——前端自动推进的轮询兜底
+        // 据此精确武装（仅 awaiting 时才该发 playback_done 信号；status 常驻 running 不能作完成信号）
+        s.put("awaiting_playback", awaitingPlayback);
         s.put("mode", mode);
         s.put("session_id", sessionId);
         s.put("round", roundCount);
@@ -461,6 +533,10 @@ public class RouterService {
      */
     public void stop() {
         running = false;
+        // P-0813-A：停止会话 → 取消待执行的自动续轮任务（防泄漏/防 stop 后仍自动跑轮）
+        cancelPendingAutoContinue();
+        // P-0814-A：停止会话 → 清除「等待播出完毕」标志（stop 后不再接受推进信号）
+        this.awaitingPlayback = false;
         if (interruptManager != null) {
             interruptManager.cancelAll(StopType.HARD, "用户停止 /api/stop");
         }
@@ -512,6 +588,12 @@ public class RouterService {
             // P0-2：恢复会话（用户再次发消息/点三轮 = 恢复运行）
             running = true;
         }
+        // P-0813-A：玩家发言 → 取消该会话待执行的自动续轮任务（防玩家发言驱动轮次与自动续轮重复/冲突）
+        if (userInput != null && !userInput.isBlank()) {
+            cancelPendingAutoContinueLocked();
+            // P-0814-A：播放驱动下玩家发言 = 点击驱动的一种（输入即推进轮次）→ 清除等待标志
+            awaitingPlayback = false;
+        }
         // P0-2：发言人命中 agent → 该角色直接发言（跳过 arbiter 主控旁白化）
         // P-0802-P2：加 playerId 解析式豁免 —— 角色库改名后前端仍传旧名 speaker 时，
         // 按 player_id 解析当前角色名命中 agent 名单同样豁免（防主控代声 = 防被识别为 AI）；
@@ -559,7 +641,7 @@ public class RouterService {
         List<Map<String, Object>> prevTrackLayout = previousTracks;
         TrackConfigResult trackResult = arbiter.configureTracks(
             enrichedScene, agentNames, historySummary,
-            mode, protagonist, previousTracks, goals, restrictedAgents);
+            mode, protagonist, previousTracks, goals, restrictedAgents, pendingNextRound);
         // D1: 轨道变化 → 发布 TrackChangeEvent（事件驱动中断：取消不属于新轨道的生成任务）
         boolean layoutChanged = prevTrackLayout != null
                 && tracksLayoutChanged(prevTrackLayout, trackResult.tracks);
@@ -600,7 +682,7 @@ public class RouterService {
                 agentSpoke.setRoundNumber(roundCount);
                 memory.addMessage(agentSpoke);
                 if (sse != null) {
-                    sse.broadcastUserInput(userInput, "human_discussion", speaker, roundCount);
+                    sse.broadcastUserInput(sessionId, userInput, "human_discussion", speaker, roundCount);
                 }
             } else {
                 UserInputCategory cat = arbiter.classifyUserInput(
@@ -617,7 +699,7 @@ public class RouterService {
                 memory.addMessage(userMsg);
                 // D8: 非命令输入 → 推送 user_input 事件（前端回显主控输入）
                 if (sse != null && !userInput.startsWith("/")) {
-                    sse.broadcastUserInput(narration, userCategory, speakerName, roundCount);
+                    sse.broadcastUserInput(sessionId, narration, userCategory, speakerName, roundCount);
                 }
             }
         }
@@ -642,6 +724,20 @@ public class RouterService {
         // 仅在 protagonist 非空时排除（director/free 模式 protagonist 为空 → 不影响 AI 自动对话）。
         if (!protagonist.isEmpty()) {
             agentMap.remove(protagonist);
+        }
+
+        // P-0813-B：校准轮注入 —— 每 calibrate-every 个「AI 自主推进轮」向会话消息列表追加校准提醒
+        // （layer0 前 3 条 + 反差 + buildDriftPreventionPrompt 角色关系，Author's Note 式防漂移）。
+        // 规则：①仅一般模式（狼人杀/剧本杀走各自状态机，零影响）；②玩家发言轮（userInput 非空）不计数不触发
+        // （仅轮次推进触发）；③0=禁用；④计数在 initSession/loadSession 重置（会话重建不误触发）。
+        // 注入点在 agent 生成前 → 本轮 buildAgentContext 的【对话历史】即含校准块（尾部高影响）。
+        boolean playerDrivenRound = userInput != null && !userInput.isBlank();
+        if (calibrateEvery > 0 && isGeneralMode(mode) && !playerDrivenRound) {
+            roundsSinceCalibration++;
+            if (roundsSinceCalibration >= calibrateEvery) {
+                injectCalibrationMessages();
+                roundsSinceCalibration = 0;
+            }
         }
 
         AgentExecutor.ExecutionResult execResult;
@@ -691,7 +787,7 @@ public class RouterService {
                     if (sse != null) {
                         Map<String, Object> trackMap = trackById.getOrDefault(output.trackId(), Map.of());
                         sse.broadcastAgentOutput(
-                            output.agentName(), output.content(), output.trackId(),
+                            sessionId, output.agentName(), output.content(), output.trackId(),
                             String.valueOf(trackMap.getOrDefault("label", "")),
                             String.valueOf(trackMap.getOrDefault("mode", "merged")),
                             output.visibleTo());
@@ -704,8 +800,22 @@ public class RouterService {
         Map<String, Object> integration = arbiter.integrateOutputs(
             sceneDescription, trackResult.tracks, agentOutputs, "werewolf".equals(mode));
 
+        // P-0811-G：保存主控对下一轮的出场预测（next_round）→ 下轮 configureTracks 注入闭环
+        // （「上轮预测→下轮执行」：谁出场/谁隔离由主控跨轮连续决策）
+        Object nr = integration.get("next_round");
+        if (nr instanceof Map<?, ?> m && !m.isEmpty()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> nextRound = (Map<String, Object>) m;
+            this.pendingNextRound = nextRound;
+        } else {
+            this.pendingNextRound = null;
+        }
+
         String narrationText = (String) integration.getOrDefault("narration", "");
-        if (narrationText != null && !narrationText.isBlank()) {
+        // P-0811-G：一般模式（free/protagonist/multi_track/director）删除主控整合叙事——
+        // 不入史、不推 arbiter_integrate SSE（角色发言即对话，主控不再附加 80-100 字总结旁白）；
+        // 狼人杀/剧本杀保留（其 GM 整合推进阶段）。next_round 仍照常保存供下轮调度。
+        if (!isGeneralMode(mode) && narrationText != null && !narrationText.isBlank()) {
             Message arbiterMsg = new Message(Message.Role.ARBITER, "主控", narrationText);
             arbiterMsg.setRoundNumber(roundCount);
             memory.addMessage(arbiterMsg);
@@ -738,12 +848,16 @@ public class RouterService {
         }
 
         // D8: 回合完成推送（前端 setRunning(false) + "第N轮完成"）
-        if (sse != null) sse.broadcastRoundComplete(roundCount);
+        if (sse != null) sse.broadcastRoundComplete(sessionId, roundCount);
 
         // P-0810-09: 场景目标进展判定（异步，不阻塞主流程；失败静默降级；仅一般模式有目标时触发）
         if (sceneGoalService != null && hasSceneGoals() && isGeneralMode(mode)) {
             submitGoalJudgment();
         }
+
+        // P-0813-A：一般模式自动续轮 —— 本轮完成后延时调度下一轮（导演模式 AI 自主推进；
+        // 玩家发言打断 pending、手动批量/非一般模式/剧情终局不触发；fire 时复查会话活跃与轮次未变）
+        scheduleAutoContinue();
 
         return new RoundResult(status, agentOutputs, integration, trackResult.reasoning,
             execResult.metrics() != null ? execResult.metrics().toMap() : Map.of());
@@ -754,8 +868,15 @@ public class RouterService {
         List<RoundResult> results = new ArrayList<>();
         // P0-2：会话已停止但角色仍在 → 自动恢复（用户点「三轮/自动」= 恢复运行，不再 0 轮静默）
         if (!running && !agents.isEmpty()) running = true;
-        for (int i = 0; i < count && running; i++) {
-            results.add(runRound(null, null));
+        // P-0813-A：手动接管 → 取消遗留的自动续轮任务；批量进行中轮末不再调度（防批量后多跑一轮）
+        cancelPendingAutoContinue();
+        manualRoundBatch = true;
+        try {
+            for (int i = 0; i < count && running; i++) {
+                results.add(runRound(null, null));
+            }
+        } finally {
+            manualRoundBatch = false;
         }
         // D8: 自动对话结束推送（前端 "自动对话结束，共 N 轮"）
         if (sse != null) sse.broadcastAutoComplete(results.size());
@@ -843,6 +964,135 @@ public class RouterService {
                 log.warn("起局自动第一轮失败: session={} err={}", sessionId, e.getMessage());
             }
         });
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  P-0813-A: 自动续轮（一般模式每轮完成后延时自动跑下一轮）
+    // ═══════════════════════════════════════════════════════════
+
+    /**
+     * 本轮完成后调度下一轮（延时 autoContinueMs；由 runRound 末尾调用，调用时持有方法锁）。
+     *
+     * <p>守卫（任一不满足即不调度）：
+     * <ul>
+     *   <li>{@code autoContinueMs > 0}（0=禁用）；</li>
+     *   <li>仅一般模式（free/protagonist/multi_track/director）——狼人杀/剧本杀走各自状态机，不误触发；</li>
+     *   <li>非手动批量（runTurns/runAutoRounds 进行中 → 防批量后多跑一轮）；</li>
+     *   <li>会话仍活跃（running + agents 非空）；</li>
+     *   <li>未达剧情终局（{@link #goalsAchieved()}，与 runTurns 同款保守启发式）。</li>
+     * </ul>
+     *
+     * <p>并发：替换式调度 —— 每会话至多一个 pending；玩家发言（runRound 入口取消）/stop/新会话 init 会取消它；
+     * 调度与取消都在方法锁内完成，与 runRound 天然串行。
+     */
+    private void scheduleAutoContinue() {
+        if (playbackDriven) {
+            // P-0814-A：点击驱动 —— auto-continue-ms 被忽略（不再定时自续）；仅一般模式/活跃会话/
+            // 未达终局时置「等待播出完毕」标志。下一轮由 POST /api/simulation/playback_done
+            // → onPlaybackDone() 驱动；玩家发言/stop/手动批量/新会话清除（见各清理点）。
+            if (!isGeneralMode(mode) || manualRoundBatch) return;
+            if (!running || agents.isEmpty()) return;
+            if (goalsAchieved()) return;
+            awaitingPlayback = true;
+            return;
+        }
+        if (autoContinueMs <= 0 || !isGeneralMode(mode) || manualRoundBatch) return;
+        if (!running || agents.isEmpty()) return;
+        if (goalsAchieved()) return;
+        cancelPendingAutoContinueLocked();
+        int scheduledAtRound = roundCount;
+        autoContinueScheduledRound = scheduledAtRound;
+        try {
+            pendingAutoContinue = AUTO_CONTINUE_SCHEDULER.schedule(this::fireAutoContinue,
+                    autoContinueMs, TimeUnit.MILLISECONDS);
+        } catch (RejectedExecutionException e) {
+            // 调度器已关闭（测试收尾/进程退出）→ 静默放弃续轮
+            pendingAutoContinue = null;
+            autoContinueScheduledRound = 0;
+        }
+    }
+
+    /**
+     * 自动续轮任务执行体（调度线程）。触发前复查：
+     * ① pending 仍在（未被玩家发言/stop 取消）；
+     * ② 会话仍活跃、仍为一般模式、续轮未禁用；
+     * ③ 轮次未被外部推进 —— 玩家发言/手动驱动若先执行了 runRound，roundCount 已变 → 放弃本次续轮（防重复轮）。
+     *
+     * <p>方法级同步 + runRound 同步 → 同会话续轮与玩家发言天然串行互斥；
+     * 续轮完成后 runRound 末尾会再次 {@link #scheduleAutoContinue()}（自续）。
+     */
+    private synchronized void fireAutoContinue() {
+        ScheduledFuture<?> task = pendingAutoContinue;
+        if (task == null || task.isCancelled()) return;
+        if (autoContinueMs <= 0 || !isGeneralMode(mode) || !running || agents.isEmpty()) return;
+        if (autoContinueScheduledRound != roundCount) return;
+        pendingAutoContinue = null;
+        autoContinueScheduledRound = 0;
+        awaitingPlayback = false; // P-0814-A：旧定时路径触发时同步清除等待标志（防双路径互切残留）
+        try {
+            runRound(null, null);
+        } catch (Exception e) {
+            // 续轮失败不向上抛（调度线程）；下一轮调度由 runRound 末尾自然决定
+            log.warn("自动续轮失败: session={} err={}", sessionId, e.getMessage());
+        }
+    }
+
+    /**
+     * P-0814-A：播放驱动 —— 前端「播出完毕」信号入口（POST /api/simulation/playback_done 无 group_id 时）。
+     *
+     * <p>守卫（任一不满足即返回 false 不推进）：
+     * <ul>
+     *   <li>playback-driven 模式开启；</li>
+     *   <li>当前处于「等待播出完毕」状态（一轮已生成完、尚未被推进）；</li>
+     *   <li>会话仍活跃（running + agents 非空）、仍为一般模式、未达剧情终局。</li>
+     * </ul>
+     *
+     * <p>方法级同步 + runRound 同步 → 与玩家发言/续轮天然串行互斥；重复信号（未等待时）直接 no-op。
+     *
+     * @return true=已推进下一轮；false=未处于等待态（重复信号/非播放驱动/会话不活跃），信号被忽略
+     */
+    public synchronized boolean onPlaybackDone() {
+        if (!playbackDriven) return false;
+        if (!awaitingPlayback) return false;
+        if (!running || agents.isEmpty()) return false;
+        if (!isGeneralMode(mode)) return false;
+        if (goalsAchieved()) return false;
+        awaitingPlayback = false;
+        try {
+            runRound(null, null);
+        } catch (Exception e) {
+            // 续轮失败不向上抛（REST 线程）；下一轮等待状态由 runRound 末尾自然重建
+            log.warn("播放驱动续轮失败: session={} err={}", sessionId, e.getMessage());
+        }
+        return true;
+    }
+
+    /** P-0814-A: 测试/监控用 —— 当前是否处于「等待播出完毕」状态。 */
+    public boolean isAwaitingPlayback() {
+        return awaitingPlayback;
+    }
+
+    /** 取消待执行的自动续轮任务（stop/新会话 init/loadSession 等外部入口调用；防泄漏）。 */
+    public void cancelPendingAutoContinue() {
+        synchronized (this) {
+            cancelPendingAutoContinueLocked();
+        }
+    }
+
+    /** P-0813-A: 测试/监控用 —— 是否存在待执行的自动续轮任务。 */
+    boolean hasPendingAutoContinue() {
+        return pendingAutoContinue != null;
+    }
+
+    /** 取消待执行的自动续轮任务（调用方已持有方法锁时用本变体，避免重入开销）。 */
+    private void cancelPendingAutoContinueLocked() {
+        ScheduledFuture<?> task = pendingAutoContinue;
+        pendingAutoContinue = null;
+        autoContinueScheduledRound = 0;
+        if (task != null) {
+            // false=不中断已开始执行的 fire 线程（fire 自身有轮次复查守卫，不会跑多余轮）
+            task.cancel(false);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -1007,7 +1257,7 @@ public class RouterService {
                     if (sse != null && delta != null && !delta.isEmpty()) {
                         Map<String, Object> trackMap = trackById.getOrDefault(task.trackId(), Map.of());
                         sse.broadcastAgentToken(
-                            task.agentName(), delta, task.trackId(),
+                            sessionId, task.agentName(), delta, task.trackId(),
                             String.valueOf(trackMap.getOrDefault("label", "")),
                             String.valueOf(trackMap.getOrDefault("mode", "merged")));
                     }
@@ -1035,7 +1285,7 @@ public class RouterService {
                     if (sse != null) {
                         Map<String, Object> trackMap = trackById.getOrDefault(task.trackId(), Map.of());
                         sse.broadcastAgentOutput(
-                            task.agentName(), content, task.trackId(),
+                            sessionId, task.agentName(), content, task.trackId(),
                             String.valueOf(trackMap.getOrDefault("label", "")),
                             String.valueOf(trackMap.getOrDefault("mode", "merged")),
                             List.of());
@@ -1144,6 +1394,23 @@ public class RouterService {
     // ═══════════════════════════════════════════════════════════
 
     public void setMode(String mode) { this.mode = mode; }
+
+    /** P-0813-A: 测试钩子 —— 显式设置自动续轮延时（毫秒；0=禁用）。
+     *  生产值来自 roleplay.round.auto-continue-ms（Spring bean 走 @Value；
+     *  SessionRegistry new 出来的会话实例由 SessionRegistry 注入）。 */
+    public void setAutoContinueMs(long autoContinueMs) { this.autoContinueMs = autoContinueMs; }
+
+    /** P-0814-A: 测试/SessionRegistry 注入 —— 点击驱动开关（true=轮完即停等播出完毕信号；false=旧定时续轮）。 */
+    public void setPlaybackDriven(boolean playbackDriven) { this.playbackDriven = playbackDriven; }
+
+    /** P-0814-A: 当前是否点击驱动模式。 */
+    public boolean isPlaybackDriven() { return playbackDriven; }
+
+    /** P-0813-B: 测试钩子 —— 显式设置校准轮间隔（0=禁用；默认 6）。
+     *  生产值来自 roleplay.round.calibrate-every（Spring bean 走 @Value；
+     *  SessionRegistry new 出来的会话实例由 SessionRegistry 注入，同 autoContinueMs 模式）。 */
+    public void setCalibrateEvery(int calibrateEvery) { this.calibrateEvery = calibrateEvery; }
+    public int getCalibrateEvery() { return calibrateEvery; }
     public String getMode() { return mode; }
 
     /** C-2: 串行调度开关（roleplay.round.serial，默认 false）。测试/运行时切换用。 */
@@ -1452,8 +1719,65 @@ public class RouterService {
         rels.forEach((target, info) ->
             sb.append("与").append(target).append("的关系：")
               .append(info.get("relation")).append("（").append(info.get("description")).append("）\n"));
-        sb.append("请严格依据以上设定行动，不要偏离角色的背景、目标和人际关系。");
+        // P-0813-B：结尾措辞软化 —— 从「严格依据/不要偏离」改为正向引导（可即兴，但不得违背核心身份与关系）
+        sb.append("基于以上关系自然行动，可即兴发挥，但不得违背核心身份与关系。");
         return sb.toString();
+    }
+
+    /**
+     * P-0813-B：向会话消息列表追加校准提醒（每个五层角色一条，SYSTEM role + 「【校准提醒】」前缀 ——
+     * Agent.buildContext 对带此前缀的 SYSTEM 消息放行进入 LLM 上下文；其余 SYSTEM 消息维持跳过语义）。
+     * 内容 = layer0 前 3 条 + 反差（surface/actual/hint）+ buildDriftPreventionPrompt 角色关系，
+     * Author's Note 式自然衔接（「（校准提醒：…）」）。
+     *
+     * <p>注入点为 agent 生成前（runRound Step 3 之前）→ 本轮 buildAgentContext 的【对话历史】
+     * 即包含校准块（memory.getAgentContext 不按 role 过滤，尾部高影响；ST Author's Note 同款）。
+     */
+    private void injectCalibrationMessages() {
+        if (!memory.hasSession() || agents.isEmpty()) return;
+        for (Agent agent : agents.values()) {
+            Persona persona = agent.getPersona();
+            // 仅五层角色有 layer0/反差可校准（旧 4 字段角色零影响，走既有路径）
+            if (persona == null || !persona.hasLayers()) continue;
+
+            StringBuilder sb = new StringBuilder("【校准提醒】（第 " + roundCount
+                    + " 轮，请保持言行一致，自然融入对话）：");
+            // layer0 前 3 条
+            Object layer0 = persona.getLayers().get("layer0");
+            if (layer0 instanceof List<?> rules) {
+                int idx = 0;
+                for (Object r : rules) {
+                    if (r == null || String.valueOf(r).isBlank()) continue;
+                    sb.append("\n").append(++idx).append(". ").append(r);
+                    if (idx >= 3) break;
+                }
+            }
+            // 反差（surface/actual/hint）
+            Object contrast = persona.getLayers().get("contrast");
+            if (contrast instanceof Map<?, ?> cm) {
+                Object surface = cm.get("surface");
+                Object actual = cm.get("actual");
+                if (surface != null || actual != null) {
+                    sb.append("\n反差：表面=").append(surface == null ? "—" : surface)
+                      .append("，实际=").append(actual == null ? "—" : actual);
+                }
+                Object hint = cm.get("hint");
+                if (hint != null) {
+                    sb.append("；提示=").append(hint);
+                }
+            }
+            // 角色关系（buildDriftPreventionPrompt 死代码复活为校准块的一部分）
+            String rels = buildDriftPreventionPrompt(agent.getName());
+            if (!rels.isEmpty()) {
+                sb.append("\n").append(rels);
+            }
+
+            Message cal = new Message(Message.Role.SYSTEM, "系统", sb.toString());
+            cal.setRoundNumber(roundCount);
+            memory.addMessage(cal);
+        }
+        log.info("Session {}: injected calibration reminders at round {} ({} agents)",
+                sessionId, roundCount, agents.size());
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -1491,10 +1815,19 @@ public class RouterService {
         autoRunning = true;
         // P0-2：同 runTurns —— 停止后恢复
         if (!running && !agents.isEmpty()) running = true;
-        for (int i = 0; i < turns && autoRunning; i++) {
-            RoundResult result = runRound(i == 0 ? userInput : null, null);
-            results.add(result);
-            if (result.status.contains("error")) break;
+        // P-0813-A：手动接管 → 取消遗留的自动续轮任务；批量进行中轮末不再调度（防批量后多跑一轮）
+        cancelPendingAutoContinue();
+        // P-0814-A：手动批量同样清除「等待播出完毕」标志（批量即推进，等待态作废）
+        this.awaitingPlayback = false;
+        manualRoundBatch = true;
+        try {
+            for (int i = 0; i < turns && autoRunning; i++) {
+                RoundResult result = runRound(i == 0 ? userInput : null, null);
+                results.add(result);
+                if (result.status.contains("error")) break;
+            }
+        } finally {
+            manualRoundBatch = false;
         }
         autoRunning = false;
         // D8: 自动对话结束推送
@@ -1536,11 +1869,20 @@ public class RouterService {
         int target = Math.max(1, turns);
         // P0-2：会话已停止但角色仍在 → 自动恢复（/api/round/start 后不再「No active session / 0 轮」）
         if (!running && !agents.isEmpty()) running = true;
-        for (int i = 0; i < target && running; i++) {
-            RoundResult result = runRound(i == 0 ? userInput : null, null);
-            results.add(result);
-            if (result.status != null && result.status.startsWith("error")) break;
-            if (goalsAchieved()) break;
+        // P-0813-A：手动接管 → 取消遗留的自动续轮任务；批量进行中轮末不再调度（防批量后多跑一轮）
+        cancelPendingAutoContinue();
+        // P-0814-A：手动批量同样清除「等待播出完毕」标志（批量即推进，等待态作废）
+        this.awaitingPlayback = false;
+        manualRoundBatch = true;
+        try {
+            for (int i = 0; i < target && running; i++) {
+                RoundResult result = runRound(i == 0 ? userInput : null, null);
+                results.add(result);
+                if (result.status != null && result.status.startsWith("error")) break;
+                if (goalsAchieved()) break;
+            }
+        } finally {
+            manualRoundBatch = false;
         }
         // D8: 多轮自动对话结束推送（前端 "自动对话结束，共 N 轮"；单轮走 round_complete 不重复广播）
         if (sse != null && target > 1) sse.broadcastAutoComplete(results.size());
