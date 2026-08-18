@@ -180,6 +180,26 @@ class ScriptGameServiceTest {
     }
 
     @Test
+    @DisplayName("P-0819-A 角色选择名与后端身份保持一致")
+    void selectedPlayerNamesRemainTheirRoles() {
+        LLMClient llm = mock(LLMClient.class);
+        Map<String, Object> script = new java.util.LinkedHashMap<>();
+        script.put("name", "人物绑定测试");
+        script.put("background", "背景");
+        script.put("truth", "凶手是林晚秋");
+        script.put("roles", List.of("沈墨", "林晚秋"));
+        script.put("locations", List.of("客厅"));
+        script.put("clues", List.of(Map.of("id", "c1", "location", "客厅", "content", "公开线索", "public", true)));
+        script.put("secrets", Map.of("沈墨", "秘密A", "林晚秋", "秘密B"));
+        when(llm.callJson(anyString(), anyInt())).thenReturn(script);
+
+        ScriptGameService svc = new ScriptGameService(llm, new ApprovalService());
+        svc.initGame("selected-role-binding", "主题", List.of("沈墨", "林晚秋"));
+        assertEquals("沈墨", svc.getGame("selected-role-binding").assignments.get("沈墨"));
+        assertEquals("林晚秋", svc.getGame("selected-role-binding").assignments.get("林晚秋"));
+    }
+
+    @Test
     @DisplayName("D6 精确匹配：得票者名是真相中真凶名的子串时不误判（旧 contains 逻辑会误判成功）")
     void noSubstringFalsePositive() throws Exception {
         LLMClient llm = mock(LLMClient.class);

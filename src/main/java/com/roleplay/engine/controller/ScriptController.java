@@ -438,7 +438,12 @@ public class ScriptController {
         }
 
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("phase", "discussion");
+        result.put("phase", game.getPhase().name().toLowerCase());
+        result.put("transitioned", transitioned);
+        if (!transitioned) {
+            result.put("error", "当前阶段不是搜证阶段，无法进入讨论");
+            return ResponseEntity.ok(result);
+        }
         result.put("simulation_started", simulationStarted);
         result.put("simulation_url", "/simulation.html");
         result.put("simulation_state_url", "/api/simulation/state");
@@ -449,8 +454,16 @@ public class ScriptController {
     @PostMapping("/start_voting")
     public ResponseEntity<Map<String, Object>> startVoting(@RequestBody Map<String, String> body) {
         String sessionId = body.getOrDefault("session_id", currentSessionId);
+        ScriptGameService.ScriptGame game = scriptGameService.getGame(sessionId);
+        if (game == null) return ResponseEntity.ok(Map.of("phase", "not_found", "error", "游戏不存在"));
+        String before = game.getPhase().name().toLowerCase();
         scriptGameService.startVoting(sessionId);
-        return ResponseEntity.ok(Map.of("phase", "vote"));
+        String after = game.getPhase().name().toLowerCase();
+        if (!"vote".equals(after)) {
+            return ResponseEntity.ok(Map.of("phase", after, "transitioned", false,
+                    "error", "当前阶段不是讨论阶段，无法进入投票"));
+        }
+        return ResponseEntity.ok(Map.of("phase", after, "transitioned", !"vote".equals(before)));
     }
 
     @PostMapping("/vote")

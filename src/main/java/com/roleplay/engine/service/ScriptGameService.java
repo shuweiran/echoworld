@@ -553,6 +553,7 @@ public class ScriptGameService {
 
         /** P-0802-P3：测试/编排钩子 —— 玩家→角色表副本（局中改名断言用）。 */
         public Map<String, String> getAssignments() { return new LinkedHashMap<>(assignments); }
+        public Phase getPhase() { return phase; }
 
         /** P-0802-P3：测试/编排钩子 —— 玩家→roleKey 表副本。 */
         public Map<String, String> getPlayerKeys() { return new LinkedHashMap<>(playerKeys); }
@@ -795,12 +796,18 @@ public class ScriptGameService {
         game.secrets.clear();
         game.secrets.putAll(ScriptSchemaV1.secretsByRole(script));
 
-        // Assign roles to players (shuffle)
+        // Assign roles to players.  P-0819-A：当前剧本生成契约要求 roles[] 直接使用玩家名单；
+        // 此时必须保持「角色选择页 → 对局身份」一一对应，不能再次随机洗牌，否则玩家选了
+        // 角色 A，进入对局却拿到角色 B，前端会表现为开局后又被迫重新选角。
         List<String> shuffledRoles = new ArrayList<>(game.roles);
-        Collections.shuffle(shuffledRoles);
+        boolean identityRoles = !game.players.isEmpty()
+                && game.players.size() == game.roles.size()
+                && game.players.stream().allMatch(game.roles::contains);
+        if (!identityRoles) Collections.shuffle(shuffledRoles);
         game.assignments.clear();
         for (int i = 0; i < game.players.size() && i < shuffledRoles.size(); i++) {
-            game.assignments.put(game.players.get(i), shuffledRoles.get(i));
+            String player = game.players.get(i);
+            game.assignments.put(player, identityRoles ? player : shuffledRoles.get(i));
         }
         // Leftover players get generic roles
         for (int i = shuffledRoles.size(); i < game.players.size(); i++) {
@@ -990,9 +997,11 @@ public class ScriptGameService {
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("location", location);
-        result.put("public_clues", publicClues.stream()
-            .map(c -> Map.of("id", c.get("id"), "content", c.get("content")))
-            .collect(Collectors.toList()));
+        List<Map<String, Object>> visiblePublic = publicClues.stream()
+            .map(c -> Map.of("id", c.get("id"), "content", c.get("content"),
+                    "title", c.getOrDefault("title", ""), "location", c.getOrDefault("location", location)))
+            .collect(Collectors.toList());
+        result.put("public_clues", visiblePublic);
 
         if (found.isEmpty()) {
             // P-0803-E 方案 B: 搜证过且无更多线索 → 记录足迹（地图该地点绿点态；已搜空不再重复提示）
@@ -1003,7 +1012,8 @@ public class ScriptGameService {
             // P-0816-G：搜证足迹变化 → script_goal 定向推送（目标徽章「已搜证 x/y」实时刷新；§3.3 触发时机：搜证）
             broadcastGoal(game);
             result.put("found", List.of());
-            result.put("clues", List.of());
+            result.put("clues", visiblePublic);
+            // 兼容旧 UI/测试文案；公开线索仍已随 clues 返回给首次 VN 演出。
             result.put("result", "该地点没有更多可搜证线索");
             result.put("ap", game.playerAp.getOrDefault(player, 0));
             result.put("ap_cost", 0);
@@ -1056,9 +1066,14 @@ public class ScriptGameService {
         }
 
         result.put("found", foundIds);
-        result.put("clues", found.stream()
-            .map(c -> Map.of("id", c.get("id"), "content", c.get("content"), "ap_cost", ScriptSchemaV1.apCost(c)))
-            .collect(Collectors.toList()));
+        List<Map<String, Object>> visible = new ArrayList<>();
+        visible.addAll(found.stream()
+            .map(c -> Map.of("id", c.get("id"), "content", c.get("content"),
+                    "title", c.getOrDefault("title", ""), "location", c.getOrDefault("location", location),
+                    "ap_cost", ScriptSchemaV1.apCost(c)))
+            .toList());
+        visible.addAll(visiblePublic);
+        result.put("clues", visible);
         if (!webResults.isEmpty()) result.put("web_results", webResults);
         result.put("result", "搜证成功：获得 " + foundIds.size() + " 条线索，消耗 " + cost + " AP");
         result.put("ap", game.playerAp.get(player));
