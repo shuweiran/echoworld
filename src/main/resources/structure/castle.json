@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "kind": "castle",
+  "name": "晨曦城堡",
+  "seed": 0,
+  "root": {
+    "id": "castle",
+    "type": "structure",
+    "name": "晨曦城堡",
+    "template": "",
+    "children": [
+      { "id": "gate", "type": "building", "name": "城门楼", "template": "gatehouse", "size": [10, 8] },
+      { "id": "courtyard", "type": "zone", "name": "外庭", "template": "courtyard", "open": true, "size": [26, 8] },
+      { "id": "great_hall", "type": "building", "name": "大厅", "template": "great_hall", "size": [16, 8] },
+      { "id": "west_wing", "type": "building", "name": "会客厅", "template": "gu_parlor", "size": [12, 8] },
+      { "id": "tower_bed", "type": "building", "name": "塔楼卧室", "template": "gu_bedroom", "size": [8, 8] },
+      { "id": "tower_study", "type": "building", "name": "塔楼书房", "template": "gu_study", "size": [8, 8] },
+      { "id": "kitchen", "type": "building", "name": "厨房", "template": "kitchen", "size": [8, 8] },
+      { "id": "east_wing", "type": "building", "name": "宴会厅", "template": "banquet", "size": [12, 8] },
+      { "id": "armory", "type": "building", "name": "兵械库", "template": "armory", "size": [10, 8] },
+      { "id": "inner_garden", "type": "zone", "name": "内庭花园", "template": "garden", "open": true, "size": [26, 10] },
+      { "id": "back_garden", "type": "zone", "name": "后花园", "template": "garden", "open": true, "size": [28, 10] }
+    ]
+  },
+  "relations": [
+    { "from": "gate", "to": "courtyard", "kind": "adjacent" },
+    { "from": "courtyard", "to": "great_hall", "kind": "adjacent" },
+    { "from": "great_hall", "to": "west_wing", "kind": "adjacent" },
+    { "from": "great_hall", "to": "tower_bed", "kind": "adjacent" },
+    { "from": "great_hall", "to": "tower_study", "kind": "adjacent" },
+    { "from": "great_hall", "to": "kitchen", "kind": "adjacent" },
+    { "from": "great_hall", "to": "east_wing", "kind": "adjacent" },
+    { "from": "courtyard", "to": "armory", "kind": "adjacent" },
+    { "from": "courtyard", "to": "inner_garden", "kind": "adjacent" },
+    { "from": "great_hall", "to": "back_garden", "kind": "connects" }
+  ]
+}

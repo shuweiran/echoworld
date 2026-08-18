@@ -42,20 +42,31 @@ public final class ScriptSchemaV1 {
     //  生成路径（统一：ScriptService / ScriptGameService 共用）
     // ═══════════════════════════════════════════════════════════
 
-    /** 剧本生成的 LLM prompt —— 请求 v1 格式输出（normalize 仍宽容兜底）。 */
-    public static String buildPrompt(String theme, int playerCount) {
+    /**
+     * 剧本生成的 LLM prompt —— 请求 v1 格式输出（normalize 仍宽容兜底）。
+     * P-0818-D：角色数必须严格等于玩家数；角色名直接用玩家名单中的名字（一个玩家一个角色）；
+     * 被害人/死者只写进 background，不放入 roles（roles 全是可被玩家扮演的活人角色）。
+     * 修「对局中生成出多余角色与身份」：此前只传角色数不传玩家名，LLM 会自造角色名
+     * （站长·林远 / 陆老爷 等）且可能多生成一个（含死者），前端玩家表与角色表按名去重失效。
+     */
+    public static String buildPrompt(String theme, List<String> playerNames) {
+        List<String> players = playerNames == null ? List.of() : playerNames;
+        String playerList = players.isEmpty() ? "（未指定）" : String.join("、", players);
         return String.format("""
             你是一个剧本杀创作者。请根据以下信息生成一个完整的谋杀之谜剧本（剧本数据模型 Schema v1）。
 
             主题：%s
-            角色数：%d
+            玩家名单（必须为名单中的每个玩家生成且仅生成一个可玩角色，一个不多一个不少）：
+            %s
 
             剧本要求：
             - metadata：title 剧本名称；player_min/player_max 按角色数给合理区间；tags 风格标签
-            - roles[]：每个角色一个对象，id 形如 "role_1"（从 1 递增）、name 角色名、intro 角色介绍、
+            - roles[]：数量必须严格等于玩家名单人数；每个角色 name 必须直接使用玩家名单中的名字
+              （顺序可打乱，禁止另造角色名）；id 形如 "role_1"（从 1 递增）、name 角色名、intro 角色介绍、
               is_hidden 是否隐藏角色（默认 false）、secret 该角色不可告人的秘密、
               ap_bonus 行动点加成（侦探类角色给 1-2，其余给 0，默认 0）、
               talkativeness 健谈程度（0.0-1.0，侦探/外向角色给 0.6-0.9，内向寡言角色给 0.2-0.4，默认 0.5）
+            - 被害人/死者只写进 background，不放入 roles；roles 中每个角色都是可被玩家扮演的活人角色
             - 每个角色都有作案动机和秘密，其中一个角色是凶手
             - killer_id：指向凶手角色的 id
             - clues[]：至少 3 条线索，每条含 id、title（线索名）、location（所属地点）、content（线索内容）、
@@ -72,10 +83,10 @@ public final class ScriptSchemaV1 {
              "roles": [{"id": "role_1", "name": "角色1", "intro": "角色介绍", "is_hidden": false, "secret": "秘密内容", "ap_bonus": 0, "talkativeness": 0.5}],
              "locations": ["地点1", "地点2"],
              "clues": [{"id": "clue_1", "title": "线索名", "location": "地点1", "content": "线索内容", "transferable": false, "visible_to_owner_only": false, "ap_cost": 1}],
-             "secrets": {"角色1": "秘密内容"},
-             "killer_id": "role_x",
-             "truth": "真相（50-80字）"}
-            """, theme, playerCount);
+            "secrets": {"角色1": "秘密内容"},
+            "killer_id": "role_x",
+            "truth": "真相（50-80字）"}
+            """, theme, playerList);
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -88,16 +99,20 @@ public final class ScriptSchemaV1 {
      * 概略剧本的 LLM prompt —— 轻量输出（目标 <10s，maxTokens≈800-1200），只含
      * locations / roles（名字+一句话人设）/ clues（标题+地点）/ storyline / killer_hint。
      */
-    public static String buildOutlinePrompt(String theme, int playerCount) {
+    public static String buildOutlinePrompt(String theme, List<String> playerNames) {
+        List<String> players = playerNames == null ? List.of() : playerNames;
+        String playerList = players.isEmpty() ? "（未指定）" : String.join("、", players);
         return String.format("""
             你是一个剧本杀创作者。请先生成剧本的概略（outline），用于建局后快速展示给玩家；完整剧本稍后由后台继续生成。
 
             主题：%s
-            角色数：%d
+            玩家名单（概略 roles[] 必须为名单中的每个玩家生成且仅生成一个可玩角色，角色名直接用玩家名单中的名字）：
+            %s
 
             概略要求（轻量输出，不要生成完整剧本）：
             - locations[]：3-5 个可搜证地点
-            - roles[]：每个角色一个对象，含 name 角色名、intro 一句话人设（30字以内）
+            - roles[]：数量必须严格等于玩家名单人数；每个角色含 name（直接用玩家名单中的名字，禁止另造角色名）、
+              intro 一句话人设（30字以内）；被害人/死者不放入 roles
             - clues[]：3-5 条线索，每条含 title 线索标题、location 所属地点
             - storyline：剧情梗概（50-100字）
             - killer_hint（可选）：凶手的模糊提示
@@ -105,10 +120,10 @@ public final class ScriptSchemaV1 {
             返回JSON格式（不要任何markdown标记，纯JSON）：
             {"locations": ["客厅", "书房", "花园"],
              "roles": [{"name": "管家", "intro": "沉默寡言的老管家"}],
-             "clues": [{"title": "沾血的怀表", "location": "客厅"}],
-             "storyline": "风雨夜庄园主人遇害，众人各怀秘密，需要调查推理找出真凶。",
-             "killer_hint": "凶手可能与遗嘱有关"}
-            """, theme, playerCount);
+            "clues": [{"title": "沾血的怀表", "location": "客厅"}],
+            "storyline": "风雨夜庄园主人遇害，众人各怀秘密，需要调查推理找出真凶。",
+            "killer_hint": "凶手可能与遗嘱有关"}
+            """, theme, playerList);
     }
 
     /**
@@ -536,6 +551,28 @@ public final class ScriptSchemaV1 {
                 // 兼容派生键：search()/toMap() 按 public/location/id/content 消费
                 m.put("public", pub instanceof Boolean pb ? pb : !ownerOnly);
                 if (cm.get("related_role") != null) m.put("related_role", str(cm.get("related_role")));
+                // P-0816-R（决策 U1/U2 终态）：心锁解锁角色与关系矩阵相关角色 —— 预留字段宽容解析透传
+                // （unlock_role 字符串或数组、related_roles 数组；缺省无 → 消费方回退规则推导，零破坏）
+                if (cm.get("unlock_role") != null) {
+                    Object ur = cm.get("unlock_role");
+                    if (ur instanceof List<?> ul) {
+                        List<String> ids = new ArrayList<>();
+                        for (Object x : ul) ids.add(str(x));
+                        m.put("unlock_role", ids);
+                    } else {
+                        m.put("unlock_role", str(ur));
+                    }
+                }
+                if (cm.get("related_roles") != null) {
+                    Object rr = cm.get("related_roles");
+                    List<String> ids = new ArrayList<>();
+                    if (rr instanceof List<?> rl) {
+                        for (Object x : rl) ids.add(str(x));
+                    } else {
+                        ids.add(str(rr));
+                    }
+                    m.put("related_roles", ids);
+                }
                 clues.add(m);
                 idx++;
             }

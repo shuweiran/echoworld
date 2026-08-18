@@ -283,4 +283,21 @@ class ScriptSchemaV1Test {
         assertEquals(roleId, kid, "旧 killer 角色名应反查为对应 role id");
         assertFalse(roleId.isEmpty());
     }
+
+    /** P-0818-D：剧本 prompt 硬约束 —— 角色数严格等于玩家数、角色名直接用玩家名单、死者不进 roles。 */
+    @Test
+    @DisplayName("P-0818-D: buildPrompt/buildOutlinePrompt 含玩家名单与严格角色数约束")
+    void promptContainsPlayerListHardConstraint() {
+        String full = ScriptSchemaV1.buildPrompt("深空站沉默事件", List.of("沈墨", "林晚秋", "顾云舟"));
+        assertTrue(full.contains("沈墨、林晚秋、顾云舟"), "完整剧本 prompt 应内联玩家名单");
+        assertTrue(full.contains("必须严格等于"), "完整剧本 prompt 应硬约束角色数");
+        assertTrue(full.contains("必须直接使用玩家名单中的名字"), "完整剧本 prompt 应要求角色名=玩家名");
+        assertTrue(full.contains("不放入 roles"), "完整剧本 prompt 应要求死者不进 roles");
+
+        String outline = ScriptSchemaV1.buildOutlinePrompt("深空站沉默事件", List.of("沈墨", "林晚秋", "顾云舟"));
+        assertTrue(outline.contains("沈墨、林晚秋、顾云舟"), "概略 prompt 应内联玩家名单");
+        assertTrue(outline.contains("必须严格等于玩家名单人数"), "概略 prompt 应硬约束角色数");
+        assertTrue(outline.contains("禁止另造角色名"), "概略 prompt 应禁止自造角色名");
+        assertTrue(outline.contains("不放入 roles"), "概略 prompt 应要求死者不进 roles");
+    }
 }

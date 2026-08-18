@@ -265,6 +265,8 @@ public final class BspMapGenerator {
         map.put("spawnMarkers", spawnMarkers);
         map.put("decor", decor);
         map.put("warps", List.of());
+        // P-0817-G（房间模式）：确定性推导房间出口表（走廊贴边可通行格 → BFS 邻房），前端走门切换用
+        map.put("exits", MapExits.deriveExits(map));
         return map;
     }
 

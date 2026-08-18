@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "kind": "dungeon",
+  "name": "地下城",
+  "seed": 0,
+  "root": {
+    "id": "dungeon",
+    "type": "structure",
+    "name": "地下城",
+    "template": "",
+    "children": [
+      { "id": "entrance", "type": "building", "name": "入口", "template": "entrance", "size": [8, 8] },
+      { "id": "hall", "type": "building", "name": "地牢大厅", "template": "dungeon_hall", "size": [14, 8] },
+      { "id": "cell1", "type": "building", "name": "监牢一", "template": "dungeon_cell", "size": [6, 6] },
+      { "id": "cell2", "type": "building", "name": "监牢二", "template": "dungeon_cell", "size": [6, 6] },
+      { "id": "cell3", "type": "building", "name": "监牢三", "template": "dungeon_cell", "size": [6, 6] },
+      { "id": "cell4", "type": "building", "name": "监牢四", "template": "dungeon_cell", "size": [6, 6] },
+      { "id": "storage", "type": "building", "name": "储藏室", "template": "storage", "size": [8, 8] },
+      { "id": "treasury", "type": "building", "name": "宝库", "template": "treasury", "size": [8, 8] },
+      { "id": "boss", "type": "building", "name": "首领间", "template": "boss_room", "size": [12, 10] }
+    ]
+  },
+  "relations": [
+    { "from": "entrance", "to": "hall", "kind": "adjacent" },
+    { "from": "hall", "to": "cell1", "kind": "adjacent" },
+    { "from": "hall", "to": "cell2", "kind": "adjacent" },
+    { "from": "hall", "to": "cell3", "kind": "adjacent" },
+    { "from": "hall", "to": "cell4", "kind": "adjacent" },
+    { "from": "hall", "to": "storage", "kind": "adjacent" },
+    { "from": "storage", "to": "treasury", "kind": "adjacent" },
+    { "from": "treasury", "to": "boss", "kind": "connects" }
+  ]
+}

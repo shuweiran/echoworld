@@ -1,0 +1,26 @@
+[
+  null,
+  null,
+  null,
+  null,
+  null,
+  {
+    "s": ".proto-main",
+    "x": 520,
+    "y": 273,
+    "w": 920,
+    "h": 335,
+    "display": "flex",
+    "vis": "visible"
+  },
+  {
+    "s": ".conversation",
+    "x": 520,
+    "y": 609,
+    "w": 920,
+    "h": 335,
+    "display": "flex",
+    "vis": "visible"
+  },
+  null
+]

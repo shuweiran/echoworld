@@ -59,9 +59,9 @@ public class ScriptService {
      */
     public ScriptGeneration generateScriptChecked(String theme, List<String> characters, Map<String, Object> outline) {
         List<String> players = characters == null ? List.of() : characters;
-        String prompt = ScriptSchemaV1.buildPrompt(theme, players.size());
+        String prompt = ScriptSchemaV1.buildPrompt(theme, players);
         if (outline != null && !outline.isEmpty()) {
-            prompt = ScriptSchemaV1.buildPrompt(theme, players.size())
+            prompt = ScriptSchemaV1.buildPrompt(theme, players)
                     + "\n\n【概略约束】以下为建局时已展示给玩家的剧本概略，完整剧本的"
                     + "地点集合、角色名、线索标题/地点必须与概略一致（可补充细节与完整文案，不得推翻概略设定）：\n"
                     + outlineSummary(outline);
@@ -87,7 +87,7 @@ public class ScriptService {
      */
     public Map<String, Object> generateOutline(String theme, List<String> characters) {
         List<String> players = characters == null ? List.of() : characters;
-        String prompt = ScriptSchemaV1.buildOutlinePrompt(theme, players.size());
+        String prompt = ScriptSchemaV1.buildOutlinePrompt(theme, players);
         // 轻量输出（800-1200 tokens 足够）：概略 JSON 仅地点/角色一句话人设/线索标题/剧情线
         Map<String, Object> raw = llmClient.callJson(prompt, 1200);
         if (raw == null || raw.isEmpty()) {

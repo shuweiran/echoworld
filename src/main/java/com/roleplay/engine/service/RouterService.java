@@ -528,6 +528,24 @@ public class RouterService {
     }
 
     /**
+     * P-0815-C：双人场景判定 —— 本轮轨道中「实际参与 LLM 生成」的 active 角色数 ≤ 2。
+     *
+     * <p>从 TrackConfig 的 agent_actions=active 统计（语义准确，非 agentOutputs 简化判定）：
+     * AI+AI 双人 = 2 active；AI+用户双人（protagonist 模式玩家角色被强制 active，但
+     * {@code runRound} 的 agentMap 已排除玩家角色、不参与生成）= 排除 protagonist 后 1 active AI。
+     * 双人场景下 next_round 预测（谁出场/谁隔离/顺序）无意义，跳过主控整合省一次 LLM 调用。</p>
+     */
+    private boolean isDuoScene(TrackConfig config) {
+        Set<String> active = config.getActiveAgentNames();
+        int activeCount = active.size();
+        // 玩家角色不参与 LLM 生成，不计入活跃生成角色（AI+用户双人 = 1 active AI）
+        if (!protagonist.isEmpty() && active.contains(protagonist)) {
+            activeCount--;
+        }
+        return activeCount <= 2;
+    }
+
+    /**
      * 停止会话。D1 增强：除置位停止标志外，立即硬停止所有进行中的生成任务
      * （取消令牌 + 中断 LLM 调用线程），使 /api/stop 真正能中断进行中的生成。
      */
@@ -797,8 +815,23 @@ public class RouterService {
         }
 
         // Step 5: Integrate outputs via Arbiter
-        Map<String, Object> integration = arbiter.integrateOutputs(
-            sceneDescription, trackResult.tracks, agentOutputs, "werewolf".equals(mode));
+        // P-0815-C：一般模式双人场景（实际参与 LLM 生成的 active 角色 ≤ 2）跳过主控整合 LLM——
+        // next_round 预测（谁出场/谁隔离/顺序）在双人场景无意义，省一次主控 LLM 调用（每轮串行链省卡顿）。
+        // P-0815-E：director 导演模式排除在本短路之外——导演模式是叙事驱动，主控旁白 + next_round 预测
+        // 一体（叙事承接 + 谁出场/谁隔离连续决策），无论几人恒走 integrateOutputs，双人导演局同样要旁白推进。
+        // 狼人杀/剧本杀（非一般模式）必须保留 integrateOutputs（GM 推进 + isWerewolf 分支），不能短路；
+        // 一般模式多人（>2 active）保留预测闭环，零变化。
+        Map<String, Object> integration;
+        if (isGeneralMode(mode) && !"director".equals(mode) && isDuoScene(config)) {
+            integration = new LinkedHashMap<>();
+            integration.put("narration", "");
+            integration.put("scene_progress", "");
+            integration.put("next_round", Map.of());
+            integration.put("chain_analysis", Map.of());
+        } else {
+            integration = arbiter.integrateOutputs(
+                sceneDescription, trackResult.tracks, agentOutputs, "werewolf".equals(mode));
+        }
 
         // P-0811-G：保存主控对下一轮的出场预测（next_round）→ 下轮 configureTracks 注入闭环
         // （「上轮预测→下轮执行」：谁出场/谁隔离由主控跨轮连续决策）
@@ -812,10 +845,14 @@ public class RouterService {
         }
 
         String narrationText = (String) integration.getOrDefault("narration", "");
-        // P-0811-G：一般模式（free/protagonist/multi_track/director）删除主控整合叙事——
+        // P-0811-G：一般模式（free/protagonist/multi_track）删除主控整合叙事——
         // 不入史、不推 arbiter_integrate SSE（角色发言即对话，主控不再附加 80-100 字总结旁白）；
+        // P-0815-E：director 导演模式例外（叙事驱动）——主控旁白恢复入史（Role.ARBITER "主控"）+
+        // SSE arbiter_integrate 推送（前端 Gal 旁白样式 / 经典视图 arbiter-box 均展示），
+        // 与 next_round 预测一体（本批已保证 director 恒走 integrateOutputs 拿到 narration）；
         // 狼人杀/剧本杀保留（其 GM 整合推进阶段）。next_round 仍照常保存供下轮调度。
-        if (!isGeneralMode(mode) && narrationText != null && !narrationText.isBlank()) {
+        if ((!isGeneralMode(mode) || "director".equals(mode))
+                && narrationText != null && !narrationText.isBlank()) {
             Message arbiterMsg = new Message(Message.Role.ARBITER, "主控", narrationText);
             arbiterMsg.setRoundNumber(roundCount);
             memory.addMessage(arbiterMsg);

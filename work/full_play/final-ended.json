@@ -1,0 +1,217 @@
+{
+  "phase": "ended",
+  "mode": "full",
+  "session_id": "af3faca3-c80",
+  "schema_version": 1,
+  "name": "深空站沉默事件",
+  "background": "深空站‘曙光号’在星际航行中突然失联，救援队抵达时发现反应堆爆炸，一名船员死亡，其余人记忆模糊。全员沉默，仿佛隐藏着巨大秘密。随着调查深入，隐藏的阴谋与背叛逐渐浮出水面，真相指向一场精心策划的谋杀。",
+  "roles": [
+    "舰长",
+    "工程师",
+    "医疗官",
+    "通讯官",
+    "乘客"
+  ],
+  "players": [
+    "沈墨",
+    "林晚秋",
+    "顾云舟",
+    "苏浅浅",
+    "陈一鸣"
+  ],
+  "your_role": "医疗官",
+  "your_secret": "医疗官在秘密进行非法人体实验，死者曾是其实验对象。",
+  "round": 2,
+  "started_at": 1787032402209,
+  "elapsed_ms": 37458,
+  "phase_started_at": 1787032422694,
+  "phase_elapsed_ms": 16973,
+  "phase_timeout_ms": 0,
+  "game_over": true,
+  "winner": "林晚秋",
+  "simulation_started": true,
+  "simulation_url": "/simulation.html",
+  "clues": [
+    {
+      "id": "clue_1",
+      "title": "烧焦的日志芯片",
+      "location": "舰桥",
+      "content": "芯片记录显示舰长曾修改航程，目的地与乘客身份有关。",
+      "transferable": false,
+      "visible_to_owner_only": false,
+      "ap_cost": 1,
+      "public": true
+    },
+    {
+      "id": "clue_2",
+      "title": "未标记的药剂瓶",
+      "location": "医疗舱",
+      "content": "药剂瓶含有致命毒素，与死者体内毒素匹配，医疗官有嫌疑。",
+      "transferable": false,
+      "visible_to_owner_only": false,
+      "ap_cost": 1,
+      "public": true
+    },
+    {
+      "id": "clue_3",
+      "title": "休眠舱的划痕",
+      "location": "休眠区",
+      "content": "划痕显示死者曾挣扎，且休眠舱被外部强行打开。",
+      "transferable": false,
+      "visible_to_owner_only": false,
+      "ap_cost": 1,
+      "public": true
+    },
+    {
+      "id": "clue_4",
+      "title": "加密通讯记录",
+      "location": "通讯室",
+      "content": "记录显示通讯官与乘客有多次加密联系，内容涉及反应堆计划。",
+      "transferable": false,
+      "visible_to_owner_only": false,
+      "ap_cost": 1,
+      "public": true
+    },
+    {
+      "id": "clue_5",
+      "title": "反应堆异常读数",
+      "location": "反应堆走廊",
+      "content": "读数显示反应堆在爆炸前被人为设置过载，操作者熟悉系统。",
+      "transferable": false,
+      "visible_to_owner_only": false,
+      "ap_cost": 1,
+      "public": true
+    }
+  ],
+  "ap": 3,
+  "ap_max": 3,
+  "ap_pool": {
+    "沈墨": 3,
+    "林晚秋": 3,
+    "顾云舟": 4,
+    "苏浅浅": 3,
+    "陈一鸣": 3
+  },
+  "my_clues": [],
+  "role_key": "73cd2f16-4508-4486-b53b-45b0c1cf816b",
+  "llm_degraded": false,
+  "trustees": [],
+  "outline": {
+    "locations": [
+      "舰桥",
+      "医疗舱",
+      "休眠区",
+      "通讯室",
+      "反应堆走廊"
+    ],
+    "roles": [
+      {
+        "name": "舰长",
+        "intro": "冷静果断，但隐瞒了关键航程信息"
+      },
+      {
+        "name": "工程师",
+        "intro": "技术天才，对反应堆异常早有察觉"
+      },
+      {
+        "name": "医疗官",
+        "intro": "温柔外表下藏着不可告人的实验记录"
+      },
+      {
+        "name": "通讯官",
+        "intro": "收到过神秘信号，却选择沉默"
+      },
+      {
+        "name": "乘客",
+        "intro": "身份成谜，似乎与目的地有关"
+      }
+    ],
+    "clues": [
+      {
+        "title": "烧焦的日志芯片",
+        "location": "舰桥"
+      },
+      {
+        "title": "未标记的药剂瓶",
+        "location": "医疗舱"
+      },
+      {
+        "title": "休眠舱的划痕",
+        "location": "休眠区"
+      },
+      {
+        "title": "加密通讯记录",
+        "location": "通讯室"
+      },
+      {
+        "title": "反应堆异常读数",
+        "location": "反应堆走廊"
+      }
+    ],
+    "storyline": "深空站‘曙光号’在航行中突然失联，全员陷入沉默。当救援队抵达时，发现一名船员死于反应堆爆炸，其余人记忆模糊。随着调查深入，隐藏的阴谋与背叛逐渐浮出水面，真相指向一场精心策划的谋杀。",
+    "killer_hint": "凶手熟悉反应堆操作，且与通讯记录有隐秘关联。"
+  },
+  "generating": true,
+  "locations": [
+    "舰桥",
+    "医疗舱",
+    "休眠区",
+    "通讯室",
+    "反应堆走廊"
+  ],
+  "searched_locations": [],
+  "discussion": [
+    {
+      "speaker": "陈一鸣",
+      "message": "（站在走廊阴影里，手指无意识地摩挲着扳手）……反应堆爆炸的时间点，和值班日志对不上。你们在聊什么？",
+      "round": "1"
+    },
+    {
+      "speaker": "苏浅浅",
+      "message": "（站在圈外，手指轻轻敲着通讯器）…我听不太清。反应堆爆炸前，通讯系统有没有异常记录？",
+      "round": "1"
+    },
+    {
+      "speaker": "林晚秋",
+      "message": "（远远站着，手指轻轻摩挲着袖口，目光在几人之间游移）他们好像提到了反应堆……但听不太真切。",
+      "round": "1"
+    },
+    {
+      "speaker": "顾云舟",
+      "message": "（站在谈话圈外，眉头微皱，目光扫过众人）我总觉得，有些事大家都没说全……爆炸前的异常，谁先发现的？",
+      "round": "1"
+    },
+    {
+      "speaker": "沈墨",
+      "message": "（站在谈话圈外，双臂交叉，目光扫过众人）救援报告上说，死者身上有注射痕迹。但我的医疗记录里，没找到那次注射的登记。",
+      "round": "1"
+    },
+    {
+      "speaker": "陈一鸣",
+      "message": "（站在走廊阴影处，手指不自觉地摩挲着工具袋边缘）反应堆爆炸前，我检查过冷却系统……数据记录好像被人动过手脚。",
+      "round": "2"
+    },
+    {
+      "speaker": "苏浅浅",
+      "message": "（站在走廊阴影处，指尖轻轻摩挲着通讯器）你们在谈什么？反应堆爆炸的事...我也许知道些细节。",
+      "round": "2"
+    },
+    {
+      "speaker": "林晚秋",
+      "message": "（站在走廊拐角，抱着双臂，目光扫过几人）事故发生时，你们都在哪里？我记不太清了。",
+      "round": "2"
+    },
+    {
+      "speaker": "顾云舟",
+      "message": "（站在走廊阴影处，目光扫过众人）陈一鸣，苏浅浅，你们在聊什么？反应堆爆炸的事，总有细节对不上吧。",
+      "round": "2"
+    },
+    {
+      "speaker": "沈墨",
+      "message": "（站在走廊阴影处，指尖轻轻摩挲着袖口）事故发生时，我刚好在医务室整理药品清单……听到爆炸声才跑出来。",
+      "round": "2"
+    }
+  ],
+  "murderer": "陈一鸣",
+  "correct": false
+}

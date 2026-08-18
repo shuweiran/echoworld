@@ -163,6 +163,8 @@ demo 页签 ⑤ 提供粘贴校验；阶段 2 将该校验器作为 LLM 生成�
 | `decor` | List&lt;Map&gt; | 可选 | **显式装饰/交互物**：`{id, type, tile:[x,y], state?{...}, onInteract?{...}, once?, radius?}`；id 全局唯一、type 为简单英文标识符、tile 不能落在墙格（ground=2） |
 | `spawnMarkers` | Map&lt;String,List&lt;List&lt;Integer&gt;&gt;&gt; | 可选 | **生成器指示**：键=类别名，值=坐标数组；如 `{"grass":[[2,2],[3,2]], "debris":[[30,40]]}`——LLM 低成本铺装饰（M2），运行时按标记批量生成实体 |
 | `warps` | List&lt;Map&gt; | 可选 | **传送点**：`{from:[x,y], to:[mapId字符串,x,y]}`；场景切换数据表（M3/B4），本批生成器不产出（场景切换走既有 door zone 编排），契约支持 + 校验 |
+| `exits` | List&lt;Map&gt; | 可选 | **房间出口表（P-0817-G 房间模式）**：`{id, from, to, side?, door:[x,y]}`——from/to 为房间 id、door 为门洞格坐标（墙环上可通行格）、side 为方位（top/bottom/left/right）；前端「一屏一房间」走门切换的数据源，由生成器/服务端确定性推导（`MapExits.deriveExits`：房间墙环可通行格 → BFS 邻房），不让 LLM 手出坐标；缺失兜底为空（整图模式零影响） |
+| `structure` | Map | 可选 | **结构树（P-0817-L 大型结构生成）**：`{version, kind, name?, seed, root 节点树, relations[]}`——语义层元数据（哪些部分组成/什么关系），几何仍以 rooms/exits/warps 为权威；缺失 = 普通地图零破坏（MapContract 透传，校验走 `StructureValidator`，6 项校验 + 多图 warps 反向检查）；详见 `docs/结构树契约与生成API设计.md` |
 
 ### 7.2 校验规则（新增 8-11 项，既有 1-7 项零变化）
 
@@ -172,8 +174,11 @@ demo 页签 ⑤ 提供粘贴校验；阶段 2 将该校验器作为 LLM 生成�
 | 9. `decor` | id 非空且全局唯一；tile 为 `[x,y]` 整数对且不越界；type 非空字符串；**tile 落在 ground=2（墙）格 → 错误**（装饰不能嵌墙） |
 | 10. `spawnMarkers` | 每类标记坐标列表为 `[x,y]` 整数对；越界 → 错误 |
 | 11. `warps` | from 为 `[x,y]` 整数对且不越界；to 为 `[mapId字符串, x, y]` 且 x/y 整数 |
+| 12. `exits`（P-0817-G） | from/to 必须是已知房间 id（否则错误）；door 为 `[x,y]` 整数对、不越界、**落在可通行格**且**在 from 房间墙环上**（不在环上 → 警告）；缺反向出口（A→B 无 B→A）→ 警告（切回可能不可达）；两侧门洞不对齐（距 >2）→ 警告 |
+| 13. `tileProps.blocked`（P-0817-O） | **挡路家具一致性**：声明 `blocked=true` 的格必须 `collision=1`（否则错误）——挡路声明与碰撞层必须一致；非 blocked 键/旧地图零影响 |
 
 **v0.2 新键缺失 = 不校验 = 通过**（保持 v1 语义）；`layers.objects/overlay` 不校验尺寸（宽容透传，渲染层尽力而为）。
+**P-0817-L 扩展**：`structure` 为地图可选键（缺失 = 普通地图，宽容解析零破坏）；生成入口 `POST /api/structure/generate`（castle/mansion/city_block/dungeon 四模板，单图优先，超单图预算按 zone 自动拆多图 + warps 双向连接）。
 
 ### 7.3 完整示例（v0.2 增强版，基于 §2.1 manor_01 老宅）
 

@@ -20,6 +20,7 @@ import java.util.Map;
  *   <li>decor（v0.2）：id 非空且唯一、tile 合法且不嵌墙（ground=2）、type 非空字符串</li>
  *   <li>spawnMarkers（v0.2）：每类坐标列表合法（整数、越界拒绝）</li>
  *   <li>warps（v0.2）：from 合法；to 为 [mapId字符串, x, y] 且 x/y 整数</li>
+ *   <li>tileProps.blocked（P-0817-O 挡路家具）：声明 blocked=true 的格必须 collision=1（一致性）</li>
  * </ol>
  * v0.2 新键缺失 = 不校验 = 通过（保持 v1 语义）。
  *
@@ -345,6 +346,99 @@ public final class MapValidator {
                 if (!(to instanceof List<?> t) || t.size() != 3 || !(t.get(0) instanceof String)
                         || !(t.get(1) instanceof Number) || !(t.get(2) instanceof Number)) {
                     errors.add("warps[" + i + "] to 必须为 [mapId字符串, x, y]");
+                }
+            }
+        }
+
+        // 12) exits（P-0817-G 房间模式出口表，可选键）：from/to 必须存在、door 可通行且在 from 房间墙环上；
+        //     双向一致性缺失 → 警告（推导器天然双向，LLM 手写可能漏反向）
+        Object exits = map.get("exits");
+        java.util.Map<String, int[]> roomRects = new java.util.HashMap<>();
+        if (rooms instanceof List<?> roomList) {
+            for (Object o : roomList) {
+                if (!(o instanceof Map<?, ?> rm)) continue;
+                String rid = MapContract.str(rm.get("id"), "");
+                if (rid.isBlank()) continue;
+                roomRects.put(rid, new int[]{
+                        MapContract.intOf(rm.get("x"), 0), MapContract.intOf(rm.get("y"), 0),
+                        MapContract.intOf(rm.get("w"), 0), MapContract.intOf(rm.get("h"), 0)});
+            }
+        }
+        if (exits != null && !(exits instanceof List<?>)) {
+            errors.add("exits 必须为数组");
+        } else if (exits instanceof List<?> exitList) {
+            java.util.Map<String, int[]> doorByPair = new java.util.HashMap<>();
+            for (int i = 0; i < exitList.size(); i++) {
+                Object o = exitList.get(i);
+                if (!(o instanceof Map<?, ?> ex)) {
+                    errors.add("exits[" + i + "] 不是对象");
+                    continue;
+                }
+                String from = MapContract.str(ex.get("from"), "");
+                String to = MapContract.str(ex.get("to"), "");
+                if (from.isBlank() || to.isBlank()) {
+                    errors.add("exits[" + i + "] 缺少 from/to");
+                    continue;
+                }
+                if (!roomRects.containsKey(from)) {
+                    errors.add("exits[" + i + "] from \"" + from + "\" 不是已知房间");
+                }
+                if (!roomRects.containsKey(to)) {
+                    errors.add("exits[" + i + "] to \"" + to + "\" 不是已知房间");
+                }
+                Object door = ex.get("door");
+                if (!(door instanceof List<?> dl) || dl.size() != 2
+                        || !(dl.get(0) instanceof Number) || !(dl.get(1) instanceof Number)) {
+                    errors.add("exits[" + i + "] door 必须为 [x, y] 整数对");
+                    continue;
+                }
+                int dx = ((Number) dl.get(0)).intValue();
+                int dy = ((Number) dl.get(1)).intValue();
+                if (inBounds && (dx < 0 || dy < 0 || dx >= W || dy >= H)) {
+                    errors.add("exits[" + i + "] (" + from + "→" + to + ") door 越界");
+                } else if (inBounds && !walkable(col, W, H, dx, dy)) {
+                    errors.add("exits[" + i + "] (" + from + "→" + to + ") door 落在不可通行格");
+                }
+                // door 应在 from 房间墙环上（环 = rect 外 1 圈）
+                int[] rr = roomRects.get(from);
+                if (rr != null && rr[2] > 0 && rr[3] > 0) {
+                    boolean onRing = (dx == rr[0] - 1 || dx == rr[0] + rr[2])
+                            && dy >= rr[1] - 1 && dy <= rr[1] + rr[3];
+                    onRing = onRing || ((dy == rr[1] - 1 || dy == rr[1] + rr[3])
+                            && dx >= rr[0] - 1 && dx <= rr[0] + rr[2]);
+                    if (!onRing) {
+                        warnings.add("exits[" + i + "] (" + from + "→" + to + ") door (" + dx + "," + dy
+                                + ") 不在 from 房间墙环上");
+                    }
+                }
+                doorByPair.put(from + "->" + to, new int[]{dx, dy});
+            }
+            // 双向一致性（警告）：A→B 存在时应有 B→A 且门距 ≤2
+            for (java.util.Map.Entry<String, int[]> e : doorByPair.entrySet()) {
+                String[] pair = e.getKey().split("->");
+                if (pair.length != 2) continue;
+                int[] rev = doorByPair.get(pair[1] + "->" + pair[0]);
+                if (rev == null) {
+                    warnings.add("exits 缺少反向出口 " + pair[1] + "→" + pair[0] + "（房间模式切回可能不可达）");
+                } else {
+                    int d = Math.abs(rev[0] - e.getValue()[0]) + Math.abs(rev[1] - e.getValue()[1]);
+                    if (d > 2) warnings.add("exits " + pair[0] + "↔" + pair[1] + " 门洞距离 " + d + " > 2（两侧门不对齐）");
+                }
+            }
+        }
+
+        // 13) tileProps.blocked（P-0817-O 挡路家具）：声明 blocked=true 的格必须真的碰撞（collision=1）
+        Object tp13 = map.get("tileProps");
+        if (tp13 instanceof Map<?, ?> tpm) {
+            for (Map.Entry<?, ?> e : tpm.entrySet()) {
+                if (!(e.getValue() instanceof Map<?, ?> prop)) continue;
+                if (!Boolean.TRUE.equals(prop.get("blocked"))) continue;
+                int[] xy = MapContract.tileKey(String.valueOf(e.getKey()));
+                if (xy == null || !inBounds) continue;
+                if (col == null || xy[1] >= col.length || col[xy[1]] == null || xy[0] >= col[xy[1]].length) continue;
+                if (col[xy[1]][xy[0]] != 1) {
+                    errors.add("tileProps[" + e.getKey() + "].blocked=true 但 collision 为可通行"
+                            + "（挡路声明与碰撞层不一致）");
                 }
             }
         }

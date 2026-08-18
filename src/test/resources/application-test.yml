@@ -29,6 +29,12 @@ roleplay:
     seed: null
     # P-0810-23-D2：与主 yml 同步（RouterService @Value 默认 150，测试经 setRemindThreshold 覆盖）
     remind-threshold: 150
+  map-llm:
+    # P-0818-B（地图生成专用 LLM）：与主 yml 同步键；测试走 mock LLM（MapLlmClient 由测试 mock，不真实调用）
+    api-key: ""
+    base-url: "http://localhost:9998/map-llm-mock"
+    model: "mimo-v2.5"
+    visual-audit-timeout-seconds: 30
   monitor:
     # D26: 与主 yml 同步——fallback-model/timeout-seconds 属 roleplay.monitor.*（LLMClient 读取处）
     fallback-model: "test-mock"
@@ -105,6 +111,9 @@ roleplay:
       # 尺寸下限（P-0810-21 P0-3，B 方案：测试 yml 同步 min 值，断言同步更新）
       min-width: 32
       min-height: 20
+      # 尺寸上限（P-0817-D 大图支持：测试 yml 与主 yml 同步；显式超限 clamp 到 256×256）
+      max-width: 256
+      max-height: 256
       # BSP 降级种子（与主 yml 同步默认值；测试走显式 seed 时不受影响）
       bsp-seed: 20260801
     discussion:
@@ -123,6 +132,14 @@ roleplay:
       game-ttl-ms: 43200000
       web-search-enabled: false
       phase-timeout-ms: 0
+      # P-0816-G（UI 重设计阶段一 API-1 行动建议，与主 yml 同步键；测试直构服务不经 Spring，@Value 默认值生效）
+      action:
+        ask-ap-cost: 1
+        present-ap-cost: 1
+        replay-ap-cost: 0
+        max-ask: 3
+        max-present: 3
+        max-research: 4
     werewolf:
       # P-0802-F 狼人杀自动推进（与主 yml 同步；测试直构服务不经 Spring，@Value 默认值生效）
       ai-night-actions: true
@@ -147,6 +164,21 @@ roleplay:
     fallback-to-global: true
     # 剧本杀阶段切换 SYSTEM 广播总开关（默认 true=启用）
     script-phase-broadcast: true
+  tts:
+    # P-0817-A（MiMo TTS）：与主 yml 同步键（测试断言 roleplay.tts.mimo.* 绑定与默认；
+    # 测试不落真实 key——MimoTtsServiceTest 用本地 HttpServer 桩 + 显式 setApiKey）
+    mimo:
+      enabled: true
+      api-key: ""
+      base-url: "http://localhost:9/tts-mock"
+      model-basic: "mimo-v2.5-tts"
+      model-clone: "mimo-v2.5-tts-voiceclone"
+      model-design: "mimo-v2.5-tts-voicedesign"
+      default-voice: "mimo_default"
+      default-tone: "自然温柔的语气"
+      builtin-voices: "mimo_default"
+      timeout-seconds: 5
+      openclaw-config: ""
   debug:
     # P-0809-B（API 逻辑链追踪）：与主 yml 同步——默认关闭零打点；测试经 TraceService.setEnabled 显式开启
     trace-enabled: false
@@ -165,3 +197,11 @@ roleplay:
     characters: []
   frontend:
     dev-mode: false
+  structure:
+    # P-0817-L（结构树契约 + 生成 API）：与主 yml 同步默认值（测试断言 roleplay.structure.* 绑定与默认；
+    # 显式 seed/width 由用例传入，不依赖配置）
+    enabled: true
+    l0-source: template
+    max-single-map-width: 128
+    max-single-map-height: 128
+    template-dir: classpath:/structure

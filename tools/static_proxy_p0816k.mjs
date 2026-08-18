@@ -1,0 +1,51 @@
+/* static_proxy_p0816k.mjs — P-0816-K 后端场景接入剧本选择页验证用静态代理
+ * 服务 roleplay-v4/frontend/dist（P-0816-K 构建产物 index-CATKV_JB.js）于 4196，
+ * /api/** 透传 http://localhost:8000（剥除 Origin 头规避 CORS 白名单）。
+ * 用法：node tools/static_proxy_p0816k.mjs
+ */
+import { createServer } from 'node:http';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { join, extname, normalize } from 'node:path';
+import { request as httpRequest } from 'node:http';
+
+const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const BACKEND = 'http://localhost:8000';
+const PORT = Number(process.env.PORT || 4196);
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'application/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+};
+
+const server = createServer((req, res) => {
+  const url = req.url || '/';
+  if (url.startsWith('/api/') || url.startsWith('/ai-images/') || url.startsWith('/assets/SCENE_TILESET/')) {
+    const headers = { ...req.headers };
+    delete headers.origin;
+    headers.host = 'localhost:8000';
+    headers['content-type'] = headers['content-type'] || 'application/json';
+    const preq = httpRequest(BACKEND + url, { method: req.method, headers }, (pres) => {
+      res.writeHead(pres.statusCode || 200, { ...pres.headers, 'access-control-allow-origin': '*' });
+      pres.pipe(res);
+    });
+    preq.on('error', (e) => { res.writeHead(502); res.end('proxy err: ' + e.message); });
+    req.pipe(preq);
+    return;
+  }
+  const clean = normalize(url.split('?')[0]).replace(/^([/\\])+/, '');
+  const file = join(ROOT, clean);
+  if (existsSync(file) && statSync(file).isFile()) {
+    res.writeHead(200, { 'content-type': MIME[extname(file).toLowerCase()] || 'application/octet-stream' });
+    res.end(readFileSync(file));
+    return;
+  }
+  res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+  res.end(readFileSync(join(ROOT, 'index.html')));
+}).listen(PORT, () => console.log('p0816k static proxy on ' + PORT + ' -> ' + BACKEND + ' (root ' + ROOT + ')'));

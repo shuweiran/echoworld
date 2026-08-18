@@ -193,6 +193,12 @@ public class ConversationManager {
     /** P-0813-F：节奏控制是否启用（2D 世界注入；剧本杀/狼人杀各局实例=false）。 */
     public boolean isPacingEnabled() { return pacingEnabled; }
 
+    /** P-0816-R：按 id 取活动讨论组（质询 pressed 标记定位实时发言用——讨论进行中发言在组内
+     *  messageHistory，讨论结束才整体拷入对局 discussionTranscript；无组返回 null）。 */
+    public ConversationGroup getActiveGroup(String groupId) {
+        return groupId == null ? null : activeGroups.get(groupId);
+    }
+
     /**
      * P-0813-F：当前对话轨道 = 含玩家控制成员的活跃群组（玩家进入对话 → 该轨道全速）；
      * 无 → null（未进入对话，全部轨道按未对话态节奏）。

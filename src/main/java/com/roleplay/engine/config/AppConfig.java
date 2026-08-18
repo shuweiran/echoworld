@@ -25,6 +25,8 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 public class AppConfig {
 
     private LLMConfig llm = new LLMConfig();
+    /** P-0818-B：地图生成专用 LLM（roleplay.map-llm.*，小米 MiMo）——只用于地图/结构生成 */
+    private MapLlmConfig mapLlm = new MapLlmConfig();
     private MemoryConfig memory = new MemoryConfig();
     private ArbiterConfig arbiter = new ArbiterConfig();
     private MonitorConfig monitor = new MonitorConfig();
@@ -35,6 +37,8 @@ public class AppConfig {
     private FrontendConfig frontend = new FrontendConfig();
     /** 语音配置（D20：/api/config/voice 运行时落地，TtsService 读取）。 */
     private VoiceConfig voice = new VoiceConfig();
+    /** P-0817-A：MiMo TTS 配置（roleplay.tts.mimo.*）——角色语音合成（basic 内置音色 / clone 声音克隆 / design 声线设计）。 */
+    private TtsConfig tts = new TtsConfig();
     /** 广播配置（演讲与广播合并地基）：roleplay.broadcast.*，AnnouncementService 节流参数。 */
     private BroadcastConfig broadcast = new BroadcastConfig();
     /** P-0813-F：2D 世界节奏控制（roleplay.pacing.*）——对话密度/时序/移动速度基准。 */
@@ -52,6 +56,8 @@ public class AppConfig {
 
     public LLMConfig getLlm() { return llm; }
     public void setLlm(LLMConfig llm) { this.llm = llm; }
+    public MapLlmConfig getMapLlm() { return mapLlm; }
+    public void setMapLlm(MapLlmConfig mapLlm) { this.mapLlm = mapLlm; }
 
     public MemoryConfig getMemory() { return memory; }
     public void setMemory(MemoryConfig memory) { this.memory = memory; }
@@ -76,6 +82,9 @@ public class AppConfig {
 
     public VoiceConfig getVoice() { return voice; }
     public void setVoice(VoiceConfig voice) { this.voice = voice; }
+
+    public TtsConfig getTts() { return tts; }
+    public void setTts(TtsConfig tts) { this.tts = tts; }
 
     public BroadcastConfig getBroadcast() { return broadcast; }
     public void setBroadcast(BroadcastConfig broadcast) { this.broadcast = broadcast; }
@@ -124,6 +133,20 @@ public class AppConfig {
         public void setTemperature(double temperature) { this.temperature = temperature; }
         public Integer getSeed() { return seed; }
         public void setSeed(Integer seed) { this.seed = seed; }
+    }
+
+    /** P-0818-B：地图生成专用 LLM（只接入地图生成，主链路不动）。 */
+    public static class MapLlmConfig {
+        private String apiKey = "";
+        private String baseUrl = "https://token-plan-cn.xiaomimimo.com/v1";
+        private String model = "mimo-v2.5";
+
+        public String getApiKey() { return apiKey; }
+        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+        public String getModel() { return model; }
+        public void setModel(String model) { this.model = model; }
     }
 
     public static class MemoryConfig {
@@ -264,6 +287,52 @@ public class AppConfig {
             public long getTimeoutSeconds() { return timeoutSeconds; }
             public void setTimeoutSeconds(long timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
         }
+
+        /** 剧本杀脚本局配置（P-0816-G UI 重设计阶段一）：映射 yml {@code roleplay.game.script.*}。 */
+        private ScriptConfig script = new ScriptConfig();
+
+        public ScriptConfig getScript() { return script; }
+        public void setScript(ScriptConfig script) { this.script = script; }
+
+        /** 剧本杀脚本局配置（{@code roleplay.game.script.*}）：含行动建议（API-1，决策 U6）。 */
+        public static class ScriptConfig {
+            /** 行动建议配置（API-1 行动选择条）：映射 yml {@code roleplay.game.script.action.*}，
+             *  决策 U6「行动集配置化」——阈值/规则键落 yml 双份 + 本配置类；MVP 常量占位
+             *  （与 ScriptGameService @Value 同源同值，对齐 D-018/D-027 先例）。 */
+            private ActionConfig action = new ActionConfig();
+
+            public ActionConfig getAction() { return action; }
+            public void setAction(ActionConfig action) { this.action = action; }
+
+            /** 行动建议（API-1）：ask=去问人 / research=去搜地点 / present=出示线索 三类建议的 AP 消耗与条数上限。 */
+            public static class ActionConfig {
+                /** ask（去问人）行动扣 AP（默认 1）。 */
+                private int askApCost = 1;
+                /** present（出示线索）行动扣 AP（默认 1）。 */
+                private int presentApCost = 1;
+                /** research 已搜地点回看扣 AP（决策 U7：默认 0=回看不消耗，扣 AP 仅首次搜证）。 */
+                private int replayApCost = 0;
+                /** ask 建议条数上限（默认 3；未私聊过的其他玩家中去重取前 N）。 */
+                private int maxAsk = 3;
+                /** present 建议条数上限（默认 3；本人持有可出示线索前 N）。 */
+                private int maxPresent = 3;
+                /** research 建议条数上限（默认 4；已搜地点回看优先 + 未搜地点引导）。 */
+                private int maxResearch = 4;
+
+                public int getAskApCost() { return askApCost; }
+                public void setAskApCost(int askApCost) { this.askApCost = askApCost; }
+                public int getPresentApCost() { return presentApCost; }
+                public void setPresentApCost(int presentApCost) { this.presentApCost = presentApCost; }
+                public int getReplayApCost() { return replayApCost; }
+                public void setReplayApCost(int replayApCost) { this.replayApCost = replayApCost; }
+                public int getMaxAsk() { return maxAsk; }
+                public void setMaxAsk(int maxAsk) { this.maxAsk = maxAsk; }
+                public int getMaxPresent() { return maxPresent; }
+                public void setMaxPresent(int maxPresent) { this.maxPresent = maxPresent; }
+                public int getMaxResearch() { return maxResearch; }
+                public void setMaxResearch(int maxResearch) { this.maxResearch = maxResearch; }
+            }
+        }
     }
 
     public static class FrontendConfig {
@@ -294,6 +363,66 @@ public class AppConfig {
         public void setAutoSelect(boolean autoSelect) { this.autoSelect = autoSelect; }
         public String getVoice() { return voice; }
         public void setVoice(String voice) { this.voice = voice; }
+    }
+
+    /**
+     * MiMo TTS 配置（P-0817-A）：映射 yml {@code roleplay.tts.mimo.*}。
+     *
+     * <ul>
+     *   <li>{@code enabled}=总开关（默认 true；false 时合成端点返回 503「未启用」）；</li>
+     *   <li>{@code api-key}=API Key（解析链：yml 值 → 环境变量 {@code ROLEPLAY_MIMO_TTS_KEY}
+     *       → openclaw.json {@code models.providers.xiaomimimo-tp.apiKey}）；</li>
+     *   <li>{@code base-url}=MiMo OpenAI 兼容端点（默认 https://token-plan-cn.xiaomimimo.com/v1）；</li>
+     *   <li>{@code model-basic / model-clone / model-design}=三模式模型名；</li>
+     *   <li>{@code default-voice}=basic 模式内置音色名（默认 mimo_default）；</li>
+     *   <li>{@code default-tone}=合成请求 user 消息的语气/风格描述（默认「自然温柔的语气」）；</li>
+     *   <li>{@code builtin-voices}=内置音色清单（逗号分隔，GET /api/tts/mimo/voices 返回）；</li>
+     *   <li>{@code timeout-seconds}=单次合成 HTTP 超时（默认 60）；</li>
+     *   <li>{@code openclaw-config}=openclaw.json 路径（api-key 兜底来源，空=不读）。</li>
+     * </ul>
+     */
+    public static class TtsConfig {
+        private MimoConfig mimo = new MimoConfig();
+
+        public MimoConfig getMimo() { return mimo; }
+        public void setMimo(MimoConfig mimo) { this.mimo = mimo; }
+
+        public static class MimoConfig {
+            private boolean enabled = true;
+            private String apiKey = "";
+            private String baseUrl = "https://token-plan-cn.xiaomimimo.com/v1";
+            private String modelBasic = "mimo-v2.5-tts";
+            private String modelClone = "mimo-v2.5-tts-voiceclone";
+            private String modelDesign = "mimo-v2.5-tts-voicedesign";
+            private String defaultVoice = "mimo_default";
+            private String defaultTone = "自然温柔的语气";
+            private String builtinVoices = "mimo_default";
+            private int timeoutSeconds = 60;
+            private String openclawConfig = "";
+
+            public boolean isEnabled() { return enabled; }
+            public void setEnabled(boolean enabled) { this.enabled = enabled; }
+            public String getApiKey() { return apiKey; }
+            public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+            public String getBaseUrl() { return baseUrl; }
+            public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+            public String getModelBasic() { return modelBasic; }
+            public void setModelBasic(String modelBasic) { this.modelBasic = modelBasic; }
+            public String getModelClone() { return modelClone; }
+            public void setModelClone(String modelClone) { this.modelClone = modelClone; }
+            public String getModelDesign() { return modelDesign; }
+            public void setModelDesign(String modelDesign) { this.modelDesign = modelDesign; }
+            public String getDefaultVoice() { return defaultVoice; }
+            public void setDefaultVoice(String defaultVoice) { this.defaultVoice = defaultVoice; }
+            public String getDefaultTone() { return defaultTone; }
+            public void setDefaultTone(String defaultTone) { this.defaultTone = defaultTone; }
+            public String getBuiltinVoices() { return builtinVoices; }
+            public void setBuiltinVoices(String builtinVoices) { this.builtinVoices = builtinVoices; }
+            public int getTimeoutSeconds() { return timeoutSeconds; }
+            public void setTimeoutSeconds(int timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
+            public String getOpenclawConfig() { return openclawConfig; }
+            public void setOpenclawConfig(String openclawConfig) { this.openclawConfig = openclawConfig; }
+        }
     }
 
     /**

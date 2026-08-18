@@ -60,6 +60,21 @@ public class MovementSystem {
                 continue;
             }
 
+            // P-0816-A：玩家角色无手动目标 → 速度恒 0、位置完全静止（自走根治）。
+            // computeForce 的障碍斥力（OBSTACLE_REPULSION=200）与 clampToWorld 的反弹残余速度
+            // （0.3 保留）只对 AI 生效——玩家无输入时即使贴着墙/障碍也绝不产生 vx/vy；
+            // clampToWorld 仍执行（边界/障碍推挤防卡墙，但速度归零）。非手动目标一并清掉
+            // （对齐 isInConversation 分支语义：玩家不持有任何 AI 指派目标）。
+            if (self.isPlayerControlled() && !self.isManualTarget()) {
+                if (self.isHasTarget()) {
+                    self.clearTarget();
+                }
+                self.setVx(0);
+                self.setVy(0);
+                clampToWorld(self);
+                continue;
+            }
+
             double[] force = computeForce(self);
             applyForce(self, force, dt);
             clampToWorld(self);
@@ -75,30 +90,35 @@ public class MovementSystem {
         double aliX = 0, aliY = 0;
         int sepCount = 0, cohCount = 0, aliCount = 0;
 
-        for (AgentState other : neighbors) {
-            double dist = self.distanceTo(other);
-            if (dist < 0.01) continue;
+        // P-0815-H：玩家角色（isPlayerControlled）不参与群体 flocking（分离/聚合/对齐）——
+        // 这些是 AI 自主行为力，玩家角色无输入时必须完全静止（主人反馈「不控制时自己乱动」）；
+        // AI 仍会把玩家当作邻居（互相避让不穿人），只是玩家自己不受这些力的推挤/牵引。
+        if (!self.isPlayerControlled()) {
+            for (AgentState other : neighbors) {
+                double dist = self.distanceTo(other);
+                if (dist < 0.01) continue;
 
-            double dx = other.getX() - self.getX();
-            double dy = other.getY() - self.getY();
+                double dx = other.getX() - self.getX();
+                double dy = other.getY() - self.getY();
 
-            if (dist < MIN_SEPARATION) {
-                double strength = (MIN_SEPARATION - dist) / MIN_SEPARATION;
-                sepX -= (dx / dist) * strength;
-                sepY -= (dy / dist) * strength;
-                sepCount++;
-            }
+                if (dist < MIN_SEPARATION) {
+                    double strength = (MIN_SEPARATION - dist) / MIN_SEPARATION;
+                    sepX -= (dx / dist) * strength;
+                    sepY -= (dy / dist) * strength;
+                    sepCount++;
+                }
 
-            if (dist < perception * 0.6) {
-                cohX += other.getX();
-                cohY += other.getY();
-                cohCount++;
-            }
+                if (dist < perception * 0.6) {
+                    cohX += other.getX();
+                    cohY += other.getY();
+                    cohCount++;
+                }
 
-            if (dist < perception * 0.4) {
-                aliX += other.getVx();
-                aliY += other.getVy();
-                aliCount++;
+                if (dist < perception * 0.4) {
+                    aliX += other.getVx();
+                    aliY += other.getVy();
+                    aliCount++;
+                }
             }
         }
 
@@ -133,8 +153,13 @@ public class MovementSystem {
                         // P-0814-I：沿墙绕行——直线被障碍打断时改为「切向滑行」而非原路弹回：
                         // 切向力（300）主导滑行方向，保留 30% 目标力防止被径向斥力（200）钉死，
                         // 滑过墙角（视线不再被挡）后目标力（220）直接牵引到目标。
-                        forceX += ny * TANGENT_SLIDE_WEIGHT;
-                        forceY += -nx * TANGENT_SLIDE_WEIGHT;
+                        // P-0815-H：切向滑行对玩家禁用（AI 绕行设计，玩家点墙会沿墙滑离目标点——
+                        // 实测 36.6px/400ms 持续滑行 = 方向漂移/失控滑行）；玩家保留 30% 目标力
+                        // 走到墙边停下（可控、可预期），不再自主绕行。
+                        if (!self.isPlayerControlled()) {
+                            forceX += ny * TANGENT_SLIDE_WEIGHT;
+                            forceY += -nx * TANGENT_SLIDE_WEIGHT;
+                        }
                         forceX += nx * TARGET_WEIGHT * BLOCKED_TARGET_KEEP;
                         forceY += ny * TARGET_WEIGHT * BLOCKED_TARGET_KEEP;
                         break;
@@ -147,7 +172,10 @@ public class MovementSystem {
             }
         }
 
-        if (Math.abs(forceX) < 0.5 && Math.abs(forceY) < 0.5 && !self.isHasTarget()) {
+        // P-0815-H：随机漫步是 AI 自主行为，玩家角色跳过——玩家无目标且无外力时速度必须恒为 0
+        // （完全静止，不漂移）；AI 角色保持原有 wander 行为不变。
+        if (!self.isPlayerControlled()
+                && Math.abs(forceX) < 0.5 && Math.abs(forceY) < 0.5 && !self.isHasTarget()) {
             forceX += (Math.random() - 0.5) * WANDER_STRENGTH;
             forceY += (Math.random() - 0.5) * WANDER_STRENGTH;
         }

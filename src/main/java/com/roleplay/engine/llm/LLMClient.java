@@ -11,6 +11,8 @@ import com.roleplay.engine.interrupt.StopType;
 import com.roleplay.engine.interrupt.TaskCancelledException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Service;
 
 import java.net.URI;
@@ -31,6 +33,7 @@ import java.util.concurrent.CompletableFuture;
  * <p>Maps from Python {@code services/llm_client.py → LLMClient}.
  */
 @Service
+@Primary // P-0818-B：主链路（对话/剧本等）默认 DeepSeek；地图专用 MapLlmClient 需显式 @Qualifier("mapLlmClient")
 public class LLMClient {
 
     private static final Logger log = LoggerFactory.getLogger(LLMClient.class);
@@ -38,12 +41,21 @@ public class LLMClient {
     private final AppConfig appConfig;
     private final int timeoutSeconds;
     private final String fallbackModel;
+    /** P-0818-B：地图生成专用 provider（true=读 roleplay.map-llm.*，小米 MiMo；false=主链路 DeepSeek） */
+    private final boolean mapProvider;
 
     private final HttpClient httpClient;
     private final ObjectMapper mapper = new ObjectMapper();
 
+    @Autowired
     public LLMClient(AppConfig appConfig) {
+        this(appConfig, false);
+    }
+
+    /** 地图专用构造（MapLlmClient 使用）：端点/模型/key 分流到 roleplay.map-llm.*。 */
+    protected LLMClient(AppConfig appConfig, boolean mapProvider) {
         this.appConfig = appConfig;
+        this.mapProvider = mapProvider;
         // D20: api_base / model 不再构造期固定 —— 每次请求时读取 AppConfig（
         // 运行时 POST /api/config/apikey 设置的 api_base/model 立即生效，重启丢失）
         this.timeoutSeconds = appConfig.getMonitor().getTimeoutSeconds();
@@ -55,10 +67,34 @@ public class LLMClient {
     }
 
     /** 运行时 api_base（D20：支持运行时配置热更新，见 ConfigController）。 */
-    private String apiBase() { return appConfig.getLlm().getApiBase(); }
+    private String apiBase() {
+        if (mapProvider && appConfig.getMapLlm() != null
+                && appConfig.getMapLlm().getBaseUrl() != null
+                && !appConfig.getMapLlm().getBaseUrl().isBlank()) {
+            return appConfig.getMapLlm().getBaseUrl();
+        }
+        return appConfig.getLlm().getApiBase();
+    }
 
     /** 运行时默认模型（D20）。 */
-    private String defaultModel() { return appConfig.getLlm().getModel(); }
+    private String defaultModel() {
+        if (mapProvider && appConfig.getMapLlm() != null
+                && appConfig.getMapLlm().getModel() != null
+                && !appConfig.getMapLlm().getModel().isBlank()) {
+            return appConfig.getMapLlm().getModel();
+        }
+        return appConfig.getLlm().getModel();
+    }
+
+    /** P-0818-B：鉴权 key（地图专用 provider → roleplay.map-llm.api-key，否则主链路 key）。 */
+    private String authKey() {
+        if (mapProvider && appConfig.getMapLlm() != null
+                && appConfig.getMapLlm().getApiKey() != null
+                && !appConfig.getMapLlm().getApiKey().isBlank()) {
+            return appConfig.getMapLlm().getApiKey();
+        }
+        return appConfig.getLlm().getApiKey();
+    }
 
     /** P-0810-21-D：对话主链路 max_tokens（roleplay.llm.dialogue-max-tokens，默认 700）。 */
     private int dialogueMaxTokens() { return appConfig.getLlm().getDialogueMaxTokens(); }
@@ -146,7 +182,7 @@ public class LLMClient {
                     HttpRequest request = HttpRequest.newBuilder()
                             .uri(URI.create(chatEndpoint()))
                             .header("Content-Type", "application/json")
-                            .header("Authorization", "Bearer " + appConfig.getLlm().getApiKey())
+                            .header("Authorization", "Bearer " + authKey())
                             .timeout(Duration.ofSeconds(timeoutSec))
                             .POST(HttpRequest.BodyPublishers.ofString(requestBody))
                             .build();
@@ -265,6 +301,34 @@ public class LLMClient {
     }
 
     /**
+     * P-0818-E（视觉审核闭环）：带图像的多模态 JSON 调用（OpenAI 兼容 image_url）。
+     * 走当前 provider（MapLlmClient → 小米 MiMo mimo-v2.5，已实测支持图像输入）；
+     * 失败返回 null（由审核器降级为「无审核报告」，不阻断生成）。
+     */
+    public Map<String, Object> callJsonWithImage(String prompt, String imageDataUrl,
+                                                 Integer maxTokens, int timeoutSeconds) {
+        Message sysMsg = new Message(Message.Role.SYSTEM, "system",
+                "你是地图质量审核员。必须严格按照要求的JSON格式回复，不要任何推理过程/前言/解释。");
+        Message userMsg = new Message(Message.Role.USER, "user", prompt, "main", imageDataUrl);
+        int effectiveMaxTokens = resolveMaxTokens(maxTokens);
+        double temp = appConfig.getLlm().getTemperature();
+        try {
+            String content = callSync(List.of(sysMsg, userMsg), defaultModel(), effectiveMaxTokens, temp,
+                    timeoutSeconds > 0 ? timeoutSeconds : timeoutSeconds);
+            String json = extractJson(content);
+            if (json != null) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> result = mapper.readValue(json, Map.class);
+                return result;
+            }
+            return null;
+        } catch (Exception e) {
+            log.warn("callJsonWithImage failed: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * P-0810-19：maxTokens 可空解析——null/&lt;=0 回退配置默认
      * （{@code roleplay.llm.max-tokens}）；显式正数恒优先（与既有调用点行为一致）。
      */
@@ -287,15 +351,26 @@ public class LLMClient {
                                     int maxTokens, double temperature, boolean stream)
             throws JsonProcessingException {
 
-        List<Map<String, String>> msgList = new ArrayList<>();
+        List<Map<String, Object>> msgList = new ArrayList<>();
         for (Message m : messages) {
-            Map<String, String> msg = new LinkedHashMap<>();
+            Map<String, Object> msg = new LinkedHashMap<>();
             msg.put("role", switch (m.getRole()) {
                 case SYSTEM -> "system";
                 case USER -> "user";
                 default -> "assistant";
             });
-            msg.put("content", "[" + m.getName() + "] " + m.getContent());
+            if (m.getImage() != null && !m.getImage().isBlank()) {
+                // P-0818-E：多模态 content 数组 [{type:text},{type:image_url,image_url:{url}}]
+                Map<String, Object> textPart = new LinkedHashMap<>();
+                textPart.put("type", "text");
+                textPart.put("text", "[" + m.getName() + "] " + m.getContent());
+                Map<String, Object> imagePart = new LinkedHashMap<>();
+                imagePart.put("type", "image_url");
+                imagePart.put("image_url", Map.of("url", m.getImage()));
+                msg.put("content", List.of(textPart, imagePart));
+            } else {
+                msg.put("content", "[" + m.getName() + "] " + m.getContent());
+            }
             msgList.add(msg);
         }
 
@@ -361,7 +436,7 @@ public class LLMClient {
                     HttpRequest request = HttpRequest.newBuilder()
                             .uri(URI.create(chatEndpoint()))
                             .header("Content-Type", "application/json")
-                            .header("Authorization", "Bearer " + appConfig.getLlm().getApiKey())
+                            .header("Authorization", "Bearer " + authKey())
                             .timeout(Duration.ofSeconds(timeoutSeconds))
                             .POST(HttpRequest.BodyPublishers.ofString(requestBody))
                             .build();

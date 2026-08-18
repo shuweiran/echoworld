@@ -84,17 +84,16 @@ class SimulationMoveDirTest {
     }
 
     @Test
-    @DisplayName("⑤ 零方向：不改变目标，仅刷新 manualTarget 时间戳")
-    void moveDir_zeroDirection_onlyRefreshes() {
+    @DisplayName("⑤ 零方向：清除目标 + 停止（P-0816-C 新语义：松开 WASD 角色立即静止，不再滑向最后目标点）")
+    void moveDir_zeroDirection_stops() {
         SimulationWorld world = worldWith("我", 100, 100);
         SimulationController c = controller(world);
         AgentState st = world.getState("我");
         st.setTarget(500, 300);
         c.moveDir("我", Map.of("dx", 0.0, "dy", 0.0));
-        assertEquals(500.0, st.getTargetX(), 1e-6, "目标不应被改变");
-        assertEquals(300.0, st.getTargetY(), 1e-6);
-        assertTrue(st.isManualTarget());
-        assertTrue(st.getManualTargetSince() > 0);
+        assertFalse(st.isHasTarget(), "零方向应清除目标（hasTarget=false）");
+        assertFalse(st.isManualTarget(), "零方向应清除 manualTarget");
+        assertTrue(st.getManualTargetSince() < 0, "manualTargetSince 应重置为 -1");
     }
 
     @Test

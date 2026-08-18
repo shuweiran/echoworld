@@ -25,6 +25,14 @@ spring:
     default-property-inclusion: non_null
     serialization:
       write-dates-as-timestamps: false
+  # P-0817-L：前端静态资源禁用缓存（index.html 每次拉最新 hash，防旧构建被浏览器缓存导致 UI 不更新）
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-cache: true
+          no-store: true
+          must-revalidate: true
 
 roleplay:
   llm:
@@ -48,6 +56,16 @@ roleplay:
     # 该角色系统提示「你上一轮发言超过 N 字，本轮请精简输出」（仅下一轮生效，之后清除；不广播、无前端 UI）；
     # <=0 关闭检测。
     remind-threshold: 150
+  map-llm:
+    # P-0818-B（地图生成专用 LLM，小米 MiMo）：只用于地图/结构生成路径
+    # （ScriptMapService LLM 地图、StructureLlmBlueprint custom 结构蓝图）——对话/剧本等主链路仍走 roleplay.llm.*（DeepSeek）
+    #   api-key 从环境变量 ROLEPLAY_MAP_LLM_API_KEY 注入（部署脚本读 openclaw.json models.providers.xiaomimimo-map.apiKey），不落源码
+    #   model 实测平台可用（token-plan-cn /v1/models）：mimo-v2.5 / mimo-v2.5-pro / mimo-v2.5-asr / mimo-v2.5-tts*
+    api-key: "${ROLEPLAY_MAP_LLM_API_KEY:}"
+    base-url: "https://token-plan-cn.xiaomimimo.com/v1"
+    model: "mimo-v2.5"
+    # 视觉审核单次调用预算（30-300 秒）；客户端结构生成请求需覆盖最多两轮审核。
+    visual-audit-timeout-seconds: 180
   monitor:
     # D26: fallback-model/timeout-seconds 由 LLMClient 从 roleplay.monitor.* 读取（AppConfig.MonitorConfig）——
     #      fallback-model=主模型失败后的兜底模型，timeout-seconds=单次 LLM HTTP 调用超时
@@ -156,6 +174,10 @@ roleplay:
       # 超 LLM token 预算（40×24）仍走 BSP 确定性大图路径（既有行为不变）
       min-width: 32
       min-height: 20
+      # 尺寸上限（P-0817-D 大图支持）：显式请求超上限 clamp 到 256×256（防超大图 JSON/渲染爆炸；
+      # 256×256 = 65K 格，ground+collision ≈ 130K 数字 ≈ 1MB 级 JSON，Phaser 瓦片层相机裁剪可承载）
+      max-width: 256
+      max-height: 256
       # BSP 降级种子（ScriptMapService 读取；缺省用 DEFAULT_BSP_SEED=20260801，同 seed 同输出确定性）
       bsp-seed: 20260801
     discussion:
@@ -190,6 +212,18 @@ roleplay:
       # P-0805-C（阶段倒计时）：单阶段最长停留毫秒（默认 0=禁用；>0 时惰性推进 INVESTIGATION→DISCUSSION→VOTE，
       #   VOTE 阶段复用投票超时/弃票不在此推进）
       phase-timeout-ms: 0
+      # P-0816-G（UI 重设计阶段一 API-1 行动建议，决策 U6 配置化）：
+      #   action.ask-ap-cost=去问人行动扣 AP（默认 1）
+      #   action.present-ap-cost=出示线索行动扣 AP（默认 1）
+      #   action.replay-ap-cost=已搜地点回看扣 AP（决策 U7：默认 0=回看不消耗，扣 AP 仅首次搜证）
+      #   action.max-ask / max-present / max-research=三类行动建议条数上限（MVP 常量占位）
+      action:
+        ask-ap-cost: 1
+        present-ap-cost: 1
+        replay-ap-cost: 0
+        max-ask: 3
+        max-present: 3
+        max-research: 4
     werewolf:
       # 狼人杀自动推进（P-0802-F，主人授权后端批次）：
       #   ai-night-actions=AI 角色夜间自动决策（狼刀/预言家验/女巫救毒/猎人反杀）
@@ -266,6 +300,26 @@ roleplay:
     fallback-to-global: true
     # 剧本杀阶段切换 SYSTEM 广播总开关（五处阶段切换→全局横幅通道，进正式版；默认 true=启用）
     script-phase-broadcast: true
+  tts:
+    # P-0817-A（MiMo TTS）：角色语音合成 —— 三种模式（basic 内置音色 / clone 声音克隆 / design 声线设计）
+    #   api-key 解析链（MimoTtsService.resolveApiKey）：yml 本键 → 环境变量 ROLEPLAY_MIMO_TTS_KEY
+    #     → openclaw.json（models.providers.xiaomimimo-tp.apiKey，路径 openclaw-config，空=不读）
+    #   enabled=总开关（false=合成端点 503「未启用」）；base-url=MiMo OpenAI 兼容端点
+    #   default-voice=basic 内置音色名；default-tone=合成请求 user 消息语气描述
+    #   builtin-voices=GET /api/tts/mimo/voices 返回的内置音色清单（逗号分隔）
+    #   timeout-seconds=单次合成 HTTP 超时
+    mimo:
+      enabled: true
+      api-key: "${ROLEPLAY_MIMO_TTS_KEY:}"
+      base-url: "https://token-plan-cn.xiaomimimo.com/v1"
+      model-basic: "mimo-v2.5-tts"
+      model-clone: "mimo-v2.5-tts-voiceclone"
+      model-design: "mimo-v2.5-tts-voicedesign"
+      default-voice: "mimo_default"
+      default-tone: "自然温柔的语气"
+      builtin-voices: "mimo_default"
+      timeout-seconds: 60
+      openclaw-config: "C:\\Users\\shuweiran\\.openclaw\\openclaw.json"
   debug:
     # 阶段② API 逻辑链可视化（调研报告 docs/ui-api-survey.md §5 方案 C，P-0809-B）：
     #   trace-enabled=总开关（默认 false=零打点零影响；true=TraceFilter 打点 /api/** +
@@ -277,3 +331,15 @@ roleplay:
     dev-mode: false
     dev-port: 5173
     dist-dir: "../roleplay-v4/frontend/dist"
+  structure:
+    # P-0817-L（结构树契约 + 生成 API）：大型结构分层生成——L0 模板库（零成本）/ L1 程序化布局 /
+    #   单图优先，结构总面积超单图预算自动拆多图（zone 切图 + warps 连接，复用 P-0803-K 多图语义）
+    #   enabled=总开关（false=直接 BSP 兜底）；l0-source=template（LLM 蓝图 L0 属 P4，暂不接线）
+    enabled: true
+    # P-0818-B：custom 结构蓝图启用 LLM（地图生成专用通道 MapLlmClient，小米 MiMo）
+    l0-source: llm
+    # 单图预算（格）：结构打包总面积超限自动拆多图；请求 width/height 可覆盖（超契约 max 256 clamp）
+    max-single-map-width: 128
+    max-single-map-height: 128
+    # 模板库位置（classpath 相对路径；每 kind 一个 JSON，缺失/损坏回退内置同构模板）
+    template-dir: classpath:/structure

@@ -372,6 +372,72 @@ public class SSEController implements SseBroadcaster {
         broadcastToSession(sessionId, "script_ready", payload);
     }
 
+    /**
+     * P-0816-G（UI 重设计阶段一，§3.3）：script_vote_progress → {session_id, total, voted, abstained,
+     *  pending[], candidates[{name,votes,point}], trustees[]} —— 投票进度聚合（只出聚合不出投票人，C13）。
+     *  任一玩家 vote/abstain/leave/托管变更时推送（会话定向；无匹配连接静默丢弃）。
+     *  前端投票页「已投票 x/y」+ 右栏统计条直接消费；另有 3s 轮询 GET /api/script/vote/status 兜底
+     *  （对齐 script_status 双通道先例，决策 D1）。
+     */
+    public void broadcastScriptVoteProgress(String sessionId, Map<String, Object> data) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (data != null) payload.putAll(data);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcastToSession(sessionId, "script_vote_progress", payload);
+    }
+
+    /**
+     * P-0816-G（UI 重设计阶段一，§3.3）：script_goal → {session_id, phase, goal{title,progress,detail}}
+     *  —— 顶栏 🎯 目标徽章（API-13 规则模板的 SSE 通道，零新状态）。
+     *  阶段切换/进度变化（搜证/投票/质询）时推送（会话定向）；倒计时不走事件（前端由 status
+     *  phase_elapsed_ms/phase_timeout_ms 本地计时，决策 D1/U9）；另有 3s 轮询 GET /api/script/goal 兜底。
+     */
+    public void broadcastScriptGoal(String sessionId, Map<String, Object> data) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (data != null) payload.putAll(data);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcastToSession(sessionId, "script_goal", payload);
+    }
+
+    /**
+     * P-0816-R（UI 重设计阶段二 API-3/4，§3.3）：script_locks → {session_id, role, lock_count,
+     *  unlocked, unlock_clue_id?, locks[]} —— 左栏 🔒 心锁状态（API-4 破锁成功后推送新锁状态，
+     *  决策 U1 规则推导过渡 + 终态 LLM 标注 clues[].unlock_role）。
+     *  会话定向（broadcastToSession）；前端左栏锁标记刷新，另有 3s 轮询 GET /api/script/locks 兜底。
+     */
+    public void broadcastScriptLocks(String sessionId, Map<String, Object> data) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (data != null) payload.putAll(data);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcastToSession(sessionId, "script_locks", payload);
+    }
+
+    /**
+     * P-0816-R（UI 重设计阶段二 API-5，§3.3）：script_press → {session_id, target, pressed_by,
+     *  message_id?, contradiction:true} —— 讨论发言被质询（API-5 质询成功推送；
+     *  前端讨论气泡红色「矛盾点？」角标 + 左栏被质询标红，服务端 pressed 标记驱动，不再纯本地）。
+     *  会话定向（broadcastToSession）；另有 3s 轮询 GET /api/script/status（discussion 含 pressed 标记）兜底。
+     */
+    public void broadcastScriptPress(String sessionId, Map<String, Object> data) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (data != null) payload.putAll(data);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcastToSession(sessionId, "script_press", payload);
+    }
+
+    /**
+     * P-0816-T（UI 重设计阶段三 API-9，§3.3）：script_present → {session_id, player, clue_id, title, target}
+     *  —— 讨论阶段出示证据（API-9 出示成功推送；前端对话流「🃏 出示：CL-xx 线索名」system 行实时插入，
+     *  全员可见）。会话定向（broadcastToSession，无匹配连接静默丢弃）；另有 3s 轮询
+     *  GET /api/script/status（discussion 转录含 system 出示行）兜底（对齐 script_status 双通道先例）。
+     */
+    public void broadcastScriptPresent(String sessionId, Map<String, Object> data) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (data != null) payload.putAll(data);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcastToSession(sessionId, "script_present", payload);
+    }
+
     public int getConnectionCount() {
         return emitters.size();
     }

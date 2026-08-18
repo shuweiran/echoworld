@@ -41,6 +41,8 @@ public class Message {
     private List<String> visibleTo = new ArrayList<>();
     private int roundNumber;
     private String modeId = "";
+    /** P-0818-E（视觉审核）：可选图像（data URL，如 data:image/png;base64,…）；非空时 content 以多模态数组发送 */
+    private String image = null;
 
     public Message() {}
 
@@ -53,6 +55,11 @@ public class Message {
     public Message(Role role, String name, String content, String trackId) {
         this(role, name, content);
         this.trackId = trackId;
+    }
+
+    public Message(Role role, String name, String content, String trackId, String image) {
+        this(role, name, content, trackId);
+        this.image = image;
     }
 
     // ── Builder methods ────────────────────────────────────────
@@ -144,6 +151,8 @@ public class Message {
     public int getRoundNumber() { return roundNumber; }
     public void setRoundNumber(int roundNumber) { this.roundNumber = roundNumber; }
     public String getModeId() { return modeId; }
+    public String getImage() { return image; }
+    public void setImage(String image) { this.image = image; }
     public void setModeId(String modeId) { this.modeId = modeId; }
 
     @Override

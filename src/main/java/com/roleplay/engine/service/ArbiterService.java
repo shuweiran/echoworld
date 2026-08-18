@@ -300,6 +300,63 @@ public class ArbiterService {
         }
         tracks.removeIf(t -> ((List<?>) t.get("agents")).isEmpty());
 
+        // P-0815-F：双人 protagonist 死锁防护 —— 会话唯一 AI 角色必须 active（玩家恒有回应）。
+        // 背景：protagonist 模式 prompt 允许主控把 AI 角色分配为 silent（P-0811-G 开局节奏设计），
+        // 但双人局（1 AI + 1 玩家）若唯一 AI 被 silent：玩家角色已被上方 enforcement 强制 active →
+        // 下方 hasActive 兜底见已有 active（玩家）不再补强 → RouterService.runRound 随后
+        // agentMap.remove(protagonist)（P-0810-25-2，玩家不参与生成）后 agentMap 无任何 active AI →
+        // 串行/并行双路径任务列表为空 → 「Agent round complete (serial): 0 agents in 0ms」对话死锁
+        // （2026-08-15 真机实测 19:35 复现：玩家连发 R2/R3/R4 AI 零回应；19:39 同配置 1 agents 正常 =
+        // LLM 每轮随机漂移 silent/active，非确定性判定）。规则：protagonist 模式且 AI 角色恰 1 个时
+        // 强制其 active（不依赖 LLM 漂移）；多人（≥2 AI）保留主控自由分配（P-0811-G 节奏设计）不受影响。
+        // restricted 硬性禁止优先（本兜底先于 restricted 块执行，用户「禁止出场」命令仍可覆盖）。
+        if ("protagonist".equals(mode) && protagonist != null && !protagonist.isEmpty()) {
+            List<String> aiAgents = agentNames.stream()
+                    .filter(n -> !n.equals(protagonist))
+                    .collect(Collectors.toList());
+            if (aiAgents.size() == 1) {
+                String onlyAi = aiAgents.get(0);
+                boolean aiActive = false;
+                for (Map<String, Object> t : tracks) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, String> actions = (Map<String, String>) t.get("agent_actions");
+                    if ("active".equals(actions.get(onlyAi))) {
+                        aiActive = true;
+                        break;
+                    }
+                }
+                if (!aiActive) {
+                    boolean placed = false;
+                    for (Map<String, Object> t : tracks) {
+                        @SuppressWarnings("unchecked")
+                        List<String> agents = (List<String>) t.get("agents");
+                        if (agents.contains(onlyAi)) {
+                            @SuppressWarnings("unchecked")
+                            Map<String, String> actions = (Map<String, String>) t.get("agent_actions");
+                            actions.put(onlyAi, "active");
+                            if ("isolated".equals(t.get("mode"))) t.put("mode", "merged");
+                            placed = true;
+                            break;
+                        }
+                    }
+                    if (!placed && !tracks.isEmpty()) {
+                        Map<String, Object> best = tracks.stream()
+                                .max(Comparator.comparingInt(t -> ((List<?>) t.get("agents")).size()))
+                                .orElse(null);
+                        if (best != null) {
+                            @SuppressWarnings("unchecked")
+                            List<String> agents = (List<String>) best.get("agents");
+                            @SuppressWarnings("unchecked")
+                            Map<String, String> actions = (Map<String, String>) best.get("agent_actions");
+                            agents.add(onlyAi);
+                            actions.put(onlyAi, "active");
+                        }
+                    }
+                    reasoning += " [双人防护：唯一AI角色" + onlyAi + "强制active（玩家恒有回应）]";
+                }
+            }
+        }
+
         // Hard enforcement: restricted agents must be offline
         if (!restrictedAgents.isEmpty()) {
             for (Map<String, Object> t : tracks) {

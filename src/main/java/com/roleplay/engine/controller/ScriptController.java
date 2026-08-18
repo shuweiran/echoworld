@@ -458,11 +458,218 @@ public class ScriptController {
         String player = body.getOrDefault("player", "");
         String suspect = body.getOrDefault("suspect", "");
         String playerKey = body.getOrDefault("player_key", "");
-        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
+        // P-0816-G（API-11 弃票扩展，决策 U8）：abstain=true 时弃票（suspect 可空）→ 独立 abstainedVoters 集合；
+        // 缺省/false 走既有 3 参路径逐字节不变（向后兼容：现有投票调用不变）
+        boolean abstain = Boolean.parseBoolean(body.getOrDefault("abstain", "false"));
+        String sessionId = resolveSessionId(player, playerKey, body.getOrDefault("session_id", ""));
         Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
         if (denied != null) return ResponseEntity.status(403).body(denied);
-        String result = scriptGameService.castVote(sessionId, player, suspect);
+        String result = abstain
+                ? scriptGameService.castVote(sessionId, player, "", true)
+                : scriptGameService.castVote(sessionId, player, suspect);
         return ResponseEntity.ok(Map.of("result", result));
+    }
+
+    /**
+     * P-0816-G（UI 重设计阶段一，§3.4）+ P-0816-P1（403 修复）：sessionId 解析 ——
+     * 优先级：① 显式 session_id（query/body，P-0816-P1 新增——原实现忽略显式 session_id，
+     * 重启后旧对局仅剩快照时 player_key 反查失效、回退 currentSessionId 导致 403）；
+     * ② player_key 反查对局（P-0810-17 B3：key 与对局一一对应，反查是唯一可靠归属，防多局并发 role_key 错位）；
+     * ③ playerSessions/currentSessionId（旧行为兜底）。新增端点（actions/action/vote-status/goal）统一走此解析。
+     */
+    private String resolveSessionId(String player, String playerKey, String explicitSessionId) {
+        if (explicitSessionId != null && !explicitSessionId.isBlank()) return explicitSessionId;
+        if (playerKey != null && !playerKey.isBlank()) {
+            String sidByKey = scriptGameService.findSessionByPlayerKey(playerKey);
+            if (!sidByKey.isBlank()) return sidByKey;
+        }
+        return playerSessions.getOrDefault(player, currentSessionId);
+    }
+
+    /** P-0816-P1：鉴权前确保对局在内存（重启后旧对局按快照恢复，否则 checkPlayerAccess 403「游戏不存在」）。 */
+    private void ensureGameLoaded(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return;
+        scriptGameService.ensureGameLoaded(sessionId);
+    }
+
+    /**
+     * P-0816-G（UI 重设计阶段一 API-1，§3.2）：行动建议集 —— 搜证阶段主区「行动选择条」数据源
+     * （去问人 / 去搜地点 / 出示线索，服务端权威生成，阈值配置化 roleplay.game.script.action.*，决策 U6）。
+     * query: session_id? / player / player_key? → {ok, phase, actions[], ap, ap_max}
+     */
+    @GetMapping("/actions")
+    public ResponseEntity<Map<String, Object>> actions(@RequestParam(defaultValue = "") String session_id,
+                                                       @RequestParam(defaultValue = "") String player,
+                                                       @RequestParam(defaultValue = "") String player_key) {
+        String sessionId = resolveSessionId(player, player_key, session_id);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        ensureGameLoaded(sessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, player_key);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.listActions(sessionId, player));
+    }
+
+    /**
+     * P-0816-G（UI 重设计阶段一 API-2，§3.2）：行动执行统一入口 —— 按 action_id 分派并内部委托既有
+     * search / privateSay / discussionSay（不重复造执行逻辑，决策 U7/D3）；
+     * research 已搜地点回看不扣 AP（响应含 {replayed:true, clues:[...]}），扣 AP 仅首次搜证。
+     * P-0816-P1：支持显式 session_id（query 或 body，优先于 player_key 反查）——
+     * 重启后旧对局快照恢复定位（修复 403）。
+     * body: {player, action_id, player_key?, session_id?}；query: ?session_id=
+     */
+    @PostMapping("/action")
+    public ResponseEntity<Map<String, Object>> action(@RequestBody(required = false) Map<String, String> body,
+                                                      @RequestParam(defaultValue = "") String session_id) {
+        Map<String, String> b = body == null ? Map.of() : body;
+        String player = b.getOrDefault("player", "");
+        String actionId = b.getOrDefault("action_id", "");
+        String playerKey = b.getOrDefault("player_key", "");
+        String bodySid = b.getOrDefault("session_id", "");
+        String sessionId = resolveSessionId(player, playerKey, session_id.isBlank() ? bodySid : session_id);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        ensureGameLoaded(sessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.executeAction(sessionId, player, actionId));
+    }
+
+    /**
+     * P-0816-G（UI 重设计阶段一 API-10，§3.2）：投票进度聚合 —— 投票页「已投票 x/y」+ 右栏统计条
+     * （只出聚合不出投票人，决策 C13）；非 VOTE 阶段返回 {phase}（前端隐藏统计区）。
+     * query: session_id? / player / player_key? → {ok, total, voted, abstained, pending[], candidates[], trustees[]}
+     */
+    @GetMapping("/vote/status")
+    public ResponseEntity<Map<String, Object>> voteStatus(@RequestParam(defaultValue = "") String session_id,
+                                                          @RequestParam(defaultValue = "") String player,
+                                                          @RequestParam(defaultValue = "") String player_key) {
+        String sessionId = resolveSessionId(player, player_key, session_id);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        ensureGameLoaded(sessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, player_key);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.voteStatus(sessionId));
+    }
+
+    /**
+     * P-0816-G（UI 重设计阶段一 API-13，§3.2）：目标 HUD 规则模板 —— 顶栏 🎯 目标徽章数据源
+     * （按 phase 返回 {title, progress, detail}，搜证 x/y、质询计数、投票 x/y；零新状态，决策 U4/U14）。
+     * query: session_id? / player / player_key? → {ok, phase, goal}
+     */
+    @GetMapping("/goal")
+    public ResponseEntity<Map<String, Object>> goal(@RequestParam(defaultValue = "") String session_id,
+                                                    @RequestParam(defaultValue = "") String player,
+                                                    @RequestParam(defaultValue = "") String player_key) {
+        String sessionId = resolveSessionId(player, player_key, session_id);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        ensureGameLoaded(sessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, player_key);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.getGoal(sessionId));
+    }
+
+    /**
+     * P-0816-R（UI 重设计阶段二 API-3，§3.2，决策 U1）：心锁列表 —— 左栏角色 🔒 标记数据源。
+     * 数据源：二期前规则推导过渡（线索 content/title 提及角色名 → 该角色 1 锁）；终态 LLM 标注
+     * clues[].unlock_role 预留字段（宽容解析缺省走推导）。roleLocks 状态随快照落库、不加表。
+     * query: session_id? / player / player_key? → {ok, locks:[{role, lock_count, unlock_clue_ids, unlocked}]}
+     */
+    @GetMapping("/locks")
+    public ResponseEntity<Map<String, Object>> locks(@RequestParam(defaultValue = "") String session_id,
+                                                     @RequestParam(defaultValue = "") String player,
+                                                     @RequestParam(defaultValue = "") String player_key) {
+        String sessionId = resolveSessionId(player, player_key, session_id);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        ensureGameLoaded(sessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, player_key);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.getLocks(sessionId));
+    }
+
+    /**
+     * P-0816-R（UI 重设计阶段二 API-4，§3.2，决策 U1）：出示证据破锁。
+     * 校验链：阶段（investigation/discussion）→ 玩家持有 clue_id → 线索是否该角色解锁线索 → 破锁
+     * （lock_count 归零 + unlockedLocks 记录随快照；成功后 SSE script_locks 广播）；幂等（重复出示提示已解锁）。
+     * body: {player, target_role, clue_id, player_key?, session_id?}
+     */
+    @PostMapping("/unlock")
+    public ResponseEntity<Map<String, Object>> unlock(@RequestBody(required = false) Map<String, String> body,
+                                                      @RequestParam(defaultValue = "") String session_id) {
+        Map<String, String> b = body == null ? Map.of() : body;
+        String player = b.getOrDefault("player", "");
+        String targetRole = b.getOrDefault("target_role", "");
+        String clueId = b.getOrDefault("clue_id", "");
+        String playerKey = b.getOrDefault("player_key", "");
+        String bodySid = b.getOrDefault("session_id", "");
+        String sessionId = resolveSessionId(player, playerKey, session_id.isBlank() ? bodySid : session_id);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        ensureGameLoaded(sessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.unlockLock(sessionId, player, targetRole, clueId));
+    }
+
+    /**
+     * P-0816-R（UI 重设计阶段二 API-5，§3.2）：质询发言。
+     * pressed 标记写 discussionTranscript（并发安全容器，随快照落库）；同一发言可被多人质询但幂等；
+     * 讨论引擎运行中向被质询角色注入「辩解」临时目标；成功后 SSE script_press 广播。
+     * body: {player, target, message_id?, player_key?, session_id?}
+     */
+    @PostMapping("/press")
+    public ResponseEntity<Map<String, Object>> press(@RequestBody(required = false) Map<String, String> body,
+                                                     @RequestParam(defaultValue = "") String session_id) {
+        Map<String, String> b = body == null ? Map.of() : body;
+        String player = b.getOrDefault("player", "");
+        String target = b.getOrDefault("target", "");
+        String messageId = b.getOrDefault("message_id", "");
+        String playerKey = b.getOrDefault("player_key", "");
+        String bodySid = b.getOrDefault("session_id", "");
+        String sessionId = resolveSessionId(player, playerKey, session_id.isBlank() ? bodySid : session_id);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        ensureGameLoaded(sessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.press(sessionId, player, target, messageId));
+    }
+
+    /**
+     * P-0816-T（UI 重设计阶段三 API-9，§3.2，决策 C8）：出示证据到对话流。
+     * 以「🃏 出示：CL-xx 线索名」system 行插入 discussionTranscript（全员可见）+ SSE script_present
+     * 定向广播（player + clue_id + 摘要）；出示前校验线索存在且属于本局 + 持有（公开线索可直接出示）；
+     * 幂等（presentedClues 记录，重复出示提示已出示）。阶段守卫：仅 DISCUSSION 阶段可出示。
+     * body: {player, clue_id, player_key?, session_id?}
+     */
+    @PostMapping("/present")
+    public ResponseEntity<Map<String, Object>> present(@RequestBody(required = false) Map<String, String> body,
+                                                       @RequestParam(defaultValue = "") String session_id) {
+        Map<String, String> b = body == null ? Map.of() : body;
+        String player = b.getOrDefault("player", "");
+        String clueId = b.getOrDefault("clue_id", "");
+        String playerKey = b.getOrDefault("player_key", "");
+        String bodySid = b.getOrDefault("session_id", "");
+        String sessionId = resolveSessionId(player, playerKey, session_id.isBlank() ? bodySid : session_id);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        ensureGameLoaded(sessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.present(sessionId, player, clueId));
+    }
+
+    /**
+     * P-0816-R（UI 重设计阶段二 API-8，§3.2，决策 U2 MVP 内容推导）：关系矩阵 —— 右栏逻辑链 Tab 数据源。
+     * 服务端内容推导（零生成器改动）：线索 content/title 提及角色名 → ★ 直接关联；线索持有者所扮演角色
+     * → ◯ 持有；其余 –。二期切 LLM 标注 clues[].related_roles[]。phase 无关，不泄 secret。
+     * query: session_id? / player / player_key? → {ok, roles[], clues[], matrix, relations[]}
+     */
+    @GetMapping("/relations")
+    public ResponseEntity<Map<String, Object>> relations(@RequestParam(defaultValue = "") String session_id,
+                                                         @RequestParam(defaultValue = "") String player,
+                                                         @RequestParam(defaultValue = "") String player_key) {
+        String sessionId = resolveSessionId(player, player_key, session_id);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        ensureGameLoaded(sessionId);
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, player_key);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.getRelations(sessionId));
     }
 
     @PostMapping("/resolve")

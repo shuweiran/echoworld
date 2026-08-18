@@ -53,7 +53,9 @@ class ScriptMapSizeExpansionTest {
                 Arguments.of(64, 64),   // 4K 格级大图（任务要求的 64×64 主场景）
                 Arguments.of(48, 48),
                 Arguments.of(100, 60),
-                Arguments.of(128, 64)); // 更大尺寸冒烟
+                Arguments.of(128, 64),  // 更大尺寸冒烟
+                Arguments.of(128, 128), // P-0817-D：16K 格级超大图（16× 默认面积，热点 ≈20）
+                Arguments.of(256, 128)); // P-0817-D：上限边界大图（32K 格）
     }
 
     @ParameterizedTest(name = "S1: BSP 大图 {0}×{1} 生成 + 校验 + 热点缩放")
@@ -278,6 +280,42 @@ class ScriptMapSizeExpansionTest {
                 "session_id", sid, "width", "abc", "height", "xyz", "regenerate", "true"));
         assertEquals(200, respBad.getStatusCode().value());
         assertEquals(64, ((Map<?, ?>) respBad.getBody().get("map")).get("width"));
+    }
+
+    // ═══════════════════════════════════════════════════════════
+
+    // ═══════════════════════════════════════════════════════════
+    //  S6（P-0817-D 大图支持）: 尺寸上限 clamp —— 对局路径 / scene 统一路径
+    //  ═══════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("S6a: generateMap 显式 999×999 → clamp 到上限 256×256（字段默认值=256）")
+    void gameMapMaxClamp() {
+        ScriptGameService svc = new ScriptGameService(emptyLlm(), new ApprovalService());
+        String sid = "size-s6";
+        svc.initGame(sid, "庄园", List.of("Alice", "Bob"));
+
+        Map<String, Object> r = svc.generateMap(sid, "", 0, true, 999, 999);
+        assertEquals(256, ((Map<?, ?>) r.get("map")).get("width"),
+                "超上限必须 clamp 到 mapMaxWidth（默认 256）");
+        assertEquals(256, ((Map<?, ?>) r.get("map")).get("height"));
+        assertEquals("bsp", ((Map<?, ?>) r.get("generator")).get("kind"));
+        MapValidator.Result vr = MapValidator.validateMap((Map<String, Object>) r.get("map"));
+        assertTrue(vr.ok(), "clamp 后大图必须仍通过校验：" + vr.errors());
+    }
+
+    @Test
+    @DisplayName("S6b: ScriptMapService 统一路径（scene 预览）999×999 → clamp 到 256×256")
+    void serviceMaxClamp() {
+        ScriptMapService svc = new ScriptMapService(emptyLlm());
+        ScriptMapService.MapResult r = svc.generateMap("大图", List.of(), List.of(), 1L, 999, 999);
+        assertEquals(256, MapContract.intOf(r.map().get("width"), -1));
+        assertEquals(256, MapContract.intOf(r.map().get("height"), -1));
+        assertTrue(r.usedBsp(), "超上限应走确定性 BSP 路径（fallback 含 clamp 原因）");
+        assertTrue(r.fallbackReasons().stream().anyMatch(s -> s.contains("上限")),
+                "fallback 原因应含 clamp 说明：" + r.fallbackReasons());
+        MapValidator.Result vr = MapValidator.validateMap(r.map());
+        assertTrue(vr.ok(), "clamp 后大图必须仍通过校验：" + vr.errors());
     }
 
     // ═══════════════════════════════════════════════════════════

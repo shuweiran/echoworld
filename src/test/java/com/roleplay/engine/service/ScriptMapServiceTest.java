@@ -2,7 +2,7 @@ package com.roleplay.engine.service;
 
 import com.roleplay.engine.approval.ApprovalService;
 import com.roleplay.engine.controller.ScriptController;
-import com.roleplay.engine.llm.LLMClient;
+import com.roleplay.engine.llm.MapLlmClient;
 import com.roleplay.engine.simulation.map.MapContract;
 import com.roleplay.engine.simulation.map.MapValidator;
 import com.roleplay.engine.simulation.SimulationService;
@@ -77,16 +77,16 @@ class ScriptMapServiceTest {
     }
 
     /** LLM 输出合法地图的 mock。 */
-    private LLMClient validLlm() {
-        LLMClient llm = mock(LLMClient.class);
+    private MapLlmClient validLlm() {
+        MapLlmClient llm = mock(MapLlmClient.class);
         when(llm.callJson(anyString(), anyInt())).thenReturn(validLlmMap());
         when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(validLlmMap());
         return llm;
     }
 
     /** LLM 输出不合法地图（热点埋在墙里，校验必不过）的 mock。 */
-    private LLMClient invalidLlm() {
-        LLMClient llm = mock(LLMClient.class);
+    private MapLlmClient invalidLlm() {
+        MapLlmClient llm = mock(MapLlmClient.class);
         Map<String, Object> m = validLlmMap();
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> zones = new ArrayList<>((List<Map<String, Object>>) m.get("zones"));
@@ -98,8 +98,8 @@ class ScriptMapServiceTest {
     }
 
     /** LLM 空输出的 mock（失败路径）。 */
-    private LLMClient emptyLlm() {
-        LLMClient llm = mock(LLMClient.class);
+    private MapLlmClient emptyLlm() {
+        MapLlmClient llm = mock(MapLlmClient.class);
         when(llm.callJson(anyString(), anyInt())).thenReturn(Map.of());
         when(llm.callJson(anyString(), anyInt(), anyInt())).thenReturn(Map.of());
         return llm;
@@ -141,7 +141,7 @@ class ScriptMapServiceTest {
     @Test
     @DisplayName("M2b: LLM 输出 ground 行数不符（声明式可修复）→ 自动补空白地网格 → 不降级且房间围合")
     void llmStructuralInvalidFallsBackToBsp() {
-        LLMClient llm = mock(LLMClient.class);
+        MapLlmClient llm = mock(MapLlmClient.class);
         Map<String, Object> m = validLlmMap();
         @SuppressWarnings("unchecked")
         Map<String, Object> layers = new java.util.LinkedHashMap<>((Map<String, Object>) m.get("layers"));
@@ -187,7 +187,7 @@ class ScriptMapServiceTest {
     @Test
     @DisplayName("M3b: LLM 抛异常（超时/网络）→ BSP 降级不崩")
     void llmExceptionFallsBack() {
-        LLMClient llm = mock(LLMClient.class);
+        MapLlmClient llm = mock(MapLlmClient.class);
         when(llm.callJson(anyString(), anyInt())).thenThrow(new RuntimeException("timeout"));
         when(llm.callJson(anyString(), anyInt(), anyInt())).thenThrow(new RuntimeException("timeout"));
         ScriptMapService svc = new ScriptMapService(llm);
@@ -241,7 +241,7 @@ class ScriptMapServiceTest {
     @Test
     @DisplayName("V1: LLM 输出含 v0.2 新键 → 契约通过（新键透传保留，generator.kind=llm）")
     void llmV02KeysPass() {
-        LLMClient llm = mock(LLMClient.class);
+        MapLlmClient llm = mock(MapLlmClient.class);
         Map<String, Object> m = validLlmMap();
         // layers.objects/overlay（10×8 字符串层，可 null）
         List<List<Object>> objects = new ArrayList<>();
@@ -306,7 +306,7 @@ class ScriptMapServiceTest {
     @Test
     @DisplayName("V3: LLM 输出含非法 v0.2 新键（decor id 重复）→ 校验失败 → BSP 兜底")
     void llmInvalidV02KeysFallBackToBsp() {
-        LLMClient llm = mock(LLMClient.class);
+        MapLlmClient llm = mock(MapLlmClient.class);
         Map<String, Object> m = validLlmMap();
         m.put("decor", List.of(
             Map.of("id", "d1", "type", "bench", "tile", List.of(1, 1)),
@@ -324,7 +324,7 @@ class ScriptMapServiceTest {
     @Test
     @DisplayName("V4: LLM 输出含非法 v0.2 新键（tileProps 越界）→ 校验失败 → BSP 兜底")
     void llmInvalidTilePropsFallBackToBsp() {
-        LLMClient llm = mock(LLMClient.class);
+        MapLlmClient llm = mock(MapLlmClient.class);
         Map<String, Object> m = validLlmMap();
         m.put("tileProps", Map.of("99,99", Map.of("blocked", true)));
         when(llm.callJson(anyString(), anyInt())).thenReturn(m);

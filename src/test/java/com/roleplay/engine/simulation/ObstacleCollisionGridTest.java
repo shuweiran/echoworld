@@ -62,10 +62,9 @@ class ObstacleCollisionGridTest {
         List<Obstacle> obs = Obstacle.fromCollisionGrid(grid("###"), 32, "t");
         assertEquals(1, obs.size(), "连续三瓦片应合并为一个横向矩形");
         Obstacle o = obs.get(0);
-        // 瓦片为正方形（min 缩放）：tile=min(1000/3, 600/1)=333.3，宽=3瓦片、高=1瓦片
-        double tile = Math.min(1000.0 / 3, 600.0 / 1);
-        assertEquals(3 * tile, o.getWidth(), 1e-6, "宽度应为 3 瓦片");
-        assertEquals(1 * tile, o.getHeight(), 1e-6, "高度应为 1 瓦片");
+        // 当前契约：地图铺满 1000×600 世界，横纵轴独立缩放，避免边缘留白导致角色出界。
+        assertEquals(1000.0, o.getWidth(), 1e-6, "宽度应铺满世界");
+        assertEquals(600.0, o.getHeight(), 1e-6, "高度应铺满世界");
         assertEquals(3, coveredTiles(obs, 3, 1), "应覆盖全部 3 个碰撞瓦片");
     }
 

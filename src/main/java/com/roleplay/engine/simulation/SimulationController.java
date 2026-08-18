@@ -32,6 +32,9 @@ public class SimulationController {
     private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<SimulationWorld.WorldSnapshot> recentSnapshots = new CopyOnWriteArrayList<>();
     private static final int MAX_RECENT_SNAPSHOTS = 100;
+    /** P-0815-E 需求3：SSE 全量快照广播节流间隔（世界 200ms/tick；每 2 tick=400ms 广播一次，
+     *  2.5 次/秒替代每 tick 5 次/秒——服务端序列化+推送负载减半、前端全量重渲染减半，消「界面一卡一卡」）。 */
+    private static final int SSE_BROADCAST_TICK_INTERVAL = 2;
 
     public SimulationController(SimulationService simulationService, SimulationWorld world,
                                 CharacterController characterController) {
@@ -50,7 +53,17 @@ public class SimulationController {
         world.addTickListener(snapshot -> {
             Map<String, Object> event = snapshot.toMap();
             event.put("type", "world_snapshot");
-            broadcastToAll(event);
+            // P-0815-E 需求3：SSE 全量快照节流广播（每 2 tick 一次）+ 事件附 recentConversations——
+            // ① 消息即时推送（前端不再等 3s 轮询，消「刷新太慢」）；② 全量快照推送频率减半（消卡顿）。
+            // P-0815-F 深度调研修复（2026-08-15 #206）：节流判定改为无状态「tick % 2 == 0」——
+            // 原实现 snapshot.tick() - lastBroadcastTick >= 2 依赖跨重启的 lastBroadcastTick 游标，
+            // 而 load-characters/clearAgents 会把 tickCount 归零、lastBroadcastTick 却保留旧值 →
+            // 新世界 tick 未超过旧世界最后广播 tick 前 SSE 静默（静默区随重启次数增长，实测整段 0 广播）→
+            // 前端只能靠 3s 轮询更新 = 角色每 3s 跳变（「更卡了」根因）。tick % 2 == 0 无状态恒 2.5Hz。
+            if (snapshot.tick() % SSE_BROADCAST_TICK_INTERVAL == 0) {
+                event.put("recentConversations", world.getRecentConversations());
+                broadcastToAll(event);
+            }
             recentSnapshots.add(snapshot);
             if (recentSnapshots.size() > MAX_RECENT_SNAPSHOTS) {
                 recentSnapshots.remove(0);
@@ -233,9 +246,11 @@ public class SimulationController {
         double step = body.getOrDefault("step", 0.0);
         double len = Math.sqrt(dx * dx + dy * dy);
         if (len < 0.01) {
-            // 无有效方向：仅刷新 manualTarget 时间戳（防按住期间被导演接管），不改变目标
-            state.setManualTarget(true);
-            return Map.of("status", "ok", "targetX", state.getTargetX(), "targetY", state.getTargetY());
+            // P-0816-C：零方向 = 停止移动——清除目标（hasTarget=false + manualTarget=false），
+            // 角色立即静止（原实现仅刷新时间戳，松开方向键后角色继续滑向最后目标点 = 主人反馈的
+            // 「用户角色乱动」根因之一；现在松开 WASD 前端即发零方向停止信号）。
+            state.clearTarget();
+            return Map.of("status", "ok", "stopped", true);
         }
         if (step <= 0) step = 90.0;
         step = Math.min(step, 200.0);

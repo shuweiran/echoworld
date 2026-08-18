@@ -210,11 +210,15 @@ public class CharacterController {
         ch.put("persona", str(body.get("persona"), ""));
         ch.put("voice", str(body.get("voice"), ""));
         ch.put("background", str(body.get("background"), ""));
+        // P-0817-A：MiMo TTS 声线配置（voice_mode=basic|clone|design / voice_data=音色描述或参考音频路径）
+        ch.put("voice_mode", nvl(body.get("voice_mode")));
+        ch.put("voice_data", nvl(body.get("voice_data")));
         ch.put("player_id", pid);
         characters.add(ch);
         try {
             databaseService.saveCharacter(nm, (String) ch.get("persona"),
-                    (String) ch.get("voice"), (String) ch.get("background"), pid);
+                    (String) ch.get("voice"), (String) ch.get("background"), pid,
+                    (String) ch.get("voice_mode"), (String) ch.get("voice_data"));
         } catch (DataIntegrityViolationException e) {
             // DB unique 兜底（③层，并发窗口）：player_id/name 被并发占用 → 回滚内存列表
             characters.removeIf(c -> nm.equals(c.get("name")));
@@ -247,7 +251,8 @@ public class CharacterController {
                 }
                 try {
                     databaseService.saveCharacter(newName, str(updated.get("persona"), ""),
-                            str(updated.get("voice"), ""), str(updated.get("background"), ""), pid);
+                            str(updated.get("voice"), ""), str(updated.get("background"), ""), pid,
+                            nvl(updated.get("voice_mode")), nvl(updated.get("voice_data")));
                 } catch (DataIntegrityViolationException e) {
                     // DB unique 兜底：回滚内存列表（旧行已删则按 original 恢复）
                     characters.set(i, original);
@@ -604,6 +609,13 @@ public class CharacterController {
         if (o == null) return def;
         String s = String.valueOf(o);
         return s.isEmpty() ? def : s;
+    }
+
+    /** P-0817-A：null/空串/空白 → null（voice_mode/voice_data 未配置语义；空白字符串不落库）。 */
+    private static String nvl(Object o) {
+        if (o == null) return null;
+        String s = String.valueOf(o).trim();
+        return s.isEmpty() ? null : s;
     }
 
     /** player_id 规范化：null/空串 → null（未绑定） */

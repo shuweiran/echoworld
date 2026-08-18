@@ -27,6 +27,10 @@ import java.util.Set;
  *
  * <p>设计约束：不改变 ConversationManager 现有 tick 流程，只补充"轨道分配"输入；
  * 不碰 RouterService / ArbiterService。
+ *
+ * <p>P-0815-E：编排器只管 AI 角色——玩家角色（{@code playerControlled}，如 2D 世界
+ * 中玩家亲自扮演的角色）的行为/移动/发言由玩家自己控制，编排器不为玩家生成导演目标、
+ * 不为其做轨道分配（含对话组内）；玩家在组内发言直通 ConversationManager，不受影响。
  */
 public class SimulationOrchestrator {
 
@@ -73,8 +77,17 @@ public class SimulationOrchestrator {
         List<AgentState> agents = new ArrayList<>(world.getAllStates().values());
         if (agents.isEmpty()) return Map.of();
 
-        // 1. World Director 更新角色目标。
-        Map<String, String> goals = worldDirector.updateGoals(world, agents, now);
+        // P-0815-E：编排器只管 AI 角色——玩家角色（playerControlled）的行为/移动/发言
+        // 由玩家自己决定：不为其生成导演目标（World Director），也不为其做轨道分配。
+        // 玩家若在对话组内仍作为组员参与（发言直通 ConversationManager），仅不参与
+        // 目标/轨道决策。
+        List<AgentState> aiAgents = new ArrayList<>();
+        for (AgentState a : agents) {
+            if (!a.isPlayerControlled()) aiAgents.add(a);
+        }
+
+        // 1. World Director 更新角色目标（仅 AI 角色；玩家无导演目标）。
+        Map<String, String> goals = worldDirector.updateGoals(world, aiAgents, now);
 
         // P-0815-A：空间网格重建（听力计算前置；生产每 tick 已由 MovementSystem.update 重建，
         // 此处幂等重建保证 orchestrator.tick 直调（单元测试/时序差异）时分量计算确定性）。
@@ -98,8 +111,10 @@ public class SimulationOrchestrator {
 
         // 2b. 组外 agent 按听力连通分量分别 assign：无触发时 MERGED 只覆盖同分量成员；
         //     单人分量（无任何听力接触）→ ISOLATED（不再全场景 allMerged 两两互见）。
+        //     P-0815-E：玩家角色不参与自由轨道分配（不入听力分量/assign）。
         List<AgentState> freeAgents = new ArrayList<>();
         for (AgentState a : agents) {
+            if (a.isPlayerControlled()) continue;
             if (!groupMembers.contains(a.getAgentName())) freeAgents.add(a);
         }
         for (List<AgentState> component : hearingComponents(freeAgents)) {
@@ -165,8 +180,15 @@ public class SimulationOrchestrator {
     public Map<String, TrackAssignment> applyToGroup(ConversationGroup group) {
         if (group == null) return Map.of();
         Map<String, TrackAssignment> oldAssignments = group.getTrackAssignments();
+        // P-0815-E：仅对 AI 成员做轨道分配——玩家角色（playerControlled）的轨道/谁知道什么
+        // 不由编排器决定（玩家在组内发言直通 ConversationManager，无需轨道条目；
+        // AI 成员的轨道上下文仍按 AI 成员集合计算，不受影响）。
+        List<AgentState> aiMembers = new ArrayList<>();
+        for (AgentState m : group.getParticipantList()) {
+            if (!m.isPlayerControlled()) aiMembers.add(m);
+        }
         Map<String, TrackAssignment> assignments =
-                trackDirector.assign(group.getParticipantList(), worldDirector.getAllGoals());
+                trackDirector.assign(aiMembers, worldDirector.getAllGoals());
         group.setTrackAssignments(assignments);
         if (eventBus != null) {
             publishTrackChangeIfNeeded(group, oldAssignments, assignments);

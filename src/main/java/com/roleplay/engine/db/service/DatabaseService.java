@@ -95,6 +95,19 @@ public class DatabaseService {
     @Transactional
     public Map<String, Object> saveCharacter(String name, String persona,
                                               String voice, String background, String playerId) {
+        return saveCharacter(name, persona, voice, background, playerId, null, null);
+    }
+
+    /**
+     * P-0817-A（MiMo TTS 声线配置）：saveCharacter 带 voice_mode/voice_data 重载。
+     * 旧签名委托本方法 null——既有调用点/测试零改动。
+     * 语义（对齐 playerId 惯例）：voiceMode/voiceData 非空时显式写入；
+     * 空时保留既有值（update 不传即不覆盖）。
+     */
+    @Transactional
+    public Map<String, Object> saveCharacter(String name, String persona,
+                                              String voice, String background, String playerId,
+                                              String voiceMode, String voiceData) {
         // P-0803-H：角色名截断（用户 API 可传超长名 → characters.name(255) 溢出 500；200 上限留余量）
         name = truncateName(name, 200);
         CharacterEntity entity = characterRepo.findByName(name)
@@ -104,6 +117,12 @@ public class DatabaseService {
         entity.setBackground(background != null ? background : "");
         if (playerId != null) {
             entity.setPlayerId(playerId);
+        }
+        if (voiceMode != null) {
+            entity.setVoiceMode(voiceMode.isBlank() ? null : voiceMode);
+        }
+        if (voiceData != null) {
+            entity.setVoiceData(voiceData.isBlank() ? null : voiceData);
         }
         if (entity.getCreatedAt() == null) {
             entity.setCreatedAt(LocalDateTime.now());
@@ -453,6 +472,9 @@ public class DatabaseService {
         map.put("persona", e.getPersona());
         map.put("voice", e.getVoice());
         map.put("background", e.getBackground());
+        // P-0817-A：MiMo TTS 声线配置（voice_mode/voice_data），无则 null（Jackson non_null 不序列化）
+        map.put("voice_mode", e.getVoiceMode());
+        map.put("voice_data", e.getVoiceData());
         map.put("player_id", e.getPlayerId());
         map.put("createdAt", e.getCreatedAt() != null ? e.getCreatedAt().toString() : null);
         return map;

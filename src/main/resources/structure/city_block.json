@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "kind": "city_block",
+  "name": "城市街区",
+  "seed": 0,
+  "root": {
+    "id": "city_block",
+    "type": "structure",
+    "name": "城市街区",
+    "template": "",
+    "children": [
+      { "id": "street", "type": "zone", "name": "主街", "template": "street", "open": true, "size": [24, 6] },
+      { "id": "plaza", "type": "zone", "name": "广场", "template": "plaza", "open": true, "size": [16, 8] },
+      { "id": "shop1", "type": "building", "name": "店铺一", "template": "shop", "size": [10, 8] },
+      { "id": "shop2", "type": "building", "name": "店铺二", "template": "shop", "size": [10, 8] },
+      { "id": "shop3", "type": "building", "name": "店铺三", "template": "shop", "size": [10, 8] },
+      { "id": "shop4", "type": "building", "name": "店铺四", "template": "shop", "size": [10, 8] },
+      { "id": "house1", "type": "building", "name": "民居一", "template": "house", "size": [10, 8] },
+      { "id": "house2", "type": "building", "name": "民居二", "template": "house", "size": [10, 8] },
+      { "id": "house3", "type": "building", "name": "民居三", "template": "house", "size": [10, 8] },
+      { "id": "house4", "type": "building", "name": "民居四", "template": "house", "size": [10, 8] },
+      { "id": "warehouse", "type": "building", "name": "仓库", "template": "warehouse", "size": [12, 8] }
+    ]
+  },
+  "relations": [
+    { "from": "street", "to": "shop1", "kind": "adjacent" },
+    { "from": "street", "to": "shop2", "kind": "adjacent" },
+    { "from": "street", "to": "shop3", "kind": "adjacent" },
+    { "from": "street", "to": "shop4", "kind": "adjacent" },
+    { "from": "street", "to": "house1", "kind": "adjacent" },
+    { "from": "street", "to": "house2", "kind": "adjacent" },
+    { "from": "street", "to": "house3", "kind": "adjacent" },
+    { "from": "street", "to": "house4", "kind": "adjacent" },
+    { "from": "street", "to": "plaza", "kind": "adjacent" },
+    { "from": "plaza", "to": "warehouse", "kind": "adjacent" },
+    { "from": "street", "to": "warehouse", "kind": "connects" }
+  ]
+}

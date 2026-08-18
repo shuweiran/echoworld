@@ -19,6 +19,19 @@ public class CharacterEntity {
 
     private String voice;
 
+    /**
+     * P-0817-A（MiMo TTS 声线配置）：声线模式 basic=内置音色 / clone=声音克隆 / design=声线设计；
+     * null/空=未配置（合成时按 basic 处理）。
+     */
+    private String voiceMode;
+
+    /**
+     * P-0817-A（MiMo TTS 声线数据）：design=音色描述文案；clone=参考音频路径或 data URL；
+     * basic=内置音色名（如 mimo_default）；null/空=未配置（服务层回退默认值）。
+     */
+    @Column(length = 4000)
+    private String voiceData;
+
     @Column(length = 2000)
     private String background;
 
@@ -68,6 +81,12 @@ public class CharacterEntity {
 
     public String getVoice() { return voice; }
     public void setVoice(String voice) { this.voice = voice; }
+
+    public String getVoiceMode() { return voiceMode; }
+    public void setVoiceMode(String voiceMode) { this.voiceMode = voiceMode; }
+
+    public String getVoiceData() { return voiceData; }
+    public void setVoiceData(String voiceData) { this.voiceData = voiceData; }
 
     public String getBackground() { return background; }
     public void setBackground(String background) { this.background = background; }

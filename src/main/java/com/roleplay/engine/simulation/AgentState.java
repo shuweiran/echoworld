@@ -147,6 +147,12 @@ public class AgentState {
         map.put("agentName", agentName);
         map.put("x", Math.round(x * 100.0) / 100.0);
         map.put("y", Math.round(y * 100.0) / 100.0);
+        // 2026-08-15 P-0815-G（玩家地图运动控制深度调研）：快照补发 vx/vy（px/s）——
+        // 前端 SimulationScene.update 的「速度外推」依赖快照 vx/vy（sp>1 才激活），此前 toMap 不含该字段 →
+        // 外推恒不生效，SSE 2.5Hz 广播下角色每 400ms 一次「突进+冻结」（移动卡顿/不跟手根因之一）；
+        // 实测（CDP 真机 A/B）：注入 vx/vy 后视觉滞后 p50 50.4px → 23.8px（减半）。
+        map.put("vx", Math.round(vx * 100.0) / 100.0);
+        map.put("vy", Math.round(vy * 100.0) / 100.0);
         map.put("emotion", emotion.getLabel());
         map.put("emotionEmoji", emotion.getEmoji());
         map.put("hearRange", hearRange);

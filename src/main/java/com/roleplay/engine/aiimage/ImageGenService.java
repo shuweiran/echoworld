@@ -36,7 +36,8 @@ import java.util.stream.Stream;
  *   <li><b>生成任务</b>：triggerGenerate 提交线程池异步执行——头像 1 张（portrait 构图，文生图）
  *       + 表情 6 张（happy/angry/sad/surprised/embarrassed/neutral，bust 构图，P-0810-05 起改 img2img：
  *       以 avatar.png 原图非透明版为底图，denoise 可配 roleplay.ai-image.img2img-denoise 默认 0.5，
- *       解决同角色 7 张图脸型漂移），每张走 ComfyUIClient.generateOnce / generateImg2Img
+ *       解决同角色 7 张图脸型漂移）+ 全身立绘 1 张（P-0818-E：fullbody.png，FULLBODY 构图 832×1216，
+ *       文生图与 avatar 同源，seed=baseSeed+7），每张走 ComfyUIClient.generateOnce / generateImg2Img
  *       （提交→轮询→下载落盘）；单帧失败跳过继续（log.warn），任务终态按 avatar 成败判定。</li>
  *   <li><b>风格一致性</b>：同一角色固定外貌模板（appearance）+ 固定风格词（style）+
  *       固定 seed（角色 ID 的 SHA-256 稳定 hash，跨重启不变）——同角色所有图风格统一。</li>
@@ -148,6 +149,8 @@ public class ImageGenService {
     private volatile boolean rmbgEnabled;
     /** P-0811-G(C-2)：SSE 广播器（生成完成/失败推 ai_image_ready/ai_image_error；测试直构不注入=null 跳过）。 */
     private volatile SseBroadcaster sse;
+    /** P-0818-F：角色库注入（recoverOrphan 查真实角色名）。 */
+    private volatile com.roleplay.engine.db.repository.CharacterRepository characterRepo;
 
     public ImageGenService(ComfyUIClient comfyClient, AiImageProperties props) {
         this.comfyClient = comfyClient;
@@ -168,6 +171,8 @@ public class ImageGenService {
                 registerCharacter(seed.getId().trim(), seed.getName(), seed.getAppearance(), seed.getStyle());
             }
         }
+        // P-0818-F：扫描 outputDir，自动注册磁盘上已有图片但不在 yml 配置中的角色（跨重启不丢失）
+        recoverOrphanCharacters();
     }
 
     /** P-0810-04：测试注入用（默认由构造器从 props 直构）。 */
@@ -181,6 +186,12 @@ public class ImageGenService {
         this.sse = broadcaster;
     }
 
+    /** P-0818-F：角色库注入（recoverOrphan 查真实角色名；Spring 自动装配）。 */
+    @Autowired(required = false)
+    public void setCharacterRepository(com.roleplay.engine.db.repository.CharacterRepository repo) {
+        this.characterRepo = repo;
+    }
+
     /** P-0810-04：抠背景开关（测试/运行时切换；false=只存原图）。 */
     public void setRmbgEnabled(boolean enabled) {
         this.rmbgEnabled = enabled;
@@ -192,11 +203,84 @@ public class ImageGenService {
 
     // ── 角色注册表 ─────────────────────────────────────────────
 
-    /** 注册/更新角色（id 已存在则覆盖外貌/风格/名称——同 id 出图目录与 seed 不变）。 */
+    /** P-0818-F：扫描 outputDir，自动注册磁盘上已有图片但不在 yml 配置中的角色（跨重启不丢失）。
+     *  规则：outputDir 下有子目录且含 avatar.png → 视为已生成角色。
+     *  优先读 _meta.json 获取真实角色名（API 注册时写入），不存在则用目录名作 name。
+     *  backgrounds/ 目录跳过。 */
+    private void recoverOrphanCharacters() {
+        try {
+            if (!java.nio.file.Files.isDirectory(outputRoot)) return;
+            try (java.util.stream.Stream<java.nio.file.Path> dirs = java.nio.file.Files.list(outputRoot)) {
+                dirs.filter(java.nio.file.Files::isDirectory)
+                    .filter(d -> !"backgrounds".equals(d.getFileName().toString()))
+                    .forEach(d -> {
+                        String id = d.getFileName().toString();
+                        if (!characters.containsKey(id) && java.nio.file.Files.isRegularFile(d.resolve("avatar.png"))) {
+                            // P-0818-F：尝试读 _meta.json 获取真实角色名
+                            String name = id;
+                            String appearance = "";
+                            String style = "retro game character art style, 16-bit pixel art, clean outlines, flat colors";
+                            java.nio.file.Path meta = d.resolve("_meta.json");
+                            if (java.nio.file.Files.isRegularFile(meta)) {
+                                try {
+                                    String json = java.nio.file.Files.readString(meta);
+                                    // 简单解析（不依赖 Jackson）
+                                    name = extractJsonString(json, "name", id);
+                                    appearance = extractJsonString(json, "appearance", appearance);
+                                    style = extractJsonString(json, "style", style);
+                                    log.info("AI 生图角色恢复（meta）: id={} name={}", id, name);
+                                } catch (Exception ex) {
+                                    log.info("AI 生图角色恢复（meta 读取失败，降级用目录名）: id={} err={}", id, ex.getMessage());
+                                }
+                            } else {
+                                log.info("AI 生图角色恢复（磁盘扫描，无 meta）: id={}", id);
+                            }
+                            registerCharacter(id, name, appearance, style);
+                        }
+                    });
+            }
+        } catch (Exception e) {
+            log.warn("AI 生图角色恢复扫描失败（不影响启动）: {}", e.getMessage());
+        }
+    }
+
+    /** 简单 JSON 字段提取（不依赖 Jackson；仅支持顶层 String 字段）。 */
+    private static String extractJsonString(String json, String key, String fallback) {
+        String needle = "\"" + key + "\":";
+        int idx = json.indexOf(needle);
+        if (idx < 0) return fallback;
+        int start = json.indexOf('"', idx + needle.length());
+        if (start < 0) return fallback;
+        int end = json.indexOf('"', start + 1);
+        if (end < 0) return fallback;
+        return json.substring(start + 1, end);
+    }
+
+    /** JSON 字符串转义（双引号、反斜杠、换行）。 */
+    private static String escapeJson(String s) {
+        if (s == null) return "";
+        return s.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\r", "\\r");
+    }
+
+    
+    /** 注册/更新角色（id 已存在则覆盖外貌/风格/名称——同 id 出图目录与 seed 不变）。
+     *  P-0818-F：同时写 _meta.json 到角色目录（跨重启恢复用）。 */
     public CharacterProfile registerCharacter(String id, String name, String appearance, String style) {
         CharacterProfile p = new CharacterProfile(id, name, appearance, style);
         characters.put(id, p);
         log.info("AI 生图角色注册: id={} name={} style={}", id, name, style);
+        // P-0818-F：写 _meta.json（name/appearance/style），recoverOrphanCharacters 恢复时读取
+        try {
+            Path dir = outputRoot.resolve(id);
+            java.nio.file.Files.createDirectories(dir);
+            String meta = String.format(java.util.Locale.ROOT,
+                    "{\"id\":\"%s\",\"name\":\"%s\",\"appearance\":\"%s\",\"style\":\"%s\"}",
+                    escapeJson(id), escapeJson(name), escapeJson(appearance), escapeJson(style));
+            java.nio.file.Files.writeString(dir.resolve("_meta.json"), meta,
+                    java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+        } catch (Exception e) {
+            log.debug("AI 生图角色 meta 写入失败（不影响功能）: id={} err={}", id, e.getMessage());
+        }
         return p;
     }
 
@@ -215,7 +299,7 @@ public class ImageGenService {
     // ── 生成任务 ───────────────────────────────────────────────
 
     /**
-     * 触发某角色生成（头像 1 + 表情 6，异步执行）。
+     * 触发某角色生成（头像 1 + 表情 6 + 全身立绘 1，异步执行）。
      *
      * @return 新任务；角色不存在返回 null；已有 RUNNING 任务则返回该任务（防重复提交）
      */
@@ -257,10 +341,20 @@ public class ImageGenService {
                     log.warn("表情帧 img2img 失败，跳过继续: id={} frame={} err={}", profile.id(), expr, e.getMessage());
                 }
             }
+            // 3) 全身立绘（P-0818-E：FULLBODY 构图 832×1216，文生图与 avatar 同源；
+            //    seed=baseSeed+7（avatar=+0，表情=+1~6，fullbody=+7 避免冲突）；
+            //    genOne 内部自动抠背景 → fullbody_t.png；单帧失败跳过继续，不拖垮整任务）
+            task.progress = "fullbody";
+            try {
+                genOne(task, profile, "fullbody.png", Composition.FULLBODY.description,
+                        Composition.FULLBODY, baseSeed, EXPRESSIONS.size() + 1);
+            } catch (Exception e) {
+                log.warn("全身立绘生成失败，跳过继续: id={} err={}", profile.id(), e.getMessage());
+            }
             task.progress = "done";
             task.status = GenTask.Status.DONE;
             task.finishedAt = System.currentTimeMillis();
-            log.info("AI 生图角色完成: id={} 共 7 张（avatar 文生图 + 6 表情 img2img）", profile.id());
+            log.info("AI 生图角色完成: id={} 共 8 张（avatar 文生图 + 6 表情 img2img + fullbody 全身立绘）", profile.id());
             broadcastImageEvent("ai_image_ready", profile.id(), null);
         } catch (Exception e) {
             task.status = GenTask.Status.FAILED;
@@ -359,7 +453,7 @@ public class ImageGenService {
 
     /**
      * 返回该角色已生成图片的 frame → URL 映射（磁盘扫描；重启后已生成图自动可见）。
-     * frame 包括 avatar + 各表情名 + 各帧透明版（{@code {frame}_t}，如 avatar_t，供立绘叠加）；
+     * frame 包括 avatar + fullbody + 各表情名 + 各帧透明版（{@code {frame}_t}，如 avatar_t / fullbody_t，供立绘叠加）；
      * 未生成的帧不在结果中。
      */
     public Map<String, String> imagesOf(String characterId) {
@@ -406,7 +500,7 @@ public class ImageGenService {
         return out;
     }
 
-    /** 单角色图片响应（GET /api/ai-image/character/{id}/images）：avatar + 各表情 URL。 */
+    /** 单角色图片响应（GET /api/ai-image/character/{id}/images）：avatar + fullbody + 各表情 URL。 */
     public Map<String, Object> imagesResponse(String characterId) {
         Map<String, Object> out = new LinkedHashMap<>();
         CharacterProfile p = characters.get(characterId);
@@ -420,6 +514,12 @@ public class ImageGenService {
         out.put("characterId", p.id());
         out.put("name", p.name());
         out.put("avatar", images.get("avatar"));
+        // P-0818-E：全身立绘（images map 经 imagesOf 已含 fullbody/fullbody_t，
+        // 透明版 fullbody_t 供 Gal 立绘叠加优先使用）
+        out.put("fullbody", images.get("fullbody"));
+        if (images.get("fullbody_t") != null) {
+            out.put("fullbody_t", images.get("fullbody_t"));
+        }
         out.put("expressions", expressions);
         out.put("images", images);
         return out;
@@ -522,11 +622,12 @@ public class ImageGenService {
     }
 
     private static boolean isKnownFrame(String frame) {
-        if ("avatar".equals(frame) || EXPRESSIONS.contains(frame)) return true;
-        // P-0810-04：透明版 {frame}_t（如 avatar_t / happy_t）同样收录
+        // P-0818-E：fullbody（全身立绘）与 avatar/表情同为已知帧
+        if ("avatar".equals(frame) || "fullbody".equals(frame) || EXPRESSIONS.contains(frame)) return true;
+        // P-0810-04：透明版 {frame}_t（如 avatar_t / happy_t / fullbody_t）同样收录
         if (frame.endsWith("_t")) {
             String base = frame.substring(0, frame.length() - 2);
-            return "avatar".equals(base) || EXPRESSIONS.contains(base);
+            return "avatar".equals(base) || "fullbody".equals(base) || EXPRESSIONS.contains(base);
         }
         return false;
     }

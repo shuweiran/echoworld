@@ -1,0 +1,959 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=1280">
+<title>雾港迷案 · 讨论阶段（UI 原型 V2 · VN 对话 + 可隐藏侧边栏）</title>
+<style>
+  :root{
+    --phase:#f59e0b; --phase-strong:#b45309;
+    --phase-soft:rgba(245,158,11,.13);
+    --phase-glow:rgba(245,158,11,.55);
+    --bg:#0c1322; --panel:#141e33; --panel-2:#1b2944;
+    --line:rgba(255,255,255,.08);
+    --text:#e8eef9; --dim:#93a1bd; --dim2:#5b6b8c;
+    --green:#22c55e; --red:#ef4444;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    font-family:"Microsoft YaHei","微软雅黑","PingFang SC","Segoe UI",sans-serif;
+    background:
+      radial-gradient(1100px 520px at 78% -12%, var(--phase-soft), transparent 62%),
+      radial-gradient(800px 460px at 8% 112%, rgba(255,255,255,.035), transparent 58%),
+      var(--bg);
+    color:var(--text);
+    min-height:100vh;
+    overflow:hidden;
+  }
+  ::-webkit-scrollbar{width:8px}
+  ::-webkit-scrollbar-thumb{background:#27334f;border-radius:4px}
+  ::-webkit-scrollbar-track{background:transparent}
+
+  /* ===== 顶部栏 ===== */
+  .topbar{
+    height:64px;display:flex;align-items:center;gap:12px;padding:0 20px;
+    background:rgba(12,19,34,.78);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);position:relative;z-index:50;
+  }
+  .logo{font-size:20px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:4px;white-space:nowrap}
+  .logo .accent{color:var(--phase);text-shadow:0 0 14px var(--phase-glow)}
+  .badge{padding:4px 12px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap}
+  .badge-round{background:rgba(255,255,255,.07);border:1px solid var(--line);color:var(--dim)}
+  .badge-phase{
+    background:linear-gradient(135deg,var(--phase),var(--phase-strong));
+    color:#fff;box-shadow:0 2px 12px var(--phase-glow);
+  }
+  .badge-count{
+    background:rgba(245,158,11,.14);border:1px solid rgba(245,158,11,.45);
+    color:#fcd34d;font-variant-numeric:tabular-nums;letter-spacing:1px;
+    box-shadow:0 0 14px rgba(245,158,11,.25);
+  }
+  .badge-goal{
+    background:rgba(255,255,255,.06);border:1px dashed rgba(255,255,255,.22);
+    color:#c9d4ea;letter-spacing:.5px;
+  }
+  .spacer{flex:1}
+  .icon-btn{
+    width:38px;height:38px;border-radius:12px;border:1px solid var(--line);
+    background:rgba(255,255,255,.05);font-size:17px;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;color:var(--text);
+    transition:background .15s;
+  }
+  .icon-btn:hover{background:rgba(255,255,255,.12)}
+  .menu{position:relative}
+  .menu-panel{
+    display:none;position:absolute;right:0;top:52px;width:200px;
+    background:#16213b;border:1px solid var(--line);border-radius:14px;
+    padding:8px;box-shadow:0 16px 44px rgba(0,0,0,.55);z-index:60;
+  }
+  .menu.open .menu-panel{display:block}
+  .menu-item{
+    display:flex;align-items:center;gap:10px;padding:9px 12px;border-radius:9px;
+    font-size:13px;color:#c9d4ea;cursor:pointer;
+  }
+  .menu-item:hover{background:rgba(255,255,255,.07)}
+  .menu-item .m-ico{font-size:15px}
+  .menu-item small{margin-left:auto;color:var(--dim2);font-size:11px}
+  .menu-cap{font-size:11px;color:var(--dim2);padding:6px 12px 2px;letter-spacing:1px}
+
+  /* ===== 三栏布局（可隐藏侧边栏） ===== */
+  .layout{display:flex;height:calc(100vh - 64px)}
+  .col{overflow-y:auto}
+  .col-left{
+    width:240px;flex:none;border-right:1px solid var(--line);padding:14px 12px;
+    transition:width .25s ease;
+  }
+  body.l-collapsed .col-left{width:56px;padding:14px 8px;overflow:hidden}
+  .col-right{
+    width:280px;flex:none;border-left:1px solid var(--line);padding:16px 14px;
+    transition:width .25s ease, opacity .2s ease, padding .25s ease;
+  }
+  body.r-collapsed .col-right{width:0;padding:0;border-left:none;opacity:0;overflow:hidden}
+  body.r-collapsed.r-drawer .col-right{
+    position:fixed;right:0;top:64px;bottom:0;width:300px;padding:16px 14px;
+    opacity:1;overflow-y:auto;z-index:80;border-left:1px solid var(--line);
+    background:rgba(13,20,36,.96);backdrop-filter:blur(8px);
+    box-shadow:-18px 0 44px rgba(0,0,0,.55);
+    transition:none;
+  }
+  .col-main{flex:1;min-width:0;padding:20px 26px;display:flex;flex-direction:column}
+
+  .rail-toggle{
+    width:32px;height:32px;border-radius:10px;border:1px solid var(--phase);
+    background:var(--phase-soft);color:var(--phase);font-size:14px;font-weight:800;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;margin:0 auto 12px;
+    transition:.15s;box-shadow:0 0 12px var(--phase-glow);
+  }
+  .rail-toggle:hover{background:linear-gradient(135deg,var(--phase),var(--phase-strong));color:#fff}
+  .drawer-toggle{
+    width:32px;height:32px;border-radius:10px;border:1px solid var(--phase);
+    background:var(--phase-soft);color:var(--phase);font-size:15px;font-weight:800;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;margin-left:auto;margin-bottom:10px;
+    transition:.15s;box-shadow:0 0 12px var(--phase-glow);
+  }
+  .drawer-toggle:hover{background:linear-gradient(135deg,var(--phase),var(--phase-strong));color:#fff}
+
+  .left-rail{display:none;flex-direction:column;align-items:center;gap:10px}
+  body.l-collapsed .left-rail{display:flex}
+  body.l-collapsed .left-full{display:none}
+  .rail-ico{
+    width:38px;height:38px;border-radius:10px;flex-shrink:0;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;
+    font-size:16px;font-weight:800;color:#fff;border:1px solid var(--line);
+    background:rgba(255,255,255,.05);position:relative;transition:.15s;
+  }
+  .rail-ico:hover{background:rgba(255,255,255,.14);transform:scale(1.06)}
+  .rail-ico.active{border-color:var(--phase);background:var(--phase-soft);box-shadow:0 0 12px var(--phase-glow)}
+  .rail-ico.av-lin{background:linear-gradient(135deg,#38bdf8,#0284c7)}
+  .rail-ico.av-su{background:linear-gradient(135deg,#f472b6,#db2777)}
+  .rail-ico.av-chen{background:linear-gradient(135deg,#a78bfa,#7c3aed)}
+  .rail-ico.av-gu{background:linear-gradient(135deg,#2dd4bf,#0d9488)}
+  .rail-ico.av-a{background:linear-gradient(135deg,#fb923c,#ea580c)}
+  .rail-ico::after{
+    content:attr(data-tip);position:absolute;left:46px;top:50%;transform:translateY(-50%);
+    background:#16213b;border:1px solid var(--line);color:#c9d4ea;font-size:11px;font-weight:400;
+    padding:4px 9px;border-radius:7px;white-space:nowrap;opacity:0;pointer-events:none;
+    transition:.15s;z-index:60;box-shadow:0 4px 14px rgba(0,0,0,.4);
+  }
+  .rail-ico:hover::after{opacity:1}
+  .rail-sep{width:26px;height:1px;background:var(--line);margin:2px 0}
+
+  .float-btn{
+    display:none;position:fixed;right:18px;bottom:22px;width:58px;height:58px;border-radius:50%;
+    border:1px solid rgba(245,158,11,.5);background:rgba(245,158,11,.18);
+    backdrop-filter:blur(6px);color:#fff;cursor:pointer;z-index:70;
+    flex-direction:column;align-items:center;justify-content:center;gap:1px;
+    font-size:15px;box-shadow:0 10px 30px rgba(0,0,0,.45), 0 0 18px var(--phase-glow);
+    transition:.2s;
+  }
+  .float-btn small{font-size:10px;letter-spacing:1px;color:#fde68a}
+  .float-btn:hover{transform:translateY(-2px);background:rgba(245,158,11,.32)}
+  body.r-collapsed .float-btn{display:flex}
+  body.r-collapsed.r-drawer .float-btn{display:none}
+
+  .view-note{
+    position:fixed;left:14px;bottom:10px;font-size:10.5px;color:var(--dim2);
+    letter-spacing:1px;opacity:.65;z-index:90;pointer-events:none;user-select:none;
+  }
+
+  /* ===== 左侧 ===== */
+  .sec-title{
+    font-size:11px;color:var(--dim2);letter-spacing:2px;margin:2px 6px 10px;
+    display:flex;align-items:center;gap:8px;
+  }
+  .sec-title::after{content:"";flex:1;height:1px;background:var(--line)}
+  .steps{padding:4px 2px}
+  .step{display:flex;align-items:center;gap:12px;padding:11px 10px;border-radius:12px;transition:.2s}
+  .step .dot{
+    width:30px;height:30px;border-radius:50%;flex-shrink:0;
+    display:flex;align-items:center;justify-content:center;
+    font-size:13px;font-weight:800;color:#fff;
+  }
+  .step .s-name{font-size:14px;font-weight:600}
+  .step .s-sub{font-size:11px;color:var(--dim2);margin-top:2px}
+  .step.done .dot{background:linear-gradient(135deg,#34d399,#059669);box-shadow:0 0 12px rgba(52,211,153,.55)}
+  .step.done .s-name{color:#9fe8c9}
+  .step.active{
+    background:var(--phase-soft);border:1px solid var(--phase);
+    box-shadow:0 0 20px var(--phase-glow), inset 0 0 24px rgba(245,158,11,.08);
+  }
+  .step.active .dot{background:linear-gradient(135deg,var(--phase),var(--phase-strong));box-shadow:0 0 16px var(--phase-glow)}
+  .step.active .s-name{color:#fff;text-shadow:0 0 12px var(--phase-glow)}
+  .step.wait .dot{background:#232f4b;color:#5b6b8c}
+  .step.wait .s-name{color:#6b7a99}
+  .conn{width:2px;height:20px;margin-left:24px;background:#232f4b}
+  .conn.done{background:linear-gradient(#34d399,#059669);box-shadow:0 0 6px rgba(52,211,153,.5)}
+
+  .char{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:12px;cursor:default}
+  .char:hover{background:rgba(255,255,255,.045)}
+  .avatar{
+    width:38px;height:38px;border-radius:50%;flex-shrink:0;
+    display:flex;align-items:center;justify-content:center;
+    font-size:16px;font-weight:800;color:#fff;
+    box-shadow:0 2px 10px rgba(0,0,0,.4);
+  }
+  .av-lin{background:linear-gradient(135deg,#38bdf8,#0284c7)}
+  .av-su{background:linear-gradient(135deg,#f472b6,#db2777)}
+  .av-chen{background:linear-gradient(135deg,#a78bfa,#7c3aed)}
+  .av-gu{background:linear-gradient(135deg,#2dd4bf,#0d9488)}
+  .av-a{background:linear-gradient(135deg,#fb923c,#ea580c)}
+  .char .c-name{font-size:14px;font-weight:600}
+  .char .c-role{font-size:11px;color:var(--dim2);margin-top:1px}
+  .status{width:8px;height:8px;border-radius:50%;margin-left:auto;flex-shrink:0}
+  .status.on{background:var(--green);box-shadow:0 0 7px rgba(34,197,94,.9)}
+  .status.talk{background:var(--phase);box-shadow:0 0 7px var(--phase-glow);animation:pulse 1.4s infinite}
+  .status.idle{background:#475569}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+
+  /* ===== 中间主区：VN 化对话流 ===== */
+  h1{font-size:24px;font-weight:800;letter-spacing:1px;display:flex;align-items:center;gap:10px}
+  .sub{font-size:13px;color:var(--dim);margin-top:8px}
+  .main-head{margin-bottom:14px}
+  .talk-bar{
+    display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;
+    background:rgba(255,255,255,.03);border:1px solid var(--line);border-radius:12px;padding:8px 12px;
+  }
+  .talk-bar .t-label{font-size:11.5px;color:var(--dim2);letter-spacing:1px;margin-right:4px}
+  .t-btn{
+    border:1px solid var(--line);background:rgba(255,255,255,.05);
+    color:#c9d4ea;font-size:12.5px;font-family:inherit;cursor:pointer;
+    padding:6px 13px;border-radius:999px;transition:.15s;
+  }
+  .t-btn:hover{border-color:var(--phase);color:#fcd34d;background:var(--phase-soft)}
+  .t-btn.goal{
+    margin-left:auto;border-style:dashed;border-color:rgba(255,255,255,.25);
+    color:#c9d4ea;background:rgba(255,255,255,.04);
+  }
+  .chat{
+    flex:1;overflow-y:auto;padding:4px 64px 12px 2px;
+    display:flex;flex-direction:column;gap:16px;
+  }
+  .sys-line{
+    align-self:center;font-size:12px;color:var(--dim2);
+    background:rgba(255,255,255,.04);border:1px solid var(--line);
+    padding:6px 16px;border-radius:999px;max-width:92%;text-align:center;line-height:1.7;
+  }
+  .sys-line.show-ev{
+    border-color:rgba(245,158,11,.5);color:#fcd34d;
+    background:rgba(245,158,11,.1);font-weight:600;
+  }
+  .msg{display:flex;gap:12px;align-items:flex-start;max-width:88%;position:relative}
+  .msg .body{flex:1;min-width:0}
+  .msg .meta{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+  /* VN 铭牌：角色色底 + 白字小圆角标签 */
+  .vn-tag{
+    color:#fff;padding:3px 13px;border-radius:7px;font-size:12.5px;font-weight:800;
+    letter-spacing:1px;box-shadow:0 2px 8px rgba(0,0,0,.35);
+  }
+  .msg .time{font-size:11px;color:var(--dim2)}
+  .bubble{
+    border-radius:4px 14px 14px 14px;padding:11px 15px;
+    font-size:14px;line-height:1.7;color:#dbe4f5;
+    border-left:3px solid transparent;word-break:break-word;position:relative;
+  }
+  .b-lin{background:rgba(14,165,233,.12);border-left-color:#0ea5e9}
+  .b-su{background:rgba(236,72,153,.12);border-left-color:#ec4899}
+  .b-chen{background:rgba(139,92,246,.12);border-left-color:#8b5cf6}
+  .b-gu{background:rgba(20,184,166,.12);border-left-color:#14b8a6}
+  .b-a{background:rgba(249,115,22,.12);border-left-color:#f97316}
+  /* 质询（press）红色角标 */
+  .bubble .contra{
+    display:none;position:absolute;top:-9px;right:-8px;
+    background:linear-gradient(135deg,#ef4444,#b91c1c);color:#fff;
+    font-size:10.5px;font-weight:800;padding:2px 9px;border-radius:999px;
+    box-shadow:0 0 12px rgba(239,68,68,.8);animation:contraPulse 1.6s infinite;
+  }
+  .bubble.pressed{border-color:var(--red);box-shadow:0 0 0 1px rgba(239,68,68,.5), 0 0 18px rgba(239,68,68,.25)}
+  .bubble.pressed .contra{display:inline-block}
+  @keyframes contraPulse{0%,100%{opacity:1}50%{opacity:.55}}
+  /* 气泡右缘：质询 / 引用反驳 */
+  .msg-actions{
+    position:absolute;right:-58px;top:8px;display:flex;flex-direction:column;gap:5px;
+    opacity:.72;transition:.15s;
+  }
+  .msg:hover .msg-actions{opacity:1}
+  .p-btn{
+    width:52px;height:24px;border-radius:7px;border:1px solid var(--line);
+    background:rgba(255,255,255,.05);color:#c9d4ea;font-size:11px;font-family:inherit;
+    cursor:pointer;transition:.15s;white-space:nowrap;padding:0 4px;
+  }
+  .p-btn:hover{border-color:var(--phase);color:#fcd34d;background:var(--phase-soft)}
+  .p-btn.done{border-color:rgba(239,68,68,.5);color:#fca5a5;background:rgba(239,68,68,.12)}
+  .p-btn.quoted{border-color:rgba(245,158,11,.5);color:#fcd34d;background:rgba(245,158,11,.12)}
+  .typing{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim2)}
+  .typing .dots span{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--dim2);margin:0 1px;animation:pulse 1.2s infinite}
+  .typing .dots span:nth-child(2){animation-delay:.2s}
+  .typing .dots span:nth-child(3){animation-delay:.4s}
+
+  /* 我的反驳弹药（弹丸论破言弹） */
+  .ammo{
+    border:1px solid rgba(245,158,11,.4);background:rgba(245,158,11,.06);
+    border-radius:14px;padding:10px 14px;margin-top:10px;
+  }
+  .ammo-head{font-size:12.5px;font-weight:800;color:#fcd34d;display:flex;align-items:center;gap:8px}
+  .ammo-count{
+    background:var(--phase);color:#fff;font-size:11px;font-weight:800;
+    min-width:20px;height:20px;border-radius:999px;display:flex;align-items:center;justify-content:center;
+    box-shadow:0 0 10px var(--phase-glow);
+  }
+  .ammo-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+  .ammo-empty{font-size:11.5px;color:var(--dim2);line-height:1.7}
+  .ammo-chip{
+    display:flex;align-items:center;gap:7px;font-size:11.5px;color:#fde68a;
+    background:rgba(255,255,255,.06);border:1px solid rgba(245,158,11,.45);
+    border-radius:999px;padding:5px 12px;cursor:pointer;transition:.15s;
+  }
+  .ammo-chip:hover{border-color:var(--phase);background:var(--phase-soft);box-shadow:0 0 12px var(--phase-glow)}
+  .ammo-chip .ac-x{color:#fca5a5;font-weight:800}
+  .ammo-chip.used{opacity:.45;text-decoration:line-through}
+
+  /* 出示证据选择面板 */
+  .ev-pop{
+    position:fixed;left:50%;bottom:120px;transform:translateX(-50%) translateY(14px);
+    width:360px;max-width:92vw;background:#16213b;border:1px solid var(--phase);
+    border-radius:16px;padding:14px;box-shadow:0 18px 50px rgba(0,0,0,.6), 0 0 26px var(--phase-glow);
+    z-index:110;display:none;opacity:0;transition:.2s;
+  }
+  .ev-pop.show{display:block;opacity:1;transform:translateX(-50%) translateY(0)}
+  .ev-pop-head{display:flex;align-items:center;justify-content:space-between;font-size:13.5px;font-weight:800;margin-bottom:10px}
+  .ev-close{border:none;background:transparent;color:var(--dim);font-size:15px;cursor:pointer}
+  .ev-item{
+    display:flex;flex-direction:column;gap:2px;text-align:left;width:100%;
+    border:1px solid var(--line);background:rgba(255,255,255,.04);
+    border-radius:10px;padding:9px 12px;margin-bottom:8px;color:#e8eef9;
+    font-size:13px;font-family:inherit;cursor:pointer;transition:.15s;
+  }
+  .ev-item small{font-size:11px;color:var(--dim2)}
+  .ev-item:hover{border-color:var(--phase);background:var(--phase-soft);transform:translateX(2px)}
+
+  /* 快捷动作 + 输入 */
+  .composer{border-top:1px solid var(--line);padding-top:14px;background:linear-gradient(180deg,transparent, rgba(12,19,34,.55))}
+  .quick{display:flex;gap:8px;margin-bottom:10px}
+  .q-btn{
+    border:1px solid var(--line);background:rgba(255,255,255,.05);
+    color:#c9d4ea;font-size:12.5px;font-family:inherit;cursor:pointer;
+    padding:7px 14px;border-radius:999px;transition:.15s;
+  }
+  .q-btn:hover{border-color:var(--phase);color:#fcd34d;background:var(--phase-soft)}
+  .input-row{display:flex;gap:10px}
+  .input-row input{
+    flex:1;background:#101a2e;border:1px solid var(--line);border-radius:12px;
+    padding:12px 16px;color:var(--text);font-size:14px;font-family:inherit;outline:none;
+  }
+  .input-row input::placeholder{color:var(--dim2)}
+  .input-row input:focus{border-color:var(--phase);box-shadow:0 0 0 3px var(--phase-soft)}
+  .btn{
+    border:none;cursor:pointer;font-family:inherit;border-radius:12px;
+    padding:0 26px;font-size:14px;font-weight:700;color:#fff;
+    background:linear-gradient(135deg,var(--phase),var(--phase-strong));
+    box-shadow:0 4px 16px var(--phase-glow);transition:transform .15s;
+  }
+  .btn:hover{transform:translateY(-1px)}
+
+  /* ===== 右侧栏 ===== */
+  .tabs{display:flex;gap:4px;background:rgba(255,255,255,.04);padding:4px;border-radius:12px;margin-bottom:14px}
+  .tab{
+    flex:1;text-align:center;padding:7px 0;font-size:12.5px;border-radius:9px;
+    border:none;background:transparent;color:var(--dim);cursor:pointer;font-family:inherit;
+  }
+  .tab.on{background:linear-gradient(135deg,var(--phase),var(--phase-strong));color:#fff;font-weight:700;box-shadow:0 2px 10px var(--phase-glow)}
+  .tab.off{opacity:.5}
+  .tabpane{display:none}
+  .tabpane.show{display:block}
+
+  /* Her Story 检索框 */
+  .hs-search{margin-bottom:12px}
+  .hs-input{
+    width:100%;background:#101a2e;border:1px solid var(--line);border-radius:10px;
+    padding:9px 12px;color:var(--text);font-size:12.5px;font-family:inherit;outline:none;
+  }
+  .hs-input::placeholder{color:var(--dim2)}
+  .hs-input:focus{border-color:var(--phase);box-shadow:0 0 0 3px var(--phase-soft)}
+  .hs-chips{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap}
+  .chip{
+    border:1px solid var(--line);background:rgba(255,255,255,.05);color:var(--dim);
+    font-size:11px;font-family:inherit;padding:3px 10px;border-radius:999px;cursor:pointer;transition:.15s;
+  }
+  .chip.on{background:var(--phase);border-color:var(--phase);color:#fff;font-weight:700;box-shadow:0 0 8px var(--phase-glow)}
+  .chip:hover{border-color:var(--phase);color:#fcd34d}
+
+  .clue{
+    position:relative;background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border:1px solid var(--line);border-radius:14px;padding:12px 14px;margin-bottom:12px;
+    box-shadow:0 4px 14px rgba(0,0,0,.25);
+  }
+  .clue.new{border-color:var(--phase);box-shadow:0 0 0 1px var(--phase), 0 8px 24px var(--phase-glow);background:linear-gradient(180deg, rgba(245,158,11,.09), var(--panel))}
+  .clue-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .clue-id{font-size:11px;font-weight:800;color:var(--phase);background:var(--phase-soft);border:1px solid rgba(245,158,11,.3);padding:2px 8px;border-radius:6px}
+  .loc-tag{font-size:11px;background:rgba(255,255,255,.07);padding:2px 8px;border-radius:6px;color:var(--dim)}
+  .clue p{font-size:13px;line-height:1.65;color:#c9d4ea;margin-top:9px}
+  .clue-foot{display:flex;align-items:center;justify-content:space-between;margin-top:10px}
+  .who{font-size:11px;color:var(--dim2)}
+  .share{
+    border:1px solid var(--phase);background:var(--phase-soft);color:#fcd34d;
+    font-size:11.5px;font-family:inherit;font-weight:700;cursor:pointer;
+    padding:4px 12px;border-radius:999px;transition:.15s;
+  }
+  .share:hover{background:linear-gradient(135deg,var(--phase),var(--phase-strong));color:#fff;box-shadow:0 0 12px var(--phase-glow)}
+
+  /* Obra Dinn 人物×线索×关系矩阵 */
+  .matrix{
+    background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border:1px solid var(--line);border-radius:14px;padding:12px;
+    box-shadow:0 4px 14px rgba(0,0,0,.25);
+  }
+  .matrix table{width:100%;border-collapse:collapse;font-size:12px}
+  .matrix th{color:var(--dim2);font-weight:600;padding:6px 4px;text-align:center;border-bottom:1px solid var(--line)}
+  .matrix td{text-align:center;padding:7px 4px;color:#c9d4ea;border-bottom:1px solid rgba(255,255,255,.04)}
+  .matrix td.row-name{text-align:left;font-weight:700;font-size:12.5px;white-space:nowrap}
+  .mk{font-size:14px;font-weight:800}
+  .mk-s{color:#fbbf24;text-shadow:0 0 8px rgba(251,191,36,.7)}
+  .mk-a{color:#f87171}
+  .mk-o{color:#38bdf8}
+  .mk-none{color:#2b3956}
+  .mat-legend{display:flex;flex-wrap:wrap;gap:10px;margin-top:10px;font-size:10.5px;color:var(--dim2)}
+  .rel-lines{margin-top:10px;border-top:1px dashed var(--line);padding-top:10px;display:flex;flex-direction:column;gap:7px}
+  .rel-line{font-size:11.5px;color:var(--dim);line-height:1.6;display:flex;gap:8px;align-items:baseline}
+  .rel-line b{color:#fcd34d;font-weight:700}
+
+  .ro-card{
+    display:flex;align-items:center;gap:10px;background:linear-gradient(180deg,var(--panel-2),var(--panel));
+    border:1px solid var(--line);border-radius:12px;padding:10px 12px;margin-bottom:10px;
+  }
+  .ro-card .avatar{width:34px;height:34px;font-size:14px}
+  .ro-card .r-name{font-size:13.5px;font-weight:700}
+  .ro-card .r-role{font-size:11px;color:var(--dim2);margin-top:1px}
+  .ro-card .r-secret{margin-left:auto;font-size:10.5px;color:var(--dim2);border:1px dashed var(--line);padding:2px 8px;border-radius:999px}
+
+  .bl-item{
+    display:flex;gap:8px;align-items:baseline;padding:8px 10px;border-radius:10px;
+    font-size:12px;color:#c9d4ea;cursor:pointer;line-height:1.6;
+  }
+  .bl-item:hover{background:rgba(255,255,255,.06)}
+  .bl-item .bl-t{font-size:10.5px;color:var(--dim2);flex-shrink:0}
+  .bl-item .bl-n{font-weight:700;flex-shrink:0}
+  .bl-item.bl-sys{color:var(--dim2);font-style:italic}
+  .pane-hint{font-size:12px;color:var(--dim2);text-align:center;padding:34px 10px;line-height:2}
+
+  .toast{
+    position:fixed;left:50%;bottom:34px;transform:translateX(-50%) translateY(16px);
+    background:#16213b;border:1px solid var(--phase);border-radius:12px;
+    padding:10px 22px;font-size:14px;box-shadow:0 10px 34px rgba(0,0,0,.55);
+    opacity:0;transition:.3s;z-index:99;pointer-events:none;max-width:70vw;
+  }
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="logo">🕵️ 雾港迷案<span class="accent">.</span></div>
+  <span class="badge badge-round">第 2 轮</span>
+  <span class="badge badge-phase">💬 讨论阶段</span>
+  <span class="badge badge-goal">🎯 目标：找出矛盾发言</span>
+  <span class="badge badge-count">⏱️ 05:32</span>
+  <div class="spacer"></div>
+  <button class="icon-btn" id="backlogBtn" title="历史记录（Backlog：回看已读对话）">📜</button>
+  <div class="menu" id="settingsMenu">
+    <button class="icon-btn" id="settingsBtn" title="设置">⚙️</button>
+    <div class="menu-panel">
+      <div class="menu-cap">高级功能（示意）</div>
+      <div class="menu-item"><span class="m-ico">🎬</span>导演</div>
+      <div class="menu-item"><span class="m-ico">🛎️</span>主持人 <small>DM</small></div>
+      <div class="menu-item"><span class="m-ico">🎨</span>美术</div>
+      <div class="menu-item"><span class="m-ico">💬</span>私聊</div>
+      <div class="menu-item"><span class="m-ico">📜</span>历史</div>
+    </div>
+  </div>
+  <button class="icon-btn" title="帮助">❓</button>
+</header>
+
+<div class="layout">
+  <!-- 左栏 -->
+  <aside class="col col-left">
+    <button class="rail-toggle" id="leftToggle" title="收起左栏为图标条（56px）">◀</button>
+    <div class="left-full">
+      <div class="sec-title">游戏进程</div>
+      <div class="steps">
+        <div class="step done">
+          <div class="dot">✓</div>
+          <div><div class="s-name">搜证</div><div class="s-sub">已完成</div></div>
+        </div>
+        <div class="conn done"></div>
+        <div class="step active">
+          <div class="dot">💬</div>
+          <div><div class="s-name">讨论</div><div class="s-sub">当前阶段 · 倒计时</div></div>
+        </div>
+        <div class="conn"></div>
+        <div class="step wait">
+          <div class="dot">🗳️</div>
+          <div><div class="s-name">投票</div><div class="s-sub">待开启</div></div>
+        </div>
+      </div>
+
+      <div class="sec-title" style="margin-top:26px">角色（5）</div>
+      <div class="char">
+        <div class="avatar av-lin">林</div>
+        <div><div class="c-name">林深</div><div class="c-role">侦探</div></div>
+        <span class="status on" title="在线"></span>
+      </div>
+      <div class="char">
+        <div class="avatar av-su">苏</div>
+        <div><div class="c-name">苏晚</div><div class="c-role">客人</div></div>
+        <span class="status talk" title="发言中"></span>
+      </div>
+      <div class="char">
+        <div class="avatar av-chen">陈</div>
+        <div><div class="c-name">陈默</div><div class="c-role">管家</div></div>
+        <span class="status on" title="在线"></span>
+      </div>
+      <div class="char">
+        <div class="avatar av-gu">顾</div>
+        <div><div class="c-name">顾言</div><div class="c-role">客人 · 被质询</div></div>
+        <span class="status idle" title="静默中"></span>
+      </div>
+      <div class="char">
+        <div class="avatar av-a">阿</div>
+        <div><div class="c-name">阿岚</div><div class="c-role">厨师</div></div>
+        <span class="status on" title="在线"></span>
+      </div>
+    </div>
+
+    <div class="left-rail">
+      <button class="rail-ico" data-tip="搜证（已完成）">🔍</button>
+      <button class="rail-ico active" data-tip="讨论（当前）">💬</button>
+      <button class="rail-ico" data-tip="投票">🗳️</button>
+      <span class="rail-sep"></span>
+      <button class="rail-ico av-lin" data-tip="林深 · 侦探">林</button>
+      <button class="rail-ico av-su" data-tip="苏晚 · 发言中">苏</button>
+      <button class="rail-ico av-chen" data-tip="陈默 · 管家">陈</button>
+      <button class="rail-ico av-gu" data-tip="顾言 · 被质询">顾</button>
+      <button class="rail-ico av-a" data-tip="阿岚 · 厨师">阿</button>
+      <span class="rail-sep"></span>
+      <button class="rail-ico" data-tip="证据袋">🔎</button>
+    </div>
+  </aside>
+
+  <!-- 中栏：VN 化讨论对话流 -->
+  <main class="col col-main">
+    <div class="main-head">
+      <h1>💬 讨论阶段</h1>
+      <p class="sub">主持人：自由发言 · 倒计时结束后自动进入投票</p>
+    </div>
+
+    <div class="talk-bar">
+      <span class="t-label">🎭 快捷动作</span>
+      <button class="t-btn" id="qPress">🔍 质询</button>
+      <button class="t-btn" id="qShow">📎 出示证据</button>
+      <button class="t-btn" id="qSpeak">🙋 请求发言</button>
+      <button class="t-btn goal" id="qBacklog">📜 历史记录（Backlog）</button>
+    </div>
+
+    <div class="chat" id="chat">
+      <div class="sys-line">📢 主持人：讨论开始，请围绕线索自由发言（倒计时 5 分钟）</div>
+
+      <div class="msg" data-name="林深">
+        <div class="avatar av-lin">林</div>
+        <div class="body">
+          <div class="meta"><span class="vn-tag av-lin">林深</span><span class="time">10:02</span></div>
+          <div class="bubble b-lin">我在书房发现一封烧了一半的信，署名是顾言。</div>
+          <div class="msg-actions">
+            <button class="p-btn" data-act="press">🔍 质询</button>
+            <button class="p-btn" data-act="quote">📌 引用</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="msg" data-name="苏晚">
+        <div class="avatar av-su">苏</div>
+        <div class="body">
+          <div class="meta"><span class="vn-tag av-su">苏晚</span><span class="time">10:03</span></div>
+          <div class="bubble b-su">花园的泥土里有皮鞋印，尺码和陈默的鞋对得上。</div>
+          <div class="msg-actions">
+            <button class="p-btn" data-act="press">🔍 质询</button>
+            <button class="p-btn" data-act="quote">📌 引用</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="sys-line">📎 苏晚 向对话分享了线索 CL-02「花园皮鞋印」</div>
+
+      <div class="msg" data-name="陈默">
+        <div class="avatar av-chen">陈</div>
+        <div class="body">
+          <div class="meta"><span class="vn-tag av-chen">陈默</span><span class="time">10:05</span></div>
+          <div class="bubble b-chen">地下室找到的怀表链……那块怀表是死者的。</div>
+          <div class="msg-actions">
+            <button class="p-btn" data-act="press">🔍 质询</button>
+            <button class="p-btn" data-act="quote">📌 引用</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="msg" data-name="顾言" data-pressed="1">
+        <div class="avatar av-gu">顾</div>
+        <div class="body">
+          <div class="meta"><span class="vn-tag av-gu">顾言</span><span class="time">10:07</span></div>
+          <div class="bubble b-gu pressed">我没什么好说的。<span class="contra">矛盾点？</span></div>
+          <div class="msg-actions">
+            <button class="p-btn done" data-act="press">🔍 已质询</button>
+            <button class="p-btn" data-act="quote">📌 引用</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="msg" data-name="阿岚">
+        <div class="avatar av-a">阿</div>
+        <div class="body">
+          <div class="meta"><span class="vn-tag av-a">阿岚</span><span class="time">10:08</span></div>
+          <div class="bubble b-a">案发时我在厨房，听到书房传来争吵声。</div>
+          <div class="msg-actions">
+            <button class="p-btn" data-act="press">🔍 质询</button>
+            <button class="p-btn" data-act="quote">📌 引用</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="typing">
+        <div class="avatar av-gu" style="width:28px;height:28px;font-size:12px">顾</div>
+        <div class="dots"><span></span><span></span><span></span></div>
+        正在输入…
+      </div>
+    </div>
+
+    <!-- 我的反驳弹药（弹丸论破言弹） -->
+    <div class="ammo" id="ammoBar">
+      <div class="ammo-head">📌 我的反驳弹药 <span class="ammo-count" id="ammoCount">0</span></div>
+      <div class="ammo-list" id="ammoList">
+        <div class="ammo-empty" id="ammoEmpty">点击发言气泡右缘的「📌 引用」收集言弹，投票/发言时可打出反击（弹丸论破示意）</div>
+      </div>
+    </div>
+
+    <div class="composer">
+      <div class="quick">
+        <button class="q-btn">🔍 质询</button>
+        <button class="q-btn">📎 出示证据</button>
+        <button class="q-btn">🙋 请求发言</button>
+      </div>
+      <div class="input-row">
+        <input type="text" id="msgInput" placeholder="输入你的发言…">
+        <button class="btn" id="sendBtn">发送</button>
+      </div>
+    </div>
+  </main>
+
+  <!-- 右栏：证据袋（Her Story 检索）等 -->
+  <aside class="col col-right" id="rightCol">
+    <button class="drawer-toggle" id="rightToggle" title="收起右栏为悬浮按钮">»</button>
+    <div class="tabs">
+      <button class="tab on" data-tab="pane-clues">线索</button>
+      <button class="tab off" data-tab="pane-chain">逻辑链</button>
+      <button class="tab off" data-tab="pane-roles">角色库</button>
+      <button class="tab off" data-tab="pane-hist">历史</button>
+    </div>
+
+    <div class="tabpane show" id="pane-clues">
+      <!-- Her Story 式检索 -->
+      <div class="hs-search">
+        <input class="hs-input" id="hsInput" type="text" placeholder="🔍 搜索证据…（人名/地点/时间）">
+        <div class="hs-chips" id="hsChips">
+          <button class="chip on" data-c="全部">全部</button>
+          <button class="chip" data-c="人物">人物</button>
+          <button class="chip" data-c="地点">地点</button>
+          <button class="chip" data-c="时间">时间</button>
+        </div>
+      </div>
+      <div class="sec-title">线索库 · 点击「出示」一键入对话</div>
+      <div class="clue" data-tags="人物 地点">
+        <div class="clue-head">
+          <span class="clue-id">CL-01</span>
+          <span class="loc-tag">🏠 书房</span>
+        </div>
+        <p>烧了一半的信，署名是「顾言」，提及一笔不该出现的交易。</p>
+        <div class="clue-foot">
+          <span class="who">持有：林深</span>
+          <button class="share" data-eid="CL-01" data-title="烧毁的信">📎 出示</button>
+        </div>
+      </div>
+      <div class="clue" data-tags="人物 地点">
+        <div class="clue-head">
+          <span class="clue-id">CL-02</span>
+          <span class="loc-tag">🌷 花园</span>
+        </div>
+        <p>泥土里的皮鞋印，尺码与陈默的鞋对得上。</p>
+        <div class="clue-foot">
+          <span class="who">持有：苏晚</span>
+          <button class="share" data-eid="CL-02" data-title="花园皮鞋印">📎 出示</button>
+        </div>
+      </div>
+      <div class="clue" data-tags="地点 时间">
+        <div class="clue-head">
+          <span class="clue-id">CL-03</span>
+          <span class="loc-tag">🚪 地下室</span>
+        </div>
+        <p>怀表链，链身刻有死者姓氏缩写，表身不知所踪（时间线关键物证）。</p>
+        <div class="clue-foot">
+          <span class="who">持有：陈默</span>
+          <button class="share" data-eid="CL-03" data-title="怀表链">📎 出示</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabpane" id="pane-chain">
+      <div class="sec-title">人物 × 线索 × 关系（Obra Dinn 整理簿示意）</div>
+      <div class="matrix">
+        <table>
+          <tr><th></th><th>CL-01 信</th><th>CL-02 脚印</th><th>CL-03 怀表链</th></tr>
+          <tr><td class="row-name">苏晚</td><td><span class="mk mk-none">–</span></td><td><span class="mk mk-o" title="发现者">◯</span></td><td><span class="mk mk-none">–</span></td></tr>
+          <tr><td class="row-name">陈默</td><td><span class="mk mk-none">–</span></td><td><span class="mk mk-a" title="疑似关联">▲</span></td><td><span class="mk mk-o" title="发现者">◯</span></td></tr>
+          <tr><td class="row-name">顾言</td><td><span class="mk mk-s" title="直接关联">★</span></td><td><span class="mk mk-none">–</span></td><td><span class="mk mk-none">–</span></td></tr>
+          <tr><td class="row-name">阿岚</td><td><span class="mk mk-none">–</span></td><td><span class="mk mk-none">–</span></td><td><span class="mk mk-none">–</span></td></tr>
+        </table>
+        <div class="mat-legend">★ 直接关联 · ▲ 疑似关联 · ◯ 持有/经手 · – 无关联</div>
+        <div class="rel-lines">
+          <div class="rel-line"><span class="rl-dot">🔗</span><b>顾言</b> —— CL-01 烧毁的信：署名当事人，交易传闻直指动机</div>
+          <div class="rel-line"><span class="rl-dot">🔗</span><b>陈默</b> —— CL-02 花园脚印：鞋码吻合，案发时段行踪存疑</div>
+          <div class="rel-line"><span class="rl-dot">🔗</span><b>陈默</b> —— CL-03 怀表链：地下室发现死者遗物，表身缺失</div>
+          <div class="rel-line"><span class="rl-dot">🔗</span><b>苏晚</b> —— CL-02 花园脚印：首位发现者，发现时机存疑</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="tabpane" id="pane-roles">
+      <div class="sec-title">角色库 · 本局 5 人</div>
+      <div class="ro-card"><div class="avatar av-lin">林</div><div><div class="r-name">林深</div><div class="r-role">侦探 · 本局引导者</div></div><span class="r-secret">无秘密</span></div>
+      <div class="ro-card"><div class="avatar av-su">苏</div><div><div class="r-name">苏晚</div><div class="r-role">客人</div></div><span class="r-secret">秘密 ×1</span></div>
+      <div class="ro-card"><div class="avatar av-chen">陈</div><div><div class="r-name">陈默</div><div class="r-role">管家</div></div><span class="r-secret">秘密 ×1</span></div>
+      <div class="ro-card"><div class="avatar av-gu">顾</div><div><div class="r-name">顾言</div><div class="r-role">客人 · 已被质询</div></div><span class="r-secret">秘密 ×2</span></div>
+      <div class="ro-card"><div class="avatar av-a">阿</div><div><div class="r-name">阿岚</div><div class="r-role">厨师</div></div><span class="r-secret">秘密 ×1</span></div>
+    </div>
+
+    <div class="tabpane" id="pane-hist">
+      <div class="sec-title">历史记录（VN Backlog · 可回看）</div>
+      <div class="bl-item bl-sys"><span class="bl-t">10:01</span><span>📢 讨论开始</span></div>
+      <div class="bl-item" data-n="林深"><span class="bl-t">10:02</span><span class="bl-n">林深</span><span>我在书房发现一封烧了一半的信，署名是顾言。</span></div>
+      <div class="bl-item" data-n="苏晚"><span class="bl-t">10:03</span><span class="bl-n">苏晚</span><span>花园的泥土里有皮鞋印，尺码和陈默的鞋对得上。</span></div>
+      <div class="bl-item bl-sys"><span class="bl-t">10:04</span><span>📎 苏晚 分享了线索 CL-02</span></div>
+      <div class="bl-item" data-n="陈默"><span class="bl-t">10:05</span><span class="bl-n">陈默</span><span>地下室找到的怀表链……那块怀表是死者的。</span></div>
+      <div class="bl-item" data-n="顾言"><span class="bl-t">10:07</span><span class="bl-n">顾言</span><span>我没什么好说的。</span></div>
+      <div class="bl-item" data-n="阿岚"><span class="bl-t">10:08</span><span class="bl-n">阿岚</span><span>案发时我在厨房，听到书房传来争吵声。</span></div>
+      <div class="bl-item bl-sys"><span class="bl-t">10:09</span><span>⏳ 剩余 05:32，倒计时结束后进入投票</span></div>
+    </div>
+  </aside>
+</div>
+
+<button class="float-btn" id="floatBtn" title="打开线索抽屉">📋<small>线索</small></button>
+<div class="view-note">💾 视图状态已记忆（localStorage）</div>
+
+<!-- 出示证据选择面板 -->
+<div class="ev-pop" id="evPop">
+  <div class="ev-pop-head">📎 出示证据 <button class="ev-close" id="evClose">✕</button></div>
+  <button class="ev-item" data-eid="CL-01" data-title="烧毁的信">CL-01 烧毁的信 <small>🏠 书房 · 持有：林深</small></button>
+  <button class="ev-item" data-eid="CL-02" data-title="花园皮鞋印">CL-02 花园皮鞋印 <small>🌷 花园 · 持有：苏晚</small></button>
+  <button class="ev-item" data-eid="CL-03" data-title="怀表链">CL-03 怀表链 <small>🚪 地下室 · 持有：陈默</small></button>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  /* ========== 可隐藏侧边栏（localStorage 记忆） ========== */
+  var PAGE = 'discussion';
+  var VK = 'ui-proto-view-v2';
+  var body = document.body;
+
+  function getView(){
+    try{
+      var all = JSON.parse(localStorage.getItem(VK));
+      if(all && all[PAGE]) return all[PAGE];
+    }catch(e){}
+    return {left:false, right:false};
+  }
+  function saveView(){
+    try{
+      var all = {};
+      try{ all = JSON.parse(localStorage.getItem(VK)) || {}; }catch(e){}
+      all[PAGE] = {left: body.classList.contains('l-collapsed'), right: body.classList.contains('r-collapsed')};
+      localStorage.setItem(VK, JSON.stringify(all));
+    }catch(e){}
+  }
+  function setLeft(c){ body.classList.toggle('l-collapsed', c); leftBtn.textContent = c ? '▶' : '◀'; saveView(); }
+  function setRight(c){ body.classList.toggle('r-collapsed', c); body.classList.remove('r-drawer'); saveView(); }
+
+  var leftBtn = document.getElementById('leftToggle');
+  var rightBtn = document.getElementById('rightToggle');
+  var floatBtn = document.getElementById('floatBtn');
+
+  var v = getView();
+  if(v.left) setLeft(true);
+  if(v.right) setRight(true);
+
+  leftBtn.addEventListener('click', function(){ setLeft(!body.classList.contains('l-collapsed')); toast(body.classList.contains('l-collapsed') ? '◀ 左栏已收窄为图标条（56px）' : '▶ 左栏已展开'); });
+  rightBtn.addEventListener('click', function(){
+    if(body.classList.contains('r-drawer')){ body.classList.remove('r-drawer'); return; }
+    setRight(!body.classList.contains('r-collapsed'));
+    if(!body.classList.contains('r-collapsed')) toast('» 右栏已展开');
+  });
+  floatBtn.addEventListener('click', function(){
+    body.classList.add('r-drawer');
+    toast('📋 线索抽屉已打开（覆盖式）');
+  });
+  document.querySelectorAll('.rail-ico').forEach(function(b){
+    b.addEventListener('click', function(){ toast('「' + (b.dataset.tip||b.textContent) + '」图标条入口（原型示意）'); });
+  });
+
+  /* ========== Tab 切换 ========== */
+  function switchTab(id){
+    document.querySelectorAll('.tab').forEach(function(x){ x.classList.remove('on'); x.classList.add('off'); });
+    document.querySelector('.tab[data-tab="' + id + '"]').classList.add('on');
+    document.querySelector('.tab[data-tab="' + id + '"]').classList.remove('off');
+    document.querySelectorAll('.tabpane').forEach(function(p){ p.classList.toggle('show', p.id === id); });
+  }
+  document.querySelectorAll('.tab').forEach(function(t){
+    t.addEventListener('click', function(){ switchTab(t.dataset.tab); });
+  });
+
+  /* ========== 设置下拉 ========== */
+  var menu = document.getElementById('settingsMenu');
+  document.getElementById('settingsBtn').addEventListener('click', function(e){
+    e.stopPropagation(); menu.classList.toggle('open');
+  });
+  menu.querySelectorAll('.menu-item').forEach(function(it){
+    it.addEventListener('click', function(){ menu.classList.remove('open'); toast('「' + it.textContent.trim() + '」面板（原型示意）'); });
+  });
+
+  /* ========== 质询（Press）/ 引用反驳（言弹） ========== */
+  var quoted = {};   // msgName -> true
+  var quotedMsgs = []; // 顺序记录已引用发言
+
+  document.querySelectorAll('.msg').forEach(function(msg){
+    var bubble = msg.querySelector('.bubble');
+    var contra = bubble.querySelector('.contra');
+    if(!contra){ var c = document.createElement('span'); c.className = 'contra'; c.textContent = '矛盾点？'; bubble.appendChild(c); }
+    var pressBtn = msg.querySelector('.p-btn[data-act="press"]');
+    var quoteBtn = msg.querySelector('.p-btn[data-act="quote"]');
+
+    pressBtn.addEventListener('click', function(){
+      var on = !bubble.classList.contains('pressed');
+      bubble.classList.toggle('pressed', on);
+      var name = msg.dataset.name;
+      pressBtn.textContent = on ? '🔍 已质询' : '🔍 质询';
+      pressBtn.classList.toggle('done', on);
+      toast(on ? '🔍 已质询「' + name + '」的发言（示意：进入追问分支）' : '已撤销质询');
+    });
+    quoteBtn.addEventListener('click', function(){
+      var name = msg.dataset.name, text = bubble.textContent.replace('矛盾点？','').trim();
+      if(quoted[name]){
+        delete quoted[name];
+        quotedMsgs = quotedMsgs.filter(function(n){ return n !== name; });
+        quoteBtn.classList.remove('quoted');
+        quoteBtn.textContent = '📌 引用';
+        toast('已移除言弹：' + name + ' 的发言');
+      } else {
+        quoted[name] = true;
+        quotedMsgs.push(name);
+        quoteBtn.classList.add('quoted');
+        quoteBtn.textContent = '📌 已收';
+        addAmmo(name, text);
+        toast('📌 已收为言弹：' + name + ' 的发言（弹丸论破示意）');
+      }
+      updateAmmo();
+    });
+  });
+
+  var ammoList = document.getElementById('ammoList');
+  function addAmmo(name, text){
+    var chip = document.createElement('div');
+    chip.className = 'ammo-chip';
+    chip.innerHTML = '<span>💬 ' + name + '：' + (text.length > 14 ? text.slice(0,14) + '…' : text) + '</span><span class="ac-x">✕</span>';
+    chip.title = '点击打出言弹反击（示意）';
+    chip.addEventListener('click', function(){
+      if(chip.classList.contains('used')) return;
+      chip.classList.add('used');
+      toast('🎯 言弹打出：以「' + name + '」的发言反驳当前论点（示意）');
+    });
+    ammoList.appendChild(chip);
+  }
+  function updateAmmo(){
+    document.getElementById('ammoCount').textContent = quotedMsgs.length;
+    var empty = document.getElementById('ammoEmpty');
+    if(empty) empty.style.display = quotedMsgs.length ? 'none' : '';
+  }
+
+  /* ========== 出示证据 ========== */
+  var evPop = document.getElementById('evPop');
+  function showEvPanel(){ evPop.classList.add('show'); }
+  function hideEvPanel(){ evPop.classList.remove('show'); }
+  document.getElementById('qShow').addEventListener('click', showEvPanel);
+  document.querySelector('.q-btn:nth-child(2)').addEventListener('click', showEvPanel);
+  document.getElementById('evClose').addEventListener('click', hideEvPanel);
+  evPop.addEventListener('click', function(e){ if(e.target === evPop) hideEvPanel(); });
+
+  var chat = document.getElementById('chat');
+  function insertEvidence(eid, title){
+    var el = document.createElement('div');
+    el.className = 'sys-line show-ev';
+    el.innerHTML = '🃏 出示：<b>' + eid + ' ' + title + '</b>（已插入对话流）';
+    chat.insertBefore(el, chat.querySelector('.typing'));
+    chat.scrollTop = chat.scrollHeight;
+    hideEvPanel();
+    toast('📎 已出示 ' + eid + ' ' + title);
+  }
+  document.querySelectorAll('.ev-item').forEach(function(b){
+    b.addEventListener('click', function(){ insertEvidence(b.dataset.eid, b.dataset.title); });
+  });
+  // 右栏线索卡「出示」按钮同样插入
+  document.querySelectorAll('.share').forEach(function(b){
+    b.addEventListener('click', function(){ insertEvidence(b.dataset.eid, b.dataset.title); });
+  });
+
+  /* ========== 快捷动作 / Backlog / 发送 ========== */
+  document.getElementById('qPress').addEventListener('click', function(){ toast('🔍 质询：点击发言气泡右缘的「🔍 质询」按钮（示意）'); });
+  document.getElementById('qSpeak').addEventListener('click', function(){ toast('🙋 已申请发言，主持人批准后点亮发言权（示意）'); });
+  function openBacklog(){
+    switchTab('pane-hist');
+    toast('📜 Backlog：回看已读对话（VN 历史示意）');
+  }
+  document.getElementById('qBacklog').addEventListener('click', openBacklog);
+  document.getElementById('backlogBtn').addEventListener('click', openBacklog);
+  document.querySelectorAll('.bl-item').forEach(function(b){
+    b.addEventListener('click', function(){ toast('📜 回看发言：' + (b.dataset.n || '系统记录') + '（示意）'); });
+  });
+  document.getElementById('sendBtn').addEventListener('click', function(){
+    var inp = document.getElementById('msgInput');
+    if(inp.value.trim()){ toast('📤 已发送（原型示意）'); inp.value=''; }
+  });
+
+  /* ========== Her Story 检索过滤 ========== */
+  var hsInput = document.getElementById('hsInput');
+  var curChip = '全部';
+  document.querySelectorAll('#hsChips .chip').forEach(function(c){
+    c.addEventListener('click', function(){
+      document.querySelectorAll('#hsChips .chip').forEach(function(x){ x.classList.remove('on'); });
+      c.classList.add('on');
+      curChip = c.dataset.c;
+      applyFilter();
+    });
+  });
+  hsInput.addEventListener('input', applyFilter);
+  function applyFilter(){
+    var q = hsInput.value.trim().toLowerCase();
+    document.querySelectorAll('#pane-clues .clue').forEach(function(c){
+      var tags = (c.dataset.tags || '').split(' ');
+      var okChip = curChip === '全部' || tags.indexOf(curChip) >= 0;
+      var okQ = !q || c.textContent.toLowerCase().indexOf(q) >= 0;
+      c.style.display = (okChip && okQ) ? '' : 'none';
+    });
+  }
+
+  /* ========== Toast ========== */
+  var toastEl = document.getElementById('toast'), toastTimer = null;
+  function toast(msg){
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function(){ toastEl.classList.remove('show'); }, 2400);
+  }
+</script>
+</body>
+</html>

@@ -248,14 +248,26 @@ class MapValidatorTest {
     @DisplayName("tileProps：合法通过 / 越界拒绝 / 键格式非法拒绝 / 值非对象拒绝")
     void tilePropsChecks() {
         Map<String, Object> m = validMap();
-        m.put("tileProps", Map.of("1,1", Map.of("blocked", true)));
+        // P-0817-O：blocked 已是「挡路声明」语义（须 collision=1 一致，见检查项 13），
+        // 结构合法性用例改用中性属性键 water
+        m.put("tileProps", Map.of("1,1", Map.of("water", true)));
         assertTrue(MapValidator.validateMap(m).ok(), "合法 tileProps 通过");
 
         m = validMap();
-        m.put("tileProps", Map.of("5,1", Map.of("blocked", true)));
+        m.put("tileProps", Map.of("5,1", Map.of("water", true)));
         MapValidator.Result r = MapValidator.validateMap(m);
         assertFalse(r.ok());
         assertTrue(r.errors().stream().anyMatch(e -> e.contains("tileProps") && e.contains("越界")));
+
+        // blocked 一致性（P-0817-O 检查项 13）：collision=1 与声明一致 → 通过
+        m = validMap();
+        int[][] col = MapContract.intGrid(((Map<?, ?>) m.get("layers")).get("collision"));
+        col[2][2] = 1; // (2,2) 非热点非出生点
+        Map<String, Object> layers = new LinkedHashMap<>((Map<String, Object>) m.get("layers"));
+        layers.put("collision", MapContract.toIntList(col));
+        m.put("layers", layers);
+        m.put("tileProps", Map.of("2,2", Map.of("blocked", true)));
+        assertTrue(MapValidator.validateMap(m).ok(), "blocked=true 与 collision=1 一致应通过");
 
         m = validMap();
         m.put("tileProps", Map.of("abc", Map.of()));

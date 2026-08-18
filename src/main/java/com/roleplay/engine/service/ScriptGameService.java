@@ -133,6 +133,36 @@ public class ScriptGameService {
     /** P-0805-B（WebSearch 搜证）：运行时切换开关（测试钩子）。 */
     public void setWebSearchEnabled(boolean on) { this.webSearchEnabled = on; }
 
+    // ═══════════════════════════════════════════════════════════
+    //  P-0816-G（UI 重设计阶段一）：行动建议配置（API-1，决策 U6）
+    //  ═══════════════════════════════════════════════════════════
+    //  roleplay.game.script.action.* —— yml 双份 + AppConfig.GameConfig.ScriptConfig.ActionConfig
+    //  同源同值（对齐 D-018/D-027 先例：服务层 @Value 与 AppConfig 绑定并行）；MVP 常量占位。
+
+    /** ask（去问人）行动扣 AP（默认 1）。 */
+    @Value("${roleplay.game.script.action.ask-ap-cost:1}")
+    private int actionAskApCost = 1;
+
+    /** present（出示线索）行动扣 AP（默认 1）。 */
+    @Value("${roleplay.game.script.action.present-ap-cost:1}")
+    private int actionPresentApCost = 1;
+
+    /** research 已搜地点回看扣 AP（决策 U7：默认 0=回看不消耗，扣 AP 仅首次搜证）。 */
+    @Value("${roleplay.game.script.action.replay-ap-cost:0}")
+    private int actionReplayApCost = 0;
+
+    /** ask 建议条数上限（默认 3）。 */
+    @Value("${roleplay.game.script.action.max-ask:3}")
+    private int actionMaxAsk = 3;
+
+    /** present 建议条数上限（默认 3）。 */
+    @Value("${roleplay.game.script.action.max-present:3}")
+    private int actionMaxPresent = 3;
+
+    /** research 建议条数上限（默认 4；已搜地点回看优先 + 未搜地点引导）。 */
+    @Value("${roleplay.game.script.action.max-research:4}")
+    private int actionMaxResearch = 4;
+
     /** P-0805-C（阶段倒计时）：单阶段最长停留毫秒（默认 0=禁用；>0 时惰性推进 INVESTIGATION→DISCUSSION→VOTE，VOTE 复用投票超时/弃票）。 */
     @Value("${roleplay.game.script.phase-timeout-ms:0}")
     private long phaseTimeoutMs = 0L;
@@ -196,12 +226,26 @@ public class ScriptGameService {
     @Value("${roleplay.game.map.min-height:20}")
     private int mapMinHeight = 20;
 
-    /** P-0810-21（P0-3）：尺寸解析后 clamp 到下限（显式传参 / 对局已定尺寸 / 配置默认统一生效；低于下限提升并 log warning）。 */
-    private int[] clampToMin(int effW, int effH, String logTag) {
+    /** P-0817-D（大图支持）：剧本杀地图最大宽度（roleplay.game.map.max-width，默认 256；显式超限 clamp）。 */
+    @Value("${roleplay.game.map.max-width:256}")
+    private int mapMaxWidth = 256;
+
+    /** P-0817-D（大图支持）：剧本杀地图最大高度（roleplay.game.map.max-height，默认 256；显式超限 clamp）。 */
+    @Value("${roleplay.game.map.max-height:256}")
+    private int mapMaxHeight = 256;
+
+    /**
+     * P-0810-21（P0-3）+ P-0817-D：尺寸解析后 clamp 到 [min, max]
+     * （显式传参 / 对局已定尺寸 / 配置默认统一生效；低于下限提升、超上限收敛，均 log warning）。
+     */
+    private int[] clampToBounds(int effW, int effH, String logTag) {
         int cw = Math.max(effW, mapMinWidth);
         int ch = Math.max(effH, mapMinHeight);
+        cw = Math.min(cw, mapMaxWidth);
+        ch = Math.min(ch, mapMaxHeight);
         if (cw != effW || ch != effH) {
-            log.warn("Script game {} map size clamped to min {}×{} (requested {}×{})", logTag, cw, ch, effW, effH);
+            log.warn("Script game {} map size clamped to {}×{} (requested {}×{}, bounds {}-{}×{}-{})",
+                    logTag, cw, ch, effW, effH, mapMinWidth, mapMaxWidth, mapMinHeight, mapMaxHeight);
         }
         return new int[] { cw, ch };
     }
@@ -289,6 +333,9 @@ public class ScriptGameService {
         // C3: 角色令牌 —— player → roleKey（每个玩家唯一；断线重连/顶号认证，对齐 Chronos roleKey）
         final Map<String, String> playerKeys = new LinkedHashMap<>();
         final Map<String, String> votes = new LinkedHashMap<>(); // voter → suspect
+        /** P-0816-G（UI 重设计阶段一 API-11 弃票，决策 U8）：弃票玩家集合 —— 独立于 votes 票型统计：
+         *  quorum 在线数仍计、不参与 mostVoted 统计（对齐 D-037 超时弃票语义）；随快照整包 JSON 加键落库。 */
+        final java.util.Set<String> abstainedVoters = java.util.concurrent.ConcurrentHashMap.newKeySet();
         final List<String> locations = new ArrayList<>();
         String winner = "";
         boolean simulationStarted = false;
@@ -358,6 +405,26 @@ public class ScriptGameService {
         final java.util.Set<String> decorFlags = new java.util.LinkedHashSet<>();
         /** P-0814-H: decor 实例运行时状态（键 "mapId|decorId" → 状态 map；once 处理后含 processed=true；随快照落库，场景存热点实例状态）。 */
         final Map<String, Map<String, Object>> decorStates = new LinkedHashMap<>();
+
+        // ═══════════════ P-0816-R（UI 重设计阶段二 API-3/4，决策 U1）：心锁状态 ═══════════════
+        // 数据源：二期前规则推导过渡（线索 content/title 提及角色名 → 该角色 1 锁）；终态 LLM 标注
+        // clues[].unlock_role 预留字段（宽容解析，缺失/空白回退推导）。状态随快照整包 JSON 加键落库、不加表
+        // （对齐 decorStates 范式；旧快照无此键 → 下次访问按推导惰性重建，零迁移）。
+        /** 角色 → 剩余锁数（推导/标注后固化；破锁归零，不再重新推导覆盖）。 */
+        final Map<String, Integer> roleLocks = new LinkedHashMap<>();
+        /** 角色 → 解锁线索 id 列表（出示命中任一即破锁）。 */
+        final Map<String, List<String>> roleUnlockClues = new LinkedHashMap<>();
+        /** 已破锁角色集合（幂等：重复出示提示已解锁，不再重复破锁/重复广播）。 */
+        final java.util.Set<String> unlockedRoles = java.util.concurrent.ConcurrentHashMap.newKeySet();
+        /** 破锁记录（{role, clue_id, by, ts}）——解锁日志随快照落库（unlockedLocks）。 */
+        final List<Map<String, Object>> unlockedLocks = new java.util.concurrent.CopyOnWriteArrayList<>();
+        /** 心锁是否已推导固化（懒推导一次；快照恢复后置 true 防重新推导覆盖已破锁状态）。 */
+        volatile boolean roleLocksComputed = false;
+
+        // ═══════════════ P-0816-T（阶段三 API-9，决策 C8）：出示证据状态 ═══════════════
+        // 幂等记录：已出示线索 id 集合（重复出示提示已出示，不重复插入/不重复广播）。
+        // 状态随快照整包 JSON 加键落库、不加表（对齐 decorStates 范式；旧快照无此键 → 恢复空集合）。
+        final java.util.Set<String> presentedClues = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
         public Map<String, Object> toMap(String playerName) {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -565,7 +632,8 @@ public class ScriptGameService {
     }
 
     /** P-0802-P3（改造方案 Phase 3）：六参 @Autowired 构造 —— 追加 PlayerIdentityService（快照 player_id_bindings 重映射用）；
-     *  旧五参构造委托本构造 null（既有测试/调用点零改动）。 */
+     *  旧五参构造委托本构造 null（既有测试/调用点零改动）；
+     *  P-0818-B/E 修正：地图生成回到主链路 DeepSeek（mapService = new ScriptMapService(llmClient)）。 */
     @Autowired
     public ScriptGameService(LLMClient llmClient, ApprovalService approvalService,
                              DatabaseService databaseService, SSEController sse,
@@ -932,6 +1000,8 @@ public class ScriptGameService {
             // P-0803-K: 同步当前图足迹（切图后按图隔离恢复）
             game.searchedByMap.computeIfAbsent(game.currentMapId, k -> new java.util.LinkedHashSet<>()).add(location);
             saveSnapshot(game);
+            // P-0816-G：搜证足迹变化 → script_goal 定向推送（目标徽章「已搜证 x/y」实时刷新；§3.3 触发时机：搜证）
+            broadcastGoal(game);
             result.put("found", List.of());
             result.put("clues", List.of());
             result.put("result", "该地点没有更多可搜证线索");
@@ -967,6 +1037,8 @@ public class ScriptGameService {
         game.searchedByMap.computeIfAbsent(game.currentMapId, k -> new java.util.LinkedHashSet<>()).add(location);
         // C3: 状态变更 → 快照落库（搜证结果/AP 扣减可恢复）
         saveSnapshot(game);
+        // P-0816-G：搜证足迹变化 → script_goal 定向推送（目标徽章「已搜证 x/y」实时刷新；§3.3 触发时机：搜证）
+        broadcastGoal(game);
 
         // P-0805-B（WebSearch 搜证）：开启时对首条线索做联网背景检索（物证联网检索玩法；
         // 失败静默降级——不影响搜证结果，仅追加 web_results 字段）
@@ -992,6 +1064,838 @@ public class ScriptGameService {
         result.put("ap", game.playerAp.get(player));
         result.put("ap_cost", cost);
         return result;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  P-0816-G（UI 重设计阶段一）：行动建议集（API-1/2，§3.2）+ 投票进度聚合（API-10）
+    //  + 目标 HUD 规则模板（API-13）+ 弃票扩展（API-11，见 castVote 4 参）
+    //  ═══════════════════════════════════════════════════════════
+
+    /**
+     * API-1（GET /api/script/actions）：行动建议集 —— 搜证阶段主区「行动选择条」数据源（服务端权威生成）。
+     *
+     * <p>生成规则：{@code ask}=未托管且未私聊过的其他玩家（去重最近目标，前 maxAsk）；
+     * {@code research}=已搜证地点（回看，扣 AP 0/U7）优先 + 未搜地点（引导搜证，预估扣线索 ap_cost 之和）；
+     * {@code present}=本人持有的可出示线索（前 maxPresent；仅讨论阶段可用，搜证阶段 disabled+reason）。
+     * enabled=false 时携带 reason（AP 不足 / 出示需讨论阶段等）。阈值类建议配置化
+     * （roleplay.game.script.action.*，决策 U6：yml 双份 + AppConfig，MVP 常量占位）。
+     *
+     * <p>阶段口径：INVESTIGATION 生成三类；DISCUSSION 生成 ask/present；其余阶段返回空 actions
+     * （前端隐藏行动条，不报错）。
+     */
+    public Map<String, Object> listActions(String sessionId, String player) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
+        if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
+
+        List<Map<String, Object>> actions = new ArrayList<>();
+        int ap = game.playerAp.getOrDefault(player, 0);
+        int apMax = game.playerApMax.getOrDefault(player, 0);
+
+        // ask：未托管且未私聊过的其他玩家（去重最近目标，前 maxAsk）
+        if ((game.phase == Phase.INVESTIGATION || game.phase == Phase.DISCUSSION)) {
+            for (String other : game.players) {
+                if (countType(actions, "ask") >= actionMaxAsk) break;
+                if (other.equals(player) || game.trustees.contains(other)) continue;
+                if (game.privateChats.containsKey(privateChatKey(player, other))) continue; // 已私聊过不再建议
+                Map<String, Object> a = new LinkedHashMap<>();
+                a.put("id", "ask|" + other);
+                a.put("type", "ask");
+                a.put("target", other);
+                a.put("label", "去问" + other);
+                a.put("ap_cost", actionAskApCost);
+                if (ap < actionAskApCost) {
+                    a.put("enabled", false);
+                    a.put("reason", "行动点不足");
+                } else {
+                    a.put("enabled", true);
+                    a.put("reason", "");
+                }
+                actions.add(a);
+            }
+        }
+
+        // research：已搜证地点（回看）优先 + 未搜地点（引导），前 maxResearch（按 research 类型计数）
+        if (game.phase == Phase.INVESTIGATION) {
+            // 已搜过（回看优先）
+            for (String loc : game.locations) {
+                if (countType(actions, "research") >= actionMaxResearch) break;
+                if (!game.searchedLocations.contains(loc)) continue;
+                Map<String, Object> a = new LinkedHashMap<>();
+                a.put("id", "research|" + loc);
+                a.put("type", "research");
+                a.put("target", loc);
+                a.put("label", "回看" + loc);
+                a.put("ap_cost", actionReplayApCost);
+                if (ap < actionReplayApCost) {
+                    a.put("enabled", false);
+                    a.put("reason", "行动点不足");
+                } else {
+                    a.put("enabled", true);
+                    a.put("reason", "");
+                }
+                actions.add(a);
+            }
+            // 未搜过（引导搜证；预估扣费=该地点未持有可搜线索 ap_cost 之和，与 search 口径一致）
+            for (String loc : game.locations) {
+                if (countType(actions, "research") >= actionMaxResearch) break;
+                if (game.searchedLocations.contains(loc)) continue;
+                int cost = 0;
+                for (Map<String, Object> c : game.clues) {
+                    if (!loc.equals(c.get("location"))) continue;
+                    if (Boolean.TRUE.equals(c.get("public"))) continue;
+                    if (game.playerClues.getOrDefault(player, List.of()).contains(c.get("id"))) continue;
+                    cost += ScriptSchemaV1.apCost(c);
+                }
+                Map<String, Object> a = new LinkedHashMap<>();
+                a.put("id", "research|" + loc);
+                a.put("type", "research");
+                a.put("target", loc);
+                a.put("label", "去搜" + loc);
+                a.put("ap_cost", cost);
+                if (ap < cost) {
+                    a.put("enabled", false);
+                    a.put("reason", "行动点不足");
+                } else {
+                    a.put("enabled", true);
+                    a.put("reason", "");
+                }
+                actions.add(a);
+            }
+        }
+
+        // present：本人持有的可出示线索（前 maxPresent；仅讨论阶段可执行，搜证阶段 disabled 引导）
+        if ((game.phase == Phase.INVESTIGATION || game.phase == Phase.DISCUSSION)) {
+            for (Map<String, Object> c : game.heldCluesOf(player)) {
+                if (countType(actions, "present") >= actionMaxPresent) break;
+                String clueId = String.valueOf(c.getOrDefault("id", ""));
+                String title = String.valueOf(c.getOrDefault("title", clueId));
+                Map<String, Object> a = new LinkedHashMap<>();
+                a.put("id", "present|" + clueId);
+                a.put("type", "present");
+                a.put("target", clueId);
+                a.put("label", "出示" + title);
+                a.put("ap_cost", actionPresentApCost);
+                if (game.phase != Phase.DISCUSSION) {
+                    a.put("enabled", false);
+                    a.put("reason", "出示线索需在讨论阶段进行");
+                } else if (ap < actionPresentApCost) {
+                    a.put("enabled", false);
+                    a.put("reason", "行动点不足");
+                } else {
+                    a.put("enabled", true);
+                    a.put("reason", "");
+                }
+                actions.add(a);
+            }
+        }
+
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("phase", game.phase.name().toLowerCase());
+        r.put("actions", actions);
+        r.put("ap", ap);
+        r.put("ap_max", apMax);
+        return r;
+    }
+
+    /** 行动列表中指定类型条数（各类建议上限按类型独立计数，互不挤占）。 */
+    private static long countType(List<Map<String, Object>> actions, String type) {
+        return actions.stream().filter(a -> type.equals(a.get("type"))).count();
+    }
+
+    /** 玩家持有的指定线索对象（未持有返回 null）。 */
+    private Map<String, Object> heldClueById(ScriptGame game, String player, String clueId) {
+        for (Map<String, Object> c : game.heldCluesOf(player)) {
+            if (clueId != null && clueId.equals(c.get("id"))) return c;
+        }
+        return null;
+    }
+
+    /**
+     * API-2（POST /api/script/action）：行动执行统一入口 —— 按 action_id 分派，内部委托既有执行逻辑
+     * （search / privateSay / discussionSay），不重复造轮子（决策 U7/D3）：
+     * <ul>
+     *   <li>{@code ask|<target>} → 委托 privateSay（AI 应答 + 防自曝 + 私聊历史落库），扣 AP actionAskApCost</li>
+     *   <li>{@code research|<location>} → 未搜过委托 search（原路径扣线索 ap_cost 之和，AP 不足整次拒绝）；
+     *       已搜过返回回看 {replayed:true, clues:[...]} 不扣 AP（决策 U7）</li>
+     *   <li>{@code present|<clue_id>} → 委托 discussionSay（出示线索入讨论流），扣 AP actionPresentApCost</li>
+     * </ul>
+     * 行动扣 AP 均走 playerAp 扣减 + saveSnapshot（沿用 C2 纪律）。
+     */
+    public Map<String, Object> executeAction(String sessionId, String player, String actionId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
+        if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
+        if (actionId == null || actionId.isBlank()) return Map.of("error", "缺少行动标识");
+
+        String[] parts = actionId.split("\\|", 2);
+        if (parts.length < 2) return Map.of("error", "未知行动：" + actionId);
+        String type = parts[0];
+        String target = parts[1];
+        int ap = game.playerAp.getOrDefault(player, 0);
+
+        switch (type) {
+            case "ask" -> {
+                if (game.phase != Phase.INVESTIGATION && game.phase != Phase.DISCUSSION) {
+                    return Map.of("error", "当前阶段不能问人");
+                }
+                if (!game.players.contains(target) || target.equals(player)) {
+                    return Map.of("error", "无效的问人目标：" + target);
+                }
+                if (ap < actionAskApCost) return Map.of("error", ERR_AP_INSUFFICIENT);
+                Map<String, Object> privateRes = privateSay(sessionId, player, target, "（行动：主动搭话）");
+                if (privateRes.containsKey("error")) return privateRes;
+                game.playerAp.put(player, ap - actionAskApCost);
+                saveSnapshot(game);
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("ok", true);
+                r.put("action_id", actionId);
+                r.put("ap", game.playerAp.get(player));
+                r.put("ap_cost", actionAskApCost);
+                r.put("result", "你去找" + target + "搭话…");
+                r.put("reply", privateRes.getOrDefault("reply", ""));
+                r.put("clues", List.of());
+                r.put("replayed", false);
+                r.put("presented", false);
+                return r;
+            }
+            case "research" -> {
+                if (game.phase != Phase.INVESTIGATION) return Map.of("error", "当前不是搜证阶段");
+                if (!game.locations.contains(target)) return Map.of("error", "未知地点：" + target);
+                if (!game.searchedLocations.contains(target)) {
+                    // 未搜过 → 委托既有 search（原路径扣 AP=线索 ap_cost 之和；AP 不足整次拒绝不部分授予）
+                    Map<String, Object> searchRes = search(sessionId, player, target);
+                    if (searchRes.containsKey("error")) return searchRes;
+                    if (String.valueOf(searchRes.getOrDefault("result", "")).contains(ERR_AP_INSUFFICIENT)) {
+                        return Map.of("error", ERR_AP_INSUFFICIENT,
+                                "ap", searchRes.get("ap"), "ap_cost", searchRes.get("ap_cost"));
+                    }
+                    searchRes.put("ok", true);
+                    searchRes.put("action_id", actionId);
+                    searchRes.put("replayed", false);
+                    searchRes.put("presented", false);
+                    return searchRes;
+                }
+                // 已搜过 → 回看不扣 AP（U7），返回该地点回看线索（公开 + 本人持有）
+                if (ap < actionReplayApCost) return Map.of("error", ERR_AP_INSUFFICIENT);
+                List<Map<String, Object>> clues = new ArrayList<>();
+                for (Map<String, Object> c : game.clues) {
+                    if (!target.equals(c.get("location"))) continue;
+                    boolean visible = Boolean.TRUE.equals(c.get("public"))
+                            || game.playerClues.getOrDefault(player, List.of()).contains(c.get("id"));
+                    if (visible) {
+                        clues.add(Map.of("id", c.get("id"), "content", c.get("content"),
+                                "ap_cost", ScriptSchemaV1.apCost(c)));
+                    }
+                }
+                game.playerAp.put(player, ap - actionReplayApCost);
+                saveSnapshot(game);
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("ok", true);
+                r.put("action_id", actionId);
+                r.put("ap", game.playerAp.get(player));
+                r.put("ap_cost", actionReplayApCost);
+                r.put("result", "回看该地点已发现的线索");
+                r.put("clues", clues);
+                r.put("replayed", true);
+                r.put("presented", false);
+                return r;
+            }
+            case "present" -> {
+                if (game.phase != Phase.DISCUSSION) return Map.of("error", "当前不是讨论阶段");
+                Map<String, Object> clueObj = heldClueById(game, player, target);
+                if (clueObj == null) return Map.of("error", "未持有该线索：" + target);
+                if (ap < actionPresentApCost) return Map.of("error", ERR_AP_INSUFFICIENT);
+                String title = String.valueOf(clueObj.getOrDefault("title", clueObj.getOrDefault("id", target)));
+                Map<String, Object> sayRes = discussionSay(sessionId, player, "出示了线索 " + title, false);
+                if (sayRes.containsKey("error")) return sayRes;
+                game.playerAp.put(player, ap - actionPresentApCost);
+                saveSnapshot(game);
+                Map<String, Object> r = new LinkedHashMap<>();
+                r.put("ok", true);
+                r.put("action_id", actionId);
+                r.put("ap", game.playerAp.get(player));
+                r.put("ap_cost", actionPresentApCost);
+                r.put("result", "你出示了线索 " + title);
+                r.put("clue_id", target);
+                r.put("replayed", false);
+                r.put("presented", true);
+                return r;
+            }
+            default -> {
+                return Map.of("error", "未知行动：" + actionId);
+            }
+        }
+    }
+
+    /**
+     * API-10（GET /api/script/vote/status）：投票进度聚合 —— 投票页「已投票 x/y」+ 右栏统计条数据源。
+     * 只出聚合不出投票人（决策 C13：票面去向揭晓时才全量公开）。非 VOTE 阶段只回 {phase}（前端隐藏统计区）。
+     */
+    public Map<String, Object> voteStatus(String sessionId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (game.phase != Phase.VOTE) {
+            return Map.of("phase", game.phase.name().toLowerCase());
+        }
+        return buildVoteProgress(game);
+    }
+
+    /** 投票进度聚合载荷（API-10 响应 + script_vote_progress SSE 共用，单事实源）。 */
+    private Map<String, Object> buildVoteProgress(ScriptGame game) {
+        // 在线玩家（本局玩家 − 托管）：托管票已作废、不计入进度
+        List<String> eligible = new ArrayList<>();
+        for (String p : game.players) {
+            if (!game.trustees.contains(p)) eligible.add(p);
+        }
+        int voted = 0;
+        int abstained = 0;
+        List<String> pending = new ArrayList<>();
+        for (String p : eligible) {
+            if (game.votes.containsKey(p)) voted++;
+            else if (game.abstainedVoters.contains(p)) abstained++;
+            else pending.add(p);
+        }
+        // 候选人聚合：与 D6 countValidVotes 同口径（托管票忽略、票面归一为规范玩家名）；只出票数不出投票人
+        Map<String, Integer> count = countValidVotes(game);
+        List<Map<String, Object>> candidates = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : count.entrySet()) {
+            Map<String, Object> c = new LinkedHashMap<>();
+            c.put("name", e.getKey());
+            c.put("votes", e.getValue());
+            c.put("point", ""); // P2：由相关线索/讨论摘要推导（MVP 空，前端可隐藏）
+            candidates.add(c);
+        }
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("phase", game.phase.name().toLowerCase());
+        r.put("total", eligible.size());
+        r.put("voted", voted);
+        r.put("abstained", abstained);
+        r.put("pending", pending);
+        r.put("candidates", candidates);
+        r.put("trustees", new ArrayList<>(game.trustees));
+        return r;
+    }
+
+    /** P-0816-G：script_vote_progress 定向推送（投票/弃票/退出/托管变更时调用；前端 3s 轮询兜底，D1）。 */
+    private void broadcastVoteProgress(ScriptGame game) {
+        if (sse == null || game == null) return;
+        sse.broadcastScriptVoteProgress(game.sessionId, buildVoteProgress(game));
+    }
+
+    /**
+     * API-13（GET /api/script/goal）：目标 HUD 规则模板 —— 按 phase 返回 {title, progress, detail}
+     * （搜证 x/y、质询计数、投票 x/y），零新状态（决策 U4/U14）：依赖 searchedLocations / vote 进度 /
+     * press 计数（press 计数阶段二才有，MVP 返回 0 占位）。剧本杀侧独立轻量规则，不与一般模式
+     * SceneGoalService 统一（决策 U14）。
+     */
+    public Map<String, Object> getGoal(String sessionId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("phase", game.phase.name().toLowerCase());
+        r.put("goal", buildGoal(game));
+        return r;
+    }
+
+    /** 目标 HUD 规则模板载荷（API-13 响应 + script_goal SSE 共用，单事实源）。 */
+    private Map<String, Object> buildGoal(ScriptGame game) {
+        Map<String, Object> goal = new LinkedHashMap<>();
+        switch (game.phase) {
+            case INVESTIGATION -> {
+                int searched = game.searchedLocations.size();
+                int total = game.locations.size();
+                goal.put("title", "集齐线索");
+                goal.put("progress", Map.of("searched", searched, "total", total));
+                goal.put("detail", "已搜证 " + searched + "/" + total + " 处地点");
+            }
+            case DISCUSSION -> {
+                // P-0816-R（API-5 质询，决策 U4）：质询计数作进度 —— pressed 标记的发言条数（转录内
+                // pressed=true 去重计数；阶段二前无质询端点时返回 0 占位语义）
+                int pressedCount = 0;
+                for (Map<String, String> t : game.discussionTranscript) {
+                    if ("true".equals(t.get("pressed"))) pressedCount++;
+                }
+                goal.put("title", "找出矛盾发言");
+                goal.put("progress", Map.of("pressed", pressedCount));
+                goal.put("detail", "质询可疑发言，指出矛盾（已质询 " + pressedCount + " 条）");
+            }
+            case VOTE -> {
+                int voted = 0;
+                int total = 0;
+                for (String p : game.players) {
+                    if (game.trustees.contains(p)) continue;
+                    total++;
+                    if (game.votes.containsKey(p) || game.abstainedVoters.contains(p)) voted++;
+                }
+                goal.put("title", "指认真凶");
+                goal.put("progress", Map.of("voted", voted, "total", total));
+                goal.put("detail", "已投票 " + voted + "/" + total);
+            }
+            case REVEAL -> {
+                goal.put("title", "等待揭晓");
+                goal.put("progress", Map.of());
+                goal.put("detail", "投票结果即将揭晓");
+            }
+            case ENDED -> {
+                goal.put("title", "对局结束");
+                goal.put("progress", Map.of());
+                goal.put("detail", "本局已收官");
+            }
+            default -> { // SETUP
+                goal.put("title", "剧本准备中");
+                goal.put("progress", Map.of());
+                goal.put("detail", "剧本生成中，请稍候");
+            }
+        }
+        return goal;
+    }
+
+    /** P-0816-G：script_goal 定向推送（阶段切换/搜证/投票进度变化时调用；前端 3s 轮询兜底，D1）。 */
+    private void broadcastGoal(ScriptGame game) {
+        if (sse == null || game == null) return;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("phase", game.phase.name().toLowerCase());
+        payload.put("goal", buildGoal(game));
+        sse.broadcastScriptGoal(game.sessionId, payload);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    //  P-0816-R（UI 重设计阶段二 API-3/4/5/8，决策 U1/U2）：心锁 + 质询 + 关系矩阵
+    //  ═══════════════════════════════════════════════════════════
+
+    /**
+     * P-0816-R（API-3，决策 U1）：心锁列表 —— 左栏角色 🔒 标记数据源。
+     * 数据源：二期前规则推导过渡（线索 content/title 提及角色名 → 该角色 1 锁）；
+     * 终态 LLM 标注 `clues[].unlock_role` 预留字段（宽容解析：字符串/数组，角色 id → 角色名归一，
+     * 标注缺失/空白回退推导）。roleLocks 状态随快照落库、不加表（对齐 decorStates 范式）。
+     *
+     * @return {ok, locks: [{role, lock_count, unlock_clue_ids, unlocked}]}
+     */
+    public Map<String, Object> getLocks(String sessionId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        ensureRoleLocks(game);
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("locks", locksPayload(game));
+        return r;
+    }
+
+    /**
+     * P-0816-R（API-4，决策 U1）：出示证据破锁。
+     * 校验链：阶段（investigation/discussion）→ 玩家持有 clue_id（my_clues 归属）→
+     * 线索是否该角色的解锁线索（未匹配 → {error:"这张线索解不开 TA 的心锁"}）→ 破锁
+     * （lock_count 归零 + unlockedLocks 记录，随快照落库；成功后 SSE script_locks 广播新锁状态）。
+     * 破锁为一次性（幂等：重复出示提示已解锁）。
+     *
+     * @return {ok, role, unlocked, unlock_clue_id, message, locks[]}；错误 {error}（+phase）
+     */
+    public Map<String, Object> unlockLock(String sessionId, String player, String targetRole, String clueId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        ensureRoleLocks(game);
+        if (game.phase != Phase.INVESTIGATION && game.phase != Phase.DISCUSSION) {
+            return Map.of("error", "当前阶段不可破锁", "phase", game.phase.name().toLowerCase());
+        }
+        if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
+        if (targetRole == null || targetRole.isBlank()) return Map.of("error", "缺少目标角色");
+        if (!game.roles.contains(targetRole)) return Map.of("error", "目标角色不在本局");
+        if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
+        // 玩家持有线索校验（my_clues 归属：仅持有者能出示）
+        if (clueId == null || clueId.isBlank()
+                || !game.playerClues.getOrDefault(player, List.of()).contains(clueId)) {
+            return Map.of("error", "线索不存在或未持有");
+        }
+        // 线索是否该角色的解锁线索（未命中 → 明确错误）
+        if (!game.roleUnlockClues.getOrDefault(targetRole, List.of()).contains(clueId)) {
+            return Map.of("error", "这张线索解不开 TA 的心锁");
+        }
+        // 幂等：已破锁 → 提示已解锁（不重复破锁/不重复广播）
+        if (game.unlockedRoles.contains(targetRole)) {
+            Map<String, Object> dup = new LinkedHashMap<>();
+            dup.put("ok", true);
+            dup.put("role", targetRole);
+            dup.put("unlocked", true);
+            dup.put("already", true);
+            dup.put("unlock_clue_id", clueId);
+            dup.put("message", targetRole + " 的心锁早已解开");
+            dup.put("locks", locksPayload(game));
+            return dup;
+        }
+        // 破锁：锁数归零 + 记录 + 快照 + SSE
+        game.roleLocks.put(targetRole, 0);
+        game.unlockedRoles.add(targetRole);
+        Map<String, Object> record = new LinkedHashMap<>();
+        record.put("role", targetRole);
+        record.put("clue_id", clueId);
+        record.put("by", player);
+        record.put("ts", System.currentTimeMillis());
+        game.unlockedLocks.add(record);
+        saveSnapshot(game);
+        broadcastLocks(game);
+        log.info("Script game {} lock unlocked: role={} clue={} by={}", sessionId, targetRole, clueId, player);
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("role", targetRole);
+        r.put("unlocked", true);
+        r.put("unlock_clue_id", clueId);
+        r.put("message", targetRole + " 的心锁解开了！");
+        r.put("locks", locksPayload(game));
+        return r;
+    }
+
+    /**
+     * P-0816-R（API-5，决策 C7/D3）：质询发言 —— 对某角色发言打「质询」标记。
+     * pressed 标记写 discussionTranscript 条目（CopyOnWriteArrayList 并发安全容器，随快照落库）；
+     * 同一发言可被多人质询但幂等（同人同发言不重复标记）；讨论引擎运行中向被质询角色注入
+     * 「辩解」临时目标（复用 D-022 被点名注入路径 pri=100 衰减，对齐 SpeechGate 被质疑语义）；
+     * 成功后 SSE script_press 广播。
+     *
+     * @param messageId 被质询发言引用（转录下标，可 "msg_<n>" 前缀）；空 → 目标角色最近一条发言
+     * @return {ok, target, pressed, message_id, note}
+     */
+    public Map<String, Object> press(String sessionId, String player, String target, String messageId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (game.phase != Phase.DISCUSSION) return Map.of("error", "当前不是讨论阶段");
+        if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
+        if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
+        if (target == null || target.isBlank()) return Map.of("error", "缺少被质询角色");
+        if (!game.players.contains(target)) return Map.of("error", "目标不在本局");
+
+        // 定位被质询发言：message_id（转录/讨论组下标）→ 指定发言；缺省 → 目标角色最近一条发言。
+        // 讨论进行中：发言在讨论组 messageHistory（讨论结束才整体拷入 discussionTranscript），
+        // 双源同序查找；组内条目与最终转录为同一 Map 对象，pressed 标记在拷贝后自然保留。
+        Map<String, String> turn;
+        int idx;
+        if (messageId != null && !messageId.isBlank()) {
+            Integer parsed = parseTranscriptIndex(messageId);
+            if (parsed == null || parsed < 0) {
+                return Map.of("error", "该发言不存在");
+            }
+            idx = parsed;
+            turn = findTurnAt(game, idx);
+            if (turn == null) return Map.of("error", "该发言不存在");
+            String speaker = turn.get("speaker");
+            // 显式 message_id 时以该发言的实际 speaker 为准（target 参数仅作引导提示，宽容不报错）
+            if (speaker != null && !speaker.isBlank()) target = speaker;
+        } else {
+            idx = lastTurnIndexOf(game, target);
+            if (idx < 0) return Map.of("error", "目标角色尚无发言可质询");
+            turn = turnAt(game, idx);
+        }
+
+        // pressed 标记（并发安全容器，随快照落库）：pressed_by 逗号连接多人，同人幂等
+        String pressedBy = turn.getOrDefault("pressed_by", "");
+        boolean already = !pressedBy.isBlank()
+                && java.util.Arrays.asList(pressedBy.split(",")).contains(player);
+        if (!already) {
+            turn.put("pressed_by", pressedBy.isBlank() ? player : pressedBy + "," + player);
+            turn.put("pressed", "true");
+            saveSnapshot(game);
+        }
+
+        // 讨论引擎运行中 → 向被质询角色注入「辩解」临时目标（复用 D-022 被点名注入路径）
+        WorldDirectorService director = discussionDirectors.get(game.sessionId);
+        if (director != null) {
+            director.pushTemporaryGoal(target, GOAL_DEFEND, 100, priorityDecayRounds);
+        }
+
+        // SSE script_press 定向广播
+        if (sse != null) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("target", target);
+            payload.put("pressed_by", player);
+            payload.put("message_id", "msg_" + idx);
+            payload.put("contradiction", true);
+            sse.broadcastScriptPress(game.sessionId, payload);
+        }
+        log.info("Script game {} press: {} 质询 {} (msg_{})", sessionId, player, target, idx);
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("target", target);
+        r.put("pressed", true);
+        r.put("message_id", "msg_" + idx);
+        r.put("note", "已标记矛盾点并催促其辩解");
+        return r;
+    }
+
+    /**
+     * P-0816-T（阶段三 API-9，§3.2，决策 C8）：出示证据到对话流。
+     *
+     * <p>语义：讨论阶段玩家出示证据 —— 以「🃏 出示：CL-xx 线索名」system 行插入 discussionTranscript
+     * （全员可见；区别于 discussion_say clue=true 的「公开线索」——出示是展示动作，不改变线索归属）；
+     * 出示前校验线索存在且属于本局 + 玩家持有（公开线索全员可见可直接出示，对齐 §3.2 错误码
+     * 「未持有该线索」）；幂等（presentedClues 记录，重复出示提示已出示，不重复插入/不重复广播）；
+     * 成功后 SSE script_present 定向广播（player + clue_id + 摘要）。出示动作触发相关 AI 回应
+     * （复用 SpeechGate HUMAN_CLUE 触发路径——pendingHumanEvents 注入 clue=true 事件，对齐
+     * transferClue 讨论分支既有语义，讨论线程下轮排空消费）。
+     *
+     * @return {ok, presented:{clue_id,title}, transcript_id, already?, message}
+     */
+    public Map<String, Object> present(String sessionId, String player, String clueId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (game.phase != Phase.DISCUSSION) {
+            return Map.of("error", "当前不是讨论阶段", "phase", game.phase.name().toLowerCase());
+        }
+        if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
+        if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
+        if (clueId == null || clueId.isBlank()) return Map.of("error", "缺少线索 id");
+
+        // 线索存在且属于本局
+        Map<String, Object> clue = null;
+        for (Map<String, Object> c : game.clues) {
+            if (clueId.equals(c.get("id"))) { clue = c; break; }
+        }
+        if (clue == null) return Map.of("error", "线索不存在: " + clueId);
+
+        // 幂等：已出示过 → 提示已出示（不重复插入/不重复广播）
+        if (game.presentedClues.contains(clueId)) {
+            return Map.of("ok", true, "already", true,
+                    "presented", Map.of("clue_id", clueId, "title", str(clue.get("title"))),
+                    "message", "该线索已出示过");
+        }
+
+        // 持有校验：本人持有 或 公开线索（全员可见可直接出示）
+        boolean publicClue = Boolean.TRUE.equals(clue.get("public"));
+        if (!publicClue && !game.playerClues.getOrDefault(player, List.of()).contains(clueId)) {
+            return Map.of("error", "未持有该线索");
+        }
+
+        // 以 system 行插入讨论转录（全员可见）：「🃏 出示：CL-xx 线索名」
+        String title = str(clue.get("title"));
+        Map<String, String> turn = new LinkedHashMap<>();
+        turn.put("speaker", "system");
+        turn.put("message", "🃏 出示：" + clueId + " " + title);
+        turn.put("round", String.valueOf(game.round));
+        turn.put("by", player);
+        game.discussionTranscript.add(turn);
+
+        // 出示动作触发相关 AI 回应（HUMAN_CLUE 链：人类出示线索 → 相关 AI 按动机触发发言）
+        Map<String, Object> ev = new LinkedHashMap<>();
+        ev.put("player", player);
+        ev.put("text", player + " 出示了线索「" + title + "」");
+        ev.put("clue", true);
+        ev.put("ts", System.currentTimeMillis());
+        game.pendingHumanEvents.add(ev);
+
+        // 幂等记录 + 快照落库（新状态随快照整包 JSON 加键、不加表）
+        game.presentedClues.add(clueId);
+        saveSnapshot(game);
+
+        // SSE script_present 定向广播（player + clue_id + 摘要；前端对话流「🃏 出示」系统行）
+        if (sse != null) {
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("player", player);
+            payload.put("clue_id", clueId);
+            payload.put("title", title);
+            payload.put("target", "");
+            sse.broadcastScriptPresent(game.sessionId, payload);
+        }
+        log.info("Script game {} present: {} 出示 {}「{}」", sessionId, player, clueId, title);
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("presented", Map.of("clue_id", clueId, "title", title));
+        r.put("transcript_id", "msg_" + (game.discussionTranscript.size() - 1));
+        r.put("message", "已出示 " + clueId + " " + title);
+        return r;
+    }
+
+    /**
+     * P-0816-R（API-8，决策 U2 MVP 内容推导）：关系矩阵 —— 右栏逻辑链 Tab 数据源。
+     * 服务端内容推导（零生成器改动）：线索 content/title 提及角色名 → ★ 直接关联；
+     * 线索持有者所扮演角色 → ◯ 持有；其余 –。二期切 LLM 标注 clues[].related_roles[]（预留字段，
+     * 宽容解析缺失/空白回退本推导）。phase 无关（搜证/讨论/投票均可用），不泄 secret。
+     *
+     * @return {ok, roles[], clues[], matrix{role:{clue:mark}}, relations[{from, clue, type, reason}]}
+     */
+    public Map<String, Object> getRelations(String sessionId) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        Map<String, Object> r = new LinkedHashMap<>();
+        r.put("ok", true);
+        r.put("roles", new ArrayList<>(game.roles));
+        List<String> clueIds = new ArrayList<>();
+        for (Map<String, Object> c : game.clues) clueIds.add(str(c.get("id")));
+        r.put("clues", clueIds);
+        // 持有者角色：clue id → 持有玩家 → 角色（仅本人持有可见的线索；公开线索无持有者概念）
+        Map<String, String> holderRoleByClue = new LinkedHashMap<>();
+        for (Map.Entry<String, List<String>> e : game.playerClues.entrySet()) {
+            String holderRole = game.assignments.getOrDefault(e.getKey(), "");
+            if (holderRole.isBlank()) continue;
+            for (String cid : e.getValue()) holderRoleByClue.putIfAbsent(cid, holderRole);
+        }
+        Map<String, Map<String, String>> matrix = new LinkedHashMap<>();
+        List<Map<String, Object>> relations = new ArrayList<>();
+        for (String role : game.roles) {
+            Map<String, String> row = new LinkedHashMap<>();
+            for (Map<String, Object> c : game.clues) {
+                String cid = str(c.get("id"));
+                String text = str(c.get("content")) + " " + str(c.get("title"));
+                String mark = "–";
+                if (!text.isBlank() && text.contains(role)) {
+                    mark = "★";
+                    String snippet = (str(c.get("content")).isBlank() ? str(c.get("title")) : str(c.get("content")));
+                    relations.add(relationRow(role, cid, "direct",
+                            "内容提及（" + shortText(snippet, 26) + "）"));
+                } else if (role.equals(holderRoleByClue.get(cid))) {
+                    mark = "◯";
+                    relations.add(relationRow(role, cid, "holder", "持有该线索"));
+                }
+                row.put(cid, mark);
+            }
+            matrix.put(role, row);
+        }
+        r.put("matrix", matrix);
+        r.put("relations", relations);
+        return r;
+    }
+
+    /** 关系矩阵行（from=角色名，clue=线索 id，type=direct|holder，reason=推导依据）。 */
+    private static Map<String, Object> relationRow(String role, String clueId, String type, String reason) {
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("from", role);
+        row.put("clue", clueId);
+        row.put("type", type);
+        row.put("reason", reason);
+        return row;
+    }
+
+    /** 字符串截断（关系矩阵 reason 展示用；null/空白返回空串）。 */
+    private static String shortText(String s, int max) {
+        if (s == null || s.isBlank()) return "";
+        return s.length() <= max ? s : s.substring(0, max);
+    }
+
+    /**
+     * 心锁懒推导（一次性）：线索 content/title 提及角色名 → 该角色 1 锁（U1 规则推导过渡）；
+     * 终态 LLM 标注 clues[].unlock_role（字符串/数组，宽容解析：角色 id → 角色名归一，
+     * 标注存在且合法则优先，否则回退推导）。已推导（roleLocksComputed）后不再重算，
+     * 防止覆盖已破锁状态。
+     */
+    private void ensureRoleLocks(ScriptGame game) {
+        if (game.roleLocksComputed) return;
+        synchronized (game) {
+            if (game.roleLocksComputed) return;
+            Map<String, Integer> counts = new LinkedHashMap<>();
+            Map<String, List<String>> unlockClues = new LinkedHashMap<>();
+            for (Map<String, Object> clue : game.clues) {
+                String cid = str(clue.get("id"));
+                if (cid.isBlank()) continue;
+                String text = str(clue.get("content")) + " " + str(clue.get("title"));
+                List<String> targets = new ArrayList<>();
+                // 终态 LLM 标注 clues[].unlock_role：字符串或数组；宽容解析
+                Object ur = clue.get("unlock_role");
+                if (ur instanceof List<?> list) {
+                    for (Object o : list) targets.add(str(o));
+                } else if (ur != null) {
+                    targets.add(str(ur));
+                }
+                // 标注缺失/空白 → 规则推导（content/title 提及角色名 → 该角色 1 锁）
+                if (targets.isEmpty()) {
+                    for (String role : game.roles) {
+                        if (!role.isBlank() && text.contains(role)) targets.add(role);
+                    }
+                }
+                for (String t : targets) {
+                    if (t.isBlank()) continue;
+                    // 角色 id → 角色名 归一（LLM 可能标注 role_1 而非「管家」）
+                    String roleName = game.roles.contains(t) ? t : game.roleNamesById.getOrDefault(t, "");
+                    if (roleName.isBlank()) continue; // 标注了不存在的角色 → 忽略
+                    counts.merge(roleName, 1, Integer::sum);
+                    unlockClues.computeIfAbsent(roleName, k -> new ArrayList<>()).add(cid);
+                }
+            }
+            game.roleLocks.putAll(counts);
+            for (Map.Entry<String, List<String>> e : unlockClues.entrySet()) {
+                game.roleUnlockClues.put(e.getKey(), new ArrayList<>(e.getValue()));
+            }
+            game.roleLocksComputed = true;
+            log.info("Script game {} role locks derived: {}", game.sessionId, counts);
+        }
+    }
+
+    /** API-3/4 响应与 SSE 共用的锁状态载荷（仅含锁数>0 或已破锁的角色，未锁角色不出现）。 */
+    private List<Map<String, Object>> locksPayload(ScriptGame game) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Map.Entry<String, Integer> e : game.roleLocks.entrySet()) {
+            String role = e.getKey();
+            boolean unlocked = game.unlockedRoles.contains(role);
+            if (e.getValue() <= 0 && !unlocked) continue;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("role", role);
+            row.put("lock_count", e.getValue());
+            row.put("unlock_clue_ids", new ArrayList<>(game.roleUnlockClues.getOrDefault(role, List.of())));
+            row.put("unlocked", unlocked);
+            out.add(row);
+        }
+        return out;
+    }
+
+    /** P-0816-R：script_locks 定向推送（破锁成功后广播新锁状态；前端 3s 轮询 GET /api/script/locks 兜底）。 */
+    private void broadcastLocks(ScriptGame game) {
+        if (sse == null || game == null) return;
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("role", "");
+        payload.put("lock_count", 0);
+        payload.put("unlocked", true);
+        payload.put("locks", locksPayload(game));
+        sse.broadcastScriptLocks(game.sessionId, payload);
+    }
+
+    /** 转录下标解析（"msg_3" / "3" 均接受；非法返回 null）。 */
+    private static Integer parseTranscriptIndex(String messageId) {
+        String s = messageId.trim();
+        if (s.startsWith("msg_")) s = s.substring(4);
+        try {
+            return Integer.valueOf(s);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /** 按下标定位发言：转录优先，其次活动讨论组实时历史（两源同序，前端 msg_<i> 下标一致）。 */
+    private Map<String, String> findTurnAt(ScriptGame game, int idx) {
+        if (idx < game.discussionTranscript.size()) return game.discussionTranscript.get(idx);
+        ConversationGroup g = liveDiscussionGroup(game);
+        if (g == null) return null;
+        List<Map<String, String>> history = g.getMessageHistory();
+        return idx < history.size() ? history.get(idx) : null;
+    }
+
+    /** 目标角色最近一条发言的下标（转录 ∪ 活动讨论组实时历史；无发言返回 -1）。 */
+    private int lastTurnIndexOf(ScriptGame game, String target) {
+        // 讨论组实时历史（讨论进行中时优先——转录此时为空）
+        ConversationGroup g = liveDiscussionGroup(game);
+        if (g != null) {
+            List<Map<String, String>> history = g.getMessageHistory();
+            for (int i = history.size() - 1; i >= 0; i--) {
+                if (target.equals(history.get(i).get("speaker"))) return i;
+            }
+        }
+        for (int i = game.discussionTranscript.size() - 1; i >= 0; i--) {
+            if (target.equals(game.discussionTranscript.get(i).get("speaker"))) return i;
+        }
+        return -1;
+    }
+
+    /** 按下标取发言条目（findTurnAt 的简化调用；已由调用方保证存在）。 */
+    private Map<String, String> turnAt(ScriptGame game, int idx) {
+        return findTurnAt(game, idx);
+    }
+
+    /** 本局活动讨论组（讨论引擎运行中才有；无组返回 null）。 */
+    private ConversationGroup liveDiscussionGroup(ScriptGame game) {
+        ConversationManager cm = discussionConversations.get(game.sessionId);
+        if (cm == null) return null;
+        return cm.getActiveGroup(DISCUSSION_GROUP_PREFIX + game.sessionId);
     }
 
     /**
@@ -1148,7 +2052,7 @@ public class ScriptGameService {
         int effW = width > 0 ? width : (game.mapWidth > 0 ? game.mapWidth : mapDefaultWidth);
         int effH = height > 0 ? height : (game.mapHeight > 0 ? game.mapHeight : mapDefaultHeight);
         // P-0810-21（P0-3）：尺寸下限 clamp（显式传参 / 对局已定尺寸 / 配置默认统一生效）
-        int[] clamped = clampToMin(effW, effH, sessionId);
+        int[] clamped = clampToBounds(effW, effH, sessionId);
         effW = clamped[0];
         effH = clamped[1];
         String effTheme = (theme == null || theme.isBlank()) ? game.name : theme;
@@ -1191,7 +2095,7 @@ public class ScriptGameService {
             int effW = width > 0 ? width : (game.mapWidth > 0 ? game.mapWidth : mapDefaultWidth);
             int effH = height > 0 ? height : (game.mapHeight > 0 ? game.mapHeight : mapDefaultHeight);
             // P-0810-21（P0-3）：尺寸下限 clamp（switchMap 自动生成目标图同样生效）
-            int[] clamped = clampToMin(effW, effH, game.sessionId);
+            int[] clamped = clampToBounds(effW, effH, game.sessionId);
             effW = clamped[0];
             effH = clamped[1];
             String effTheme = (theme == null || theme.isBlank()) ? game.name : theme;
@@ -1564,13 +2468,34 @@ public class ScriptGameService {
         return result;
     }
 
-    /** Phase 3-4: Cast vote for suspect. */
+    /** Phase 3-4: Cast vote for suspect（既有 3 参契约，向后兼容：现有调用不变）。 */
     public String castVote(String sessionId, String voter, String suspect) {
+        return castVote(sessionId, voter, suspect, false);
+    }
+
+    /**
+     * P-0816-G（UI 重设计阶段一 API-11，决策 U8）：投票 4 参重载 —— {@code abstain=true} 时弃票。
+     *
+     * <p>弃票语义：写入独立 {@code abstainedVoters} 集合（不污染 votes 票型统计）——quorum 在线数仍计、
+     * 不参与 mostVoted 统计（对齐 D-037 超时弃票语义）；重复投票/重复弃票拒绝（abstain 分支新语义，
+     * 既有 3 参路径行为逐字节不变——仍允许改票覆盖，向后兼容）。
+     */
+    public String castVote(String sessionId, String voter, String suspect, boolean abstain) {
         ScriptGame game = games.get(sessionId);
         if (game == null) return "游戏不存在";
         if (game.phase != Phase.VOTE) return "当前不是投票阶段";
         // P1（任务 2a）：托管玩家（退出/断线/投票超时无操作 → AI 代管）票作废 —— 直接拒绝
         if (game.trustees.contains(voter)) return voter + " 已托管（AI 代管），投票作废";
+        if (abstain) {
+            // 弃票分支：suspect 可空；已投过票/已弃过票拒绝（防重复表态）
+            if (game.votes.containsKey(voter)) return "你已投票，不能重复投票";
+            if (game.abstainedVoters.contains(voter)) return "你已弃票，不能重复投票";
+            game.abstainedVoters.add(voter);
+            saveSnapshot(game);
+            broadcastVoteProgress(game);
+            broadcastGoal(game);
+            return voter + " 你已弃票（跳过本轮表决）";
+        }
         if (voter.equals(suspect)) return "不能投自己";
         // D6: 只接受本局玩家名或角色名，杜绝无效/残缺票面导致揭晓误判
         if (suspect == null || suspect.isBlank()) return "投票对象不能为空";
@@ -1578,8 +2503,13 @@ public class ScriptGameService {
             return "投票对象无效（必须是本局玩家或角色名）：" + suspect;
         }
         game.votes.put(voter, suspect);
+        // 已弃票后改投正常票 → 移出弃票集合（最终状态=已投，避免双重计数）
+        game.abstainedVoters.remove(voter);
         // C3: 状态变更 → 快照落库（票型可恢复）
         saveSnapshot(game);
+        // P-0816-G：投票进度变化 → script_vote_progress / script_goal 定向推送（前端 3s 轮询兜底，D1）
+        broadcastVoteProgress(game);
+        broadcastGoal(game);
         return voter + " 投票给了 " + suspect;
     }
 
@@ -1619,6 +2549,9 @@ public class ScriptGameService {
                 result.put("vote_timeout", true);
                 // C3: 托管标记是状态变更 → 快照（重启恢复后仍保持托管）
                 saveSnapshot(game);
+                // P-0816-G：超时转托管 = 托管变更 → script_vote_progress / script_goal 定向推送（§3.3 触发时机）
+                broadcastVoteProgress(game);
+                broadcastGoal(game);
             }
         }
         String timeoutNote = abstained.isEmpty()
@@ -2737,9 +3670,14 @@ public class ScriptGameService {
         boolean newly = game.trustees.add(player);
         if (newly) {
             game.votes.remove(player); // 托管 → 已投的票作废
+            // P-0816-G：托管 → 弃票集合同步移除（避免统计口径双重计数；弃票不参与票型本就无影响，清理保持一致性）
+            game.abstainedVoters.remove(player);
             // C3: 状态变更 → 快照（重启恢复后托管状态不丢）
             saveSnapshot(game);
             broadcastStatus(game);
+            // P-0816-G：托管变更影响投票进度 → script_vote_progress / script_goal 定向推送（§3.3 触发时机：leave）
+            broadcastVoteProgress(game);
+            broadcastGoal(game);
         }
         Map<String, Object> res = new LinkedHashMap<>();
         res.put("ok", true);
@@ -2831,6 +3769,8 @@ public class ScriptGameService {
         if (sse != null) {
             sse.broadcastScriptPhase(game.sessionId, phase);
         }
+        // P-0816-G：阶段切换 → script_goal 同步推送（顶栏 🎯 目标徽章随阶段更新；§3.3 触发时机：阶段切换）
+        broadcastGoal(game);
         // 全局横幅通道（正式版：announcement SYSTEM 级广播，前端 AnnouncementBanner 消费，
         // 无条件启用不再依赖 speech-mode；总开关 roleplay.broadcast.script-phase-broadcast）
         broadcastSystemAnnouncement(game, phase);
@@ -3045,6 +3985,24 @@ public class ScriptGameService {
         return result;
     }
 
+    /**
+     * P-0816-P1（403 根因修复）：确保对局在内存中 —— 内存缺失时尝试从持久化快照恢复
+     * （重启后旧对局仅剩快照，player_key 反查/playerSessions 均失效 → 显式 session_id 定位后
+     * 先恢复再鉴权，否则 checkPlayerAccess 返回「游戏不存在」403）。恢复失败返回 null，
+     * 由调用方按既有错误路径处理；已在内存则零开销直返。
+     */
+    public ScriptGame ensureGameLoaded(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return null;
+        ScriptGame game = games.get(sessionId);
+        if (game != null) return game;
+        try {
+            return restoreFromSnapshot(sessionId);
+        } catch (Exception e) {
+            log.warn("Script game {} snapshot restore failed: {}", sessionId, e.getMessage());
+            return null;
+        }
+    }
+
     /** C3: 由 playerKey 反查其所属对局 sessionId（仅内存对局；重启后请用 game_id/room_code 定位）。 */
     public String findSessionByPlayerKey(String playerKey) {
         if (playerKey == null || playerKey.isBlank()) return "";
@@ -3153,6 +4111,9 @@ public class ScriptGameService {
         content.put("player_talkativeness", new LinkedHashMap<>(game.playerTalkativeness));
         content.put("player_keys", new LinkedHashMap<>(game.playerKeys));
         content.put("votes", new LinkedHashMap<>(game.votes));
+        // P-0816-G（UI 重设计阶段一 API-11 弃票，决策 U8）：弃票集合随快照整包 JSON 加键落库
+        // （零迁移，对齐 decorStates 范式；旧快照无此键 → 恢复空集合）
+        content.put("abstained_voters", new ArrayList<>(game.abstainedVoters));
         content.put("locations", new ArrayList<>(game.locations));
         content.put("winner", game.winner);
         content.put("simulation_started", game.simulationStarted);
@@ -3171,6 +4132,16 @@ public class ScriptGameService {
         // P-0814-H: 热点交互一次性 flag + decor 实例运行时状态随快照落库（旧快照无此键 → 恢复为空，零影响）
         content.put("decor_flags", new ArrayList<>(game.decorFlags));
         content.put("decor_states", new LinkedHashMap<>(game.decorStates));
+        // P-0816-R（UI 重设计阶段二 API-3/4，决策 U1）：心锁状态随快照整包 JSON 加键落库
+        // （对齐 decorStates 范式零迁移；旧快照无此键 → 恢复后下次访问按推导惰性重建）
+        content.put("role_locks", new LinkedHashMap<>(game.roleLocks));
+        content.put("role_unlock_clue_ids", new LinkedHashMap<>(game.roleUnlockClues));
+        content.put("unlocked_roles", new ArrayList<>(game.unlockedRoles));
+        content.put("unlocked_locks", new ArrayList<>(game.unlockedLocks));
+        content.put("role_locks_computed", game.roleLocksComputed);
+        // P-0816-T（阶段三 API-9，决策 C8）：已出示线索集合随快照整包 JSON 加键落库
+        // （对齐 decorStates 范式零迁移；旧快照无此键 → 恢复空集合，幂等语义保持）
+        content.put("presented_clues", new ArrayList<>(game.presentedClues));
         // P-0803-K: 多图注册表随快照落库（每图数据 + 溯源 + 足迹；旧快照无此键 → 恢复空注册表仅当前图）
         List<Map<String, Object>> mapsList = new ArrayList<>();
         for (Map.Entry<String, Map<String, Object>> e : game.maps.entrySet()) {
@@ -3263,6 +4234,8 @@ public class ScriptGameService {
         }
         game.playerKeys.putAll(strMap(c.get("player_keys")));
         game.votes.putAll(strMap(c.get("votes")));
+        // P-0816-G：弃票集合快照恢复（旧快照无此键 → 空集合，零影响）
+        game.abstainedVoters.addAll(strList(c.get("abstained_voters")));
         game.locations.addAll(strList(c.get("locations")));
         game.winner = str(c.get("winner"));
         game.simulationStarted = boolOf(c.get("simulation_started"), false);
@@ -3313,6 +4286,37 @@ public class ScriptGameService {
                 }
             }
         }
+        // P-0816-R（API-3/4）：心锁状态快照恢复（旧快照无此键 → 空状态 + roleLocksComputed=false，
+        // 下次访问按推导惰性重建，零迁移；已恢复的状态不再重新推导覆盖已破锁记录）
+        if (c.get("role_locks") instanceof Map<?, ?> rl) {
+            for (Map.Entry<?, ?> e : rl.entrySet()) {
+                if (e.getKey() != null && e.getValue() instanceof Number n) {
+                    game.roleLocks.put(str(e.getKey()), n.intValue());
+                }
+            }
+        }
+        if (c.get("role_unlock_clue_ids") instanceof Map<?, ?> ruc) {
+            for (Map.Entry<?, ?> e : ruc.entrySet()) {
+                if (e.getKey() == null || !(e.getValue() instanceof List<?> l)) continue;
+                List<String> ids = new ArrayList<>();
+                for (Object o : l) {
+                    String s = str(o);
+                    if (!s.isBlank()) ids.add(s);
+                }
+                game.roleUnlockClues.put(str(e.getKey()), ids);
+            }
+        }
+        game.unlockedRoles.addAll(strList(c.get("unlocked_roles")));
+        if (c.get("unlocked_locks") instanceof List<?> ul) {
+            for (Object o : ul) {
+                if (o instanceof Map<?, ?> mm) game.unlockedLocks.add(mapOf(mm));
+            }
+        }
+        game.roleLocksComputed = boolOf(c.get("role_locks_computed"),
+                !game.roleLocks.isEmpty() || !game.unlockedRoles.isEmpty());
+        // P-0816-T（阶段三 API-9，决策 C8）：已出示线索集合快照恢复（旧快照无此键 → 空集合，
+        // 幂等语义保持——恢复后重复出示仍提示已出示）
+        game.presentedClues.addAll(strList(c.get("presented_clues")));
         // P-0803-K: 多图注册表恢复（旧快照无 maps 键 → 空注册表；map_data 存在时以当前图为唯一项）
         game.currentMapId = str(c.get("current_map_id"));
         if (c.get("maps") instanceof List<?> ml) {

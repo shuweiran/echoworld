@@ -99,6 +99,8 @@ public final class MapContract {
         m.put("corridors", listOf(raw.get("corridors")));
         m.put("zones", listOf(raw.get("zones")));
         m.put("spawn_points", listOf(raw.get("spawn_points")));
+        // P-0817-G（房间模式）：房间出口表（可选，缺失兜底为空；由 MapExits 确定性推导）
+        m.put("exits", listOf(raw.get("exits")));
 
         // v0.2 扩展键（可选，缺失兜底为空；宽容解析不做白名单）
         Object tp = raw.get("tileProps");
@@ -107,6 +109,11 @@ public final class MapContract {
         Object sm = raw.get("spawnMarkers");
         m.put("spawnMarkers", sm instanceof Map<?, ?> ? sm : Map.of());
         m.put("warps", listOf(raw.get("warps")));
+        // P-0817-L（结构树契约）：structure 可选键——缺失 = 普通地图（零破坏）；
+        // 存在则原样透传（生成语义元数据），业务校验走 StructureValidator（宽容解析不做白名单）
+        if (raw.get("structure") instanceof Map<?, ?> st) {
+            m.put("structure", st);
+        }
 
         if (raw.get("generator") instanceof Map<?, ?> gen) {
             m.put("generator", gen);
@@ -150,6 +157,7 @@ public final class MapContract {
         m.put("corridors", List.of());
         m.put("zones", List.of());
         m.put("spawn_points", List.of());
+        m.put("exits", List.of());
         m.put("tileProps", Map.of());
         m.put("decor", List.of());
         m.put("spawnMarkers", Map.of());

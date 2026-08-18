@@ -3,6 +3,7 @@ package com.roleplay.engine.service;
 import com.roleplay.engine.llm.LLMClient;
 import com.roleplay.engine.simulation.map.BspMapGenerator;
 import com.roleplay.engine.simulation.map.MapContract;
+import com.roleplay.engine.simulation.map.MapExits;
 import com.roleplay.engine.simulation.map.MapValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -32,11 +33,20 @@ public class ScriptMapService {
 
     private static final Logger log = LoggerFactory.getLogger(ScriptMapService.class);
 
+    /** P-0818-B/E 修正：地图生成回到主链路 DeepSeek（快）；视觉审核才用小米 MiMo（MapVisualAuditor） */
     private final LLMClient llmClient;
 
     /** 配置化的 BSP 降级种子（roleplay.game.map.bsp-seed，默认 0=未配置回退 {@link #DEFAULT_BSP_SEED}）。 */
     @Value("${roleplay.game.map.bsp-seed:0}")
     private long configuredBspSeed;
+
+    /** P-0817-D（大图支持）：地图最大宽度（roleplay.game.map.max-width，默认 256；scene 预览路径也生效）。 */
+    @Value("${roleplay.game.map.max-width:256}")
+    private int mapMaxWidth = 256;
+
+    /** P-0817-D（大图支持）：地图最大高度（roleplay.game.map.max-height，默认 256）。 */
+    @Value("${roleplay.game.map.max-height:256}")
+    private int mapMaxHeight = 256;
 
     public ScriptMapService(LLMClient llmClient) {
         this.llmClient = llmClient;
@@ -116,6 +126,15 @@ public class ScriptMapService {
         List<String> fallbackReasons = new ArrayList<>();
         int effW = width > 0 ? width : BspMapGenerator.DEFAULT_WIDTH;
         int effH = height > 0 ? height : BspMapGenerator.DEFAULT_HEIGHT;
+        // P-0817-D（大图支持）：显式尺寸超上限 clamp（scene 预览 / script 双路径统一；默认尺寸不受影响）
+        if (effW > mapMaxWidth || effH > mapMaxHeight) {
+            int cw = Math.min(effW, mapMaxWidth);
+            int ch = Math.min(effH, mapMaxHeight);
+            fallbackReasons.add("请求尺寸 " + effW + "×" + effH + " 超出上限 "
+                    + mapMaxWidth + "×" + mapMaxHeight + " → clamp 到 " + cw + "×" + ch);
+            effW = cw;
+            effH = ch;
+        }
 
         // ── 大图预算闸：显式尺寸超 LLM token 预算 → 跳过 LLM 直接 BSP（确定性、精确尺寸） ──
         boolean llmBudgetOk = effW <= LLM_MAX_WIDTH && effH <= LLM_MAX_HEIGHT;
@@ -134,6 +153,7 @@ public class ScriptMapService {
                 // P-0803-F（超时修复）：单次调用 45s 上限（比剧本 60s 更激进）——地图输出小于剧本，
                 // 45s 未完成说明模型慢/卡 → 快速走 BSP 降级，防止 init 自动串联（剧本+地图两次 LLM）被拖死超前端超时。
                 // P-0803-J：prompt 内嵌本次要求尺寸（预算内）。
+                // P-0818-B/E 修正：生成回 DeepSeek（快）→ 超时恢复 45s 快速降级
                 raw = llmClient.callJson(buildPrompt(theme, background, locations, clueLocations, effW, effH), 8000, 45);
             } catch (Exception e) {
                 log.warn("ScriptMapService: LLM call failed (attempt {}/2): {}", attempt + 1, e.getMessage());
@@ -189,6 +209,8 @@ public class ScriptMapService {
                 }
                 // P-0803-D（调研项 4 方案 A）：线索地点覆盖补齐——LLM 缺 zone 时自动补全
                 Map<String, Object> covered = ensureClueZoneCoverage(bindClueLocations(base, clueLocations), clueLocations);
+                // P-0817-G（房间模式）：出口表确定性推导（LLM 声明式围合的门洞 → 邻房 BFS）
+                covered = ensureExits(covered);
                 List<String> warnings = missingRoomWarnings(covered, locations);
                 if (!warnings.isEmpty()) {
                     log.warn("ScriptMapService: LLM map OK but rooms 未完全覆盖剧本地点: {}", warnings);
@@ -209,6 +231,8 @@ public class ScriptMapService {
                         gen.put("note", "坐标宽容修正：热点/出生点自动微调至最近可通行格（P-0804-G）");
                         repaired.put("generator", gen);
                         Map<String, Object> covered2 = ensureClueZoneCoverage(bindClueLocations(repaired, clueLocations), clueLocations);
+                        // P-0817-G（房间模式）：出口表确定性推导（anchor 修复路径同补）
+                        covered2 = ensureExits(covered2);
                         log.info("ScriptMapService: LLM map OK after anchor repair (attempt {}), {} zones, {} rooms", attempt + 1, zoneCount(covered2), roomCount(covered2));
                         return new MapResult(covered2, v2, fallbackReasons, missingRoomWarnings(covered2, locations));
                     }
@@ -227,12 +251,28 @@ public class ScriptMapService {
         Map<String, Object> bound = bindClueLocations(bsp, clueLocations);
         // P-0803-D（调研项 4 方案 A）：BSP 兜底地图 zone（房间 A/B/C）与线索脱钩 → 覆盖补齐
         Map<String, Object> covered = ensureClueZoneCoverage(bound, clueLocations);
+        // P-0817-G（房间模式）：出口表确定性推导（BSP 走廊贴边门洞，双保险）
+        covered = ensureExits(covered);
         log.info("ScriptMapService: BSP map coverage pass: {} → {} zones", zoneCount(bound), zoneCount(covered));
         List<String> warnings = missingRoomWarnings(covered, locations);
         if (!warnings.isEmpty()) {
             log.warn("ScriptMapService: BSP map rooms 未覆盖剧本地点（BSP 兜底房间为占位名，符合既有语义）: {}", warnings);
         }
         return new MapResult(covered, v, fallbackReasons, warnings);
+    }
+
+    /**
+     * P-0817-G（房间模式）：出口表确定性推导——exits 缺失或为空时用 {@link MapExits#deriveExits}
+     * 从 rooms/collision 几何推导（LLM 声明式围合门洞 / BSP 走廊贴边均适用），并写回 map。
+     * 已存在 exits（如 BSP 生成器自带）则原样保留。
+     */
+    private static Map<String, Object> ensureExits(Map<String, Object> map) {
+        if (map == null) return map;
+        Object ex = map.get("exits");
+        if (ex instanceof List<?> l && !l.isEmpty()) return map;
+        Map<String, Object> out = new LinkedHashMap<>(map);
+        out.put("exits", MapExits.deriveExits(map));
+        return out;
     }
 
     // ═══════════════════════════════════════════════════════════

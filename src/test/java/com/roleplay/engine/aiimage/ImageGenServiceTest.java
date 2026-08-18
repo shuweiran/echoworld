@@ -17,9 +17,9 @@ import static org.junit.jupiter.api.Assertions.*;
  * P-0810-01（本地 ComfyUI + Pony V6 XL）：ImageGenService 验收（mock ComfyUI 客户端）。
  *
  * <p>① 角色注册表：注册/更新/查询/初始角色装载
- * ② 生成任务：头像 1 + 表情 6（7 张），异步线程池执行，任务状态 IDLE→RUNNING→DONE
+ * ② 生成任务：头像 1 + 表情 6 + 全身立绘 1（8 张），异步线程池执行，任务状态 IDLE→RUNNING→DONE
  * ③ 参数替换：正向含 score tag + rating_safe + 外貌 + 风格 + 表情 + 构图；
- *    负向含 nsfw 拦截；头像=portrait 构图、表情=bust 构图；seed 同角色一致
+ *    负向含 nsfw 拦截；头像=portrait 构图、表情=bust 构图、全身立绘=fullbody 构图；seed 同角色一致
  * ④ URL 生成：/ai-images/{id}/{frame}.png；重启后磁盘扫描仍可见
  * ⑤ 未知角色 / 重复提交（RUNNING 中）防护
  */
@@ -123,7 +123,7 @@ class ImageGenServiceTest {
     }
 
     @Test
-    @DisplayName("S-2 生成任务：头像 1 + 表情 6，URL 生成正确，seed 同角色一致")
+    @DisplayName("S-2 生成任务：头像 1 + 表情 6 + 全身立绘 1，URL 生成正确，seed 同角色一致")
     void generateAvatarAndExpressions() throws Exception {
         Path dir = Files.createTempDirectory("aiimg-gen");
         FakeComfyClient client = new FakeComfyClient();
@@ -137,15 +137,16 @@ class ImageGenServiceTest {
         assertNotNull(task, "任务应在 10s 内完成");
         assertEquals(ImageGenService.GenTask.Status.DONE, task.status(), "error=" + task.error());
 
-        // 7 次出图调用：avatar + 6 表情
-        assertEquals(7, client.specs.size(), "应生成 1 头像 + 6 表情共 7 张");
+        // 8 次出图调用：avatar + 6 表情 + fullbody 全身立绘
+        assertEquals(8, client.specs.size(), "应生成 1 头像 + 6 表情 + 1 全身立绘共 8 张");
 
         // URL 生成
         Map<String, String> images = svc.imagesOf("heroine");
-        assertEquals(7, images.size());
+        assertEquals(8, images.size());
         assertEquals("/ai-images/heroine/avatar.png", images.get("avatar"));
         assertEquals("/ai-images/heroine/happy.png", images.get("happy"));
         assertEquals("/ai-images/heroine/neutral.png", images.get("neutral"));
+        assertEquals("/ai-images/heroine/fullbody.png", images.get("fullbody"));
         assertEquals(ImageGenService.EXPRESSIONS.size(), 6);
 
         // 参数替换：所有正向都含 score tag + rating_safe + 外貌 + 风格；负向含 nsfw
@@ -161,17 +162,23 @@ class ImageGenServiceTest {
             assertTrue(s.negativePrompt().contains("worst quality"));
             assertEquals("pixel_art_sakuemonq_pony.safetensors", s.loraName());
         }
-        // 头像 = portrait 构图（1024x1024 + 构图词）；表情 = bust 构图
+        // 头像 = portrait 构图（1024x1024 + 构图词）；表情 = bust 构图；全身立绘 = fullbody 构图（832x1216）
         WorkflowSpec avatar = client.specs.get(0);
         assertTrue(avatar.positivePrompt().contains("head and shoulders portrait"), avatar.positivePrompt());
         assertEquals(1024, avatar.width());
         assertEquals(1024, avatar.height());
-        for (int i = 1; i < client.specs.size(); i++) {
+        for (int i = 1; i <= 6; i++) {
             WorkflowSpec s = client.specs.get(i);
             assertTrue(s.positivePrompt().contains("bust shot"), s.positivePrompt());
             assertEquals(1024, s.width());
             assertEquals(1024, s.height());
         }
+        WorkflowSpec fullbody = client.specs.get(7);
+        assertTrue(fullbody.positivePrompt().contains("full body shot"), fullbody.positivePrompt());
+        assertTrue(fullbody.positivePrompt().contains("standing"), fullbody.positivePrompt());
+        assertTrue(fullbody.positivePrompt().contains("full outfit visible"), fullbody.positivePrompt());
+        assertEquals(832, fullbody.width());
+        assertEquals(1216, fullbody.height());
         // 表情描述按固定表注入
         assertTrue(client.specs.get(1).positivePrompt().contains("happy expression"));
         assertTrue(client.specs.get(2).positivePrompt().contains("angry expression"));
@@ -179,7 +186,7 @@ class ImageGenServiceTest {
         assertTrue(client.specs.get(4).positivePrompt().contains("surprised expression"));
         assertTrue(client.specs.get(5).positivePrompt().contains("blushing"));
         assertTrue(client.specs.get(6).positivePrompt().contains("neutral calm expression"));
-        // seed 同角色一致（base + 帧序号，跨帧确定性）
+        // seed 同角色一致（base + 帧序号，跨帧确定性；fullbody=base+7）
         long base = ImageGenService.stableSeed("heroine");
         for (int i = 0; i < client.specs.size(); i++) {
             assertEquals(base + i, client.specs.get(i).seed(), "第 " + i + " 帧 seed 应 = base + i");
@@ -207,13 +214,13 @@ class ImageGenServiceTest {
         assertSame(t1, t2, "RUNNING 中重复触发应返回同一任务");
         ImageGenService.GenTask done = awaitDone(svc, "heroine");
         assertEquals(ImageGenService.GenTask.Status.DONE, done.status());
-        assertEquals(7, client.specs.size());
+        assertEquals(8, client.specs.size());
 
         // 完成后再触发 → 新任务（重新生成）
         ImageGenService.GenTask t3 = svc.triggerGenerate("heroine");
         assertNotSame(done, t3);
         awaitDone(svc, "heroine");
-        assertEquals(14, client.specs.size(), "二次生成应再出 7 张");
+        assertEquals(16, client.specs.size(), "二次生成应再出 8 张");
 
         // 失败任务如实标记
         FakeComfyClient failing = new FakeComfyClient() {
@@ -242,16 +249,18 @@ class ImageGenServiceTest {
         svc1.registerCharacter("heroine", "小铃", "银发", "anime");
         svc1.triggerGenerate("heroine");
         awaitDone(svc1, "heroine");
-        assertEquals(7, client.specs.size());
+        assertEquals(8, client.specs.size());
         svc1.shutdown();
 
         // 模拟重启：新实例指向同一输出目录（不重新生成）
         ImageGenService svc2 = newService(new FakeComfyClient(), dir);
         svc2.registerCharacter("heroine", "小铃", "银发", "anime");
         Map<String, String> images = svc2.imagesOf("heroine");
-        assertEquals(7, images.size(), "重启后应扫描到磁盘已有图片");
+        assertEquals(8, images.size(), "重启后应扫描到磁盘已有图片");
         assertEquals("/ai-images/heroine/avatar.png", images.get("avatar"));
+        assertEquals("/ai-images/heroine/fullbody.png", images.get("fullbody"));
         assertTrue(svc2.imagesResponse("heroine").containsKey("avatar"));
+        assertEquals("/ai-images/heroine/fullbody.png", svc2.imagesResponse("heroine").get("fullbody"));
         assertEquals("/ai-images/heroine/happy.png",
                 ((Map<?, ?>) svc2.imagesResponse("heroine").get("expressions")).get("happy"));
         svc2.shutdown();
@@ -272,26 +281,34 @@ class ImageGenServiceTest {
         ImageGenService.GenTask done = awaitDone(svc, "heroine");
         assertEquals(ImageGenService.GenTask.Status.DONE, done.status(), "error=" + done.error());
 
-        // 7 张原图各触发一次抠图
-        assertEquals(7, fake.calls, "每张生成图应触发一次抠背景");
+        // 8 张原图各触发一次抠图
+        assertEquals(8, fake.calls, "每张生成图应触发一次抠背景");
         // 磁盘上原图 + 透明版并存
         assertTrue(Files.exists(dir.resolve("heroine/avatar.png")));
         assertTrue(Files.exists(dir.resolve("heroine/avatar_t.png")));
         assertTrue(Files.exists(dir.resolve("heroine/happy_t.png")));
+        assertTrue(Files.exists(dir.resolve("heroine/fullbody.png")));
+        assertTrue(Files.exists(dir.resolve("heroine/fullbody_t.png")));
 
-        // imagesOf 同时含原帧与 _t 条目（14 = 7 原帧 + 7 透明版）
+        // imagesOf 同时含原帧与 _t 条目（16 = 8 原帧 + 8 透明版）
         Map<String, String> images = svc.imagesOf("heroine");
-        assertEquals(14, images.size());
+        assertEquals(16, images.size());
         assertEquals("/ai-images/heroine/avatar.png", images.get("avatar"));
         assertEquals("/ai-images/heroine/avatar_t.png", images.get("avatar_t"));
         assertEquals("/ai-images/heroine/happy_t.png", images.get("happy_t"));
         assertEquals("/ai-images/heroine/neutral_t.png", images.get("neutral_t"));
+        assertEquals("/ai-images/heroine/fullbody.png", images.get("fullbody"));
+        assertEquals("/ai-images/heroine/fullbody_t.png", images.get("fullbody_t"));
         // characterStatus / imagesResponse 的 images 映射同样含 _t（前端立绘可优先用）
         Map<String, Object> status = svc.characterStatus("heroine");
         assertTrue(((Map<?, ?>) status.get("images")).containsKey("avatar_t"));
+        assertTrue(((Map<?, ?>) status.get("images")).containsKey("fullbody_t"));
         assertTrue(((Map<?, ?>) svc.imagesResponse("heroine").get("images")).containsKey("happy_t"));
-        // avatar/expressions 键仍指向原图（非透明版），契约不破坏
+        assertTrue(((Map<?, ?>) svc.imagesResponse("heroine").get("images")).containsKey("fullbody_t"));
+        // avatar/expressions 键仍指向原图（非透明版），契约不破坏；fullbody 顶层键存在
         assertEquals("/ai-images/heroine/avatar.png", svc.imagesResponse("heroine").get("avatar"));
+        assertEquals("/ai-images/heroine/fullbody.png", svc.imagesResponse("heroine").get("fullbody"));
+        assertEquals("/ai-images/heroine/fullbody_t.png", svc.imagesResponse("heroine").get("fullbody_t"));
         svc.shutdown();
     }
 
@@ -306,9 +323,10 @@ class ImageGenServiceTest {
         svc.triggerGenerate("heroine");
         ImageGenService.GenTask done = awaitDone(svc, "heroine");
         assertEquals(ImageGenService.GenTask.Status.DONE, done.status());
-        assertEquals(7, client.specs.size());
-        assertEquals(7, svc.imagesOf("heroine").size(), "关闭时不应有 _t 条目");
+        assertEquals(8, client.specs.size());
+        assertEquals(8, svc.imagesOf("heroine").size(), "关闭时不应有 _t 条目");
         assertFalse(Files.exists(dir.resolve("heroine/avatar_t.png")));
+        assertFalse(Files.exists(dir.resolve("heroine/fullbody_t.png")));
         svc.shutdown();
 
         // 抠图失败（stub 抛异常）→ 任务仍 DONE，原图保留，主流程不受影响
@@ -322,7 +340,7 @@ class ImageGenServiceTest {
         assertEquals(ImageGenService.GenTask.Status.DONE, done2.status(), "抠图失败不应影响生成任务，error=" + done2.error());
         assertTrue(Files.exists(dir2.resolve("heroine/avatar.png")), "原图保留");
         assertFalse(Files.exists(dir2.resolve("heroine/avatar_t.png")));
-        assertEquals(7, svc2.imagesOf("heroine").size());
+        assertEquals(8, svc2.imagesOf("heroine").size());
         svc2.shutdown();
     }
 
@@ -343,27 +361,31 @@ class ImageGenServiceTest {
         ImageGenService.GenTask done = awaitDone(svc, "heroine");
         assertEquals(ImageGenService.GenTask.Status.DONE, done.status(), "error=" + done.error());
 
-        // 顺序：avatar（txt2img）→ 6 表情（img2img）
-        assertEquals(7, client.callKinds.size());
+        // 顺序：avatar（txt2img）→ 6 表情（img2img）→ fullbody（txt2img）
+        assertEquals(8, client.callKinds.size());
         assertEquals("txt2img", client.callKinds.get(0), "avatar 必须是文生图（无底图）");
-        for (int i = 1; i < 7; i++) {
+        for (int i = 1; i <= 6; i++) {
             assertEquals("img2img", client.callKinds.get(i), "第 " + i + " 帧应为 img2img");
         }
+        assertEquals("txt2img", client.callKinds.get(7), "fullbody 应为文生图（与 avatar 同源，不用 img2img）");
         // 底图 = avatar.png 原图非透明版（绝对路径，同角色目录）
         Path avatar = dir.toAbsolutePath().resolve("heroine/avatar.png");
-        for (int i = 1; i < 7; i++) {
+        for (int i = 1; i <= 6; i++) {
             assertEquals(avatar.toString(), client.refImages.get(i), "表情底图应为 avatar.png");
             assertEquals(0.45, client.denoises.get(i), 1e-9, "denoise 应取配置值");
         }
-        // 7 帧 prompt/seed 结构保持（score tag + 表情描述 + bust 构图；seed=base+i）
+        // 8 帧 prompt/seed 结构保持（score tag + 表情描述 + bust 构图；seed=base+i，fullbody=base+7）
         long base = ImageGenService.stableSeed("heroine");
-        for (int i = 0; i < 7; i++) {
+        for (int i = 0; i < 8; i++) {
             assertTrue(client.specs.get(i).positivePrompt().contains("rating_safe"));
             assertEquals(base + i, client.specs.get(i).seed());
         }
         assertTrue(client.specs.get(1).positivePrompt().contains("happy expression"));
         assertTrue(client.specs.get(1).positivePrompt().contains("bust shot"));
-        // 进度事件顺序不变（avatar → happy → ... → neutral → done）
+        assertTrue(client.specs.get(7).positivePrompt().contains("full body shot"));
+        assertEquals(832, client.specs.get(7).width());
+        assertEquals(1216, client.specs.get(7).height());
+        // 进度事件顺序不变（avatar → happy → ... → neutral → fullbody → done）
         assertEquals("done", done.progress());
         svc.shutdown();
     }
@@ -380,16 +402,17 @@ class ImageGenServiceTest {
         svc.triggerGenerate("heroine");
         ImageGenService.GenTask done = awaitDone(svc, "heroine");
         assertEquals(ImageGenService.GenTask.Status.DONE, done.status(), "单帧失败不应拖垮整任务，error=" + done.error());
-        assertEquals(7, client.callKinds.size(), "7 帧都应被尝试");
+        assertEquals(8, client.callKinds.size(), "8 帧都应被尝试");
         assertEquals("txt2img", client.callKinds.get(0));
         assertEquals(6, client.callKinds.stream().filter("img2img"::equals).count());
-        // 失败帧（angry）不出图，其余 6 帧出图
+        // 失败帧（angry）不出图，其余 7 帧出图（avatar/happy/sad/surprised/embarrassed/neutral/fullbody）
         Map<String, String> images = svc.imagesOf("heroine");
-        assertEquals(6, images.size());
+        assertEquals(7, images.size());
         assertNotNull(images.get("avatar"));
         assertNotNull(images.get("happy"));
         assertNull(images.get("angry"));
         assertNotNull(images.get("neutral"));
+        assertNotNull(images.get("fullbody"), "表情帧失败不应影响 fullbody 全身立绘");
         svc.shutdown();
 
         // ② avatar 失败（第 1 号调用）→ 任务 FAILED（无底图后续 img2img 无意义，终态按现有逻辑）

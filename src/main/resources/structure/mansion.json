@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "kind": "mansion",
+  "name": "庄园宅邸",
+  "seed": 0,
+  "root": {
+    "id": "mansion",
+    "type": "structure",
+    "name": "庄园宅邸",
+    "template": "",
+    "children": [
+      { "id": "foyer", "type": "building", "name": "门厅", "template": "foyer", "size": [8, 8] },
+      { "id": "living", "type": "building", "name": "客厅", "template": "living", "size": [12, 8] },
+      { "id": "study", "type": "building", "name": "书房", "template": "study", "size": [8, 8] },
+      { "id": "dining", "type": "building", "name": "餐厅", "template": "dining", "size": [10, 8] },
+      { "id": "kitchen", "type": "building", "name": "厨房", "template": "kitchen", "size": [8, 8] },
+      { "id": "bedroom1", "type": "building", "name": "主卧", "template": "gu_bedroom", "size": [8, 8] },
+      { "id": "bedroom2", "type": "building", "name": "客房", "template": "gu_bedroom", "size": [8, 8] },
+      { "id": "bedroom3", "type": "building", "name": "次卧", "template": "gu_bedroom", "size": [8, 8] },
+      { "id": "backyard", "type": "zone", "name": "后院", "template": "garden", "open": true, "size": [16, 10] },
+      { "id": "servant", "type": "building", "name": "佣人房", "template": "servant", "size": [6, 6] },
+      { "id": "storage", "type": "building", "name": "储藏室", "template": "storage", "size": [6, 6] }
+    ]
+  },
+  "relations": [
+    { "from": "foyer", "to": "living", "kind": "adjacent" },
+    { "from": "foyer", "to": "study", "kind": "adjacent" },
+    { "from": "foyer", "to": "dining", "kind": "adjacent" },
+    { "from": "dining", "to": "kitchen", "kind": "adjacent" },
+    { "from": "living", "to": "bedroom1", "kind": "adjacent" },
+    { "from": "living", "to": "bedroom2", "kind": "adjacent" },
+    { "from": "living", "to": "bedroom3", "kind": "adjacent" },
+    { "from": "dining", "to": "servant", "kind": "adjacent" },
+    { "from": "kitchen", "to": "storage", "kind": "adjacent" },
+    { "from": "kitchen", "to": "backyard", "kind": "connects" }
+  ]
+}

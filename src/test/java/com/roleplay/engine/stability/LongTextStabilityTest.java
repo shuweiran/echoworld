@@ -120,6 +120,9 @@ class LongTextStabilityTest {
                     "round " + round + " 耗时 " + String.format("%.0f", elapsedMs) + "ms 超过 10s（疑似卡死/指数爆炸）");
 
             if (round % 50 == 0) {
+                // 瞬时堆使用量受上一批测试/JIT 临时对象影响；采样前尽量清理，避免把 GC 时机误判为业务泄漏。
+                System.gc();
+                Thread.sleep(30);
                 Runtime rt = Runtime.getRuntime();
                 long used = rt.totalMemory() - rt.freeMemory();
                 heapSamples.add(used);

@@ -1,0 +1,229 @@
+{
+  "pass": 11,
+  "fail": 4,
+  "consoleErrors": [],
+  "finalStatus": {
+    "phase": "vote",
+    "mode": "full",
+    "session_id": "d123563e-92a",
+    "schema_version": 1,
+    "name": "民国旧宅疑云",
+    "background": "民国十七年，风雨交加的夜晚，沈家老爷沈伯远被发现死于书房，房门反锁，窗台无痕，死状诡异。沈家上下人心惶惶，遗产争夺、旧情纠葛、身世谎言交织。五位在场者各怀秘密，真相藏在庄园的阴影中。",
+    "roles": [
+      "沈老爷",
+      "林夫人",
+      "沈少爷",
+      "陈管家",
+      "苏小姐"
+    ],
+    "players": [
+      "林晚秋",
+      "顾云舟",
+      "苏浅浅",
+      "陈一鸣",
+      "沈墨"
+    ],
+    "your_role": "陈管家",
+    "your_secret": "陈管家是沈老爷的私生子，他恨沈老爷抛弃母亲，暗中策划复仇。",
+    "round": 2,
+    "started_at": 1787031970405,
+    "elapsed_ms": 39915,
+    "phase_started_at": 1787031997895,
+    "phase_elapsed_ms": 12425,
+    "phase_timeout_ms": 0,
+    "game_over": false,
+    "winner": "",
+    "simulation_started": true,
+    "simulation_url": "/simulation.html",
+    "clues": [
+      {
+        "id": "clue_1",
+        "title": "染血的怀表",
+        "location": "客厅",
+        "content": "一块怀表，表盖上有血迹，表内刻有'林'字，疑似林夫人的物品。",
+        "transferable": false,
+        "visible_to_owner_only": false,
+        "ap_cost": 1,
+        "public": true
+      },
+      {
+        "id": "clue_2",
+        "title": "未寄出的遗嘱",
+        "location": "书房",
+        "content": "一份遗嘱，内容显示沈老爷将遗产全部留给苏小姐，并注明沈少爷非亲生。",
+        "transferable": false,
+        "visible_to_owner_only": false,
+        "ap_cost": 1,
+        "public": true
+      },
+      {
+        "id": "clue_3",
+        "title": "枯萎的白玫瑰",
+        "location": "花园",
+        "content": "一束白玫瑰，花瓣枯萎，花茎上有泥土，可能来自地下室。",
+        "transferable": false,
+        "visible_to_owner_only": false,
+        "ap_cost": 1,
+        "public": true
+      },
+      {
+        "id": "clue_4",
+        "title": "地窖里的旧照片",
+        "location": "地下室",
+        "content": "一张泛黄的照片，照片上是沈老爷与一位年轻女子，背面写着'吾爱'。",
+        "transferable": false,
+        "visible_to_owner_only": false,
+        "ap_cost": 1,
+        "public": true
+      },
+      {
+        "id": "clue_5",
+        "title": "带锁的日记本",
+        "location": "卧室",
+        "content": "一本日记，锁已损坏，内容记载沈老爷对苏小姐的愧疚，以及陈管家的身世。",
+        "transferable": false,
+        "visible_to_owner_only": false,
+        "ap_cost": 1,
+        "public": true
+      }
+    ],
+    "ap": 3,
+    "ap_max": 3,
+    "ap_pool": {
+      "林晚秋": 3,
+      "顾云舟": 3,
+      "苏浅浅": 4,
+      "陈一鸣": 3,
+      "沈墨": 3
+    },
+    "my_clues": [],
+    "role_key": "d1235677-f3e1-414e-845b-00dfbcd3079c",
+    "llm_degraded": false,
+    "trustees": [],
+    "outline": {
+      "locations": [
+        "客厅",
+        "书房",
+        "花园",
+        "地下室",
+        "卧室"
+      ],
+      "roles": [
+        {
+          "name": "沈老爷",
+          "intro": "庄园主人，威严而神秘，掌控家族命脉。"
+        },
+        {
+          "name": "林夫人",
+          "intro": "沈老爷续弦，年轻貌美，心思深沉。"
+        },
+        {
+          "name": "沈少爷",
+          "intro": "沈老爷独子，纨绔不羁，暗藏野心。"
+        },
+        {
+          "name": "陈管家",
+          "intro": "跟随沈家三十年，忠诚却心事重重。"
+        },
+        {
+          "name": "苏小姐",
+          "intro": "沈家远房侄女，聪慧冷静，身世成谜。"
+        }
+      ],
+      "clues": [
+        {
+          "title": "染血的怀表",
+          "location": "客厅"
+        },
+        {
+          "title": "未寄出的遗嘱",
+          "location": "书房"
+        },
+        {
+          "title": "枯萎的白玫瑰",
+          "location": "花园"
+        },
+        {
+          "title": "地窖里的旧照片",
+          "location": "地下室"
+        },
+        {
+          "title": "带锁的日记本",
+          "location": "卧室"
+        }
+      ],
+      "storyline": "民国十七年风雨夜，沈老爷在书房离奇死亡，房门反锁，窗台无痕。五位在场者各怀秘密，遗产争夺、旧情纠葛、身世谎言交织，真相藏在庄园的阴影中。",
+      "killer_hint": "凶手熟悉庄园暗道，且与遗嘱内容有直接利害关系。"
+    },
+    "generating": true,
+    "locations": [
+      "客厅",
+      "书房",
+      "花园",
+      "地下室",
+      "卧室"
+    ],
+    "searched_locations": [
+      "客厅",
+      "书房",
+      "花园",
+      "地下室",
+      "卧室"
+    ],
+    "discussion": [
+      {
+        "speaker": "陈一鸣",
+        "message": "（站在走廊阴影处，指尖轻轻敲着窗框）这雨下得真是时候，把什么痕迹都冲干净了。",
+        "round": "1"
+      },
+      {
+        "speaker": "苏浅浅",
+        "message": "（站在廊下，指尖轻轻转着腕上的玉镯）这雨下得人心烦，书房那边……可有什么新消息？",
+        "round": "1"
+      },
+      {
+        "speaker": "林晚秋",
+        "message": "（靠在廊柱边，指尖轻轻敲着怀表）雨声太大，听不太清他们在说什么。不过，这宅子里的秘密，恐怕比雨声更密。",
+        "round": "1"
+      },
+      {
+        "speaker": "顾云舟",
+        "message": "（远远站着，手指轻轻摩挲着袖口）这雨下得蹊跷，书房的门窗也蹊跷。诸位可曾注意到什么？",
+        "round": "1"
+      },
+      {
+        "speaker": "沈墨",
+        "message": "（站在走廊阴影处，微微低头）诸位，老爷的事…老朽也很痛心。只是这雨夜，书房的门窗都锁着，实在蹊跷。",
+        "round": "1"
+      },
+      {
+        "speaker": "陈一鸣",
+        "message": "（远远站在廊柱旁，手指无意识地绞着衣角）这雨下得人心烦……书房里当真什么都没动过？",
+        "round": "2"
+      },
+      {
+        "speaker": "苏浅浅",
+        "message": "（远远站着，指尖轻轻摩挲茶杯边缘）书房的门……当真是从里面锁上的么？",
+        "round": "2"
+      },
+      {
+        "speaker": "林晚秋",
+        "message": "（远远站在廊下，指尖夹着烟卷，火光明明灭灭）书房那把锁，是老爷生前亲自换的，钥匙只有他一人有。可这雨夜，谁又能无声无息进去呢？",
+        "round": "2"
+      },
+      {
+        "speaker": "顾云舟",
+        "message": "（站在窗边，目光扫过众人）这雨下得蹊跷，老爷出事那晚，我在后院听到书房有响动，但没敢靠近。",
+        "round": "2"
+      },
+      {
+        "speaker": "沈墨",
+        "message": "（站在窗边，指尖轻轻敲着窗框）老爷书房那把锁，我记得是德国进口的，没有钥匙打不开。（停顿）可钥匙，只有老爷自己收着。",
+        "round": "2"
+      }
+    ],
+    "rolesCount": 5,
+    "playersCount": 5,
+    "truthBrief": ""
+  }
+}
