@@ -3215,7 +3215,12 @@ public class ScriptGameService {
     public Map<String, Object> discussionSay(String sessionId, String player, String message, boolean isClue) {
         ScriptGame game = games.get(sessionId);
         if (game == null) return Map.of("error", "游戏不存在");
-        if (game.phase != Phase.DISCUSSION) return Map.of("error", "当前不是讨论阶段");
+        // P-0819-A：概略先行期间也允许玩家先在 Gal 界面交流。消息先进入
+        // pendingHumanEvents，完整剧本就绪后 chat 模式启动的两轮讨论引擎会消费；
+        // full 模式则在玩家手动进入 DISCUSSION 时消费，避免准备期输入被丢弃。
+        if (game.phase != Phase.DISCUSSION && game.phase != Phase.SETUP) {
+            return Map.of("error", "当前不是准备或讨论阶段");
+        }
         if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
         if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
         if (message == null || message.isBlank()) return Map.of("error", "发言内容不能为空");
@@ -3245,8 +3250,9 @@ public class ScriptGameService {
         for (String member : game.players) {
             if (!member.equals(player) && SpeechGate.isMentioning(message, member)) mentioned.add(member);
         }
-        log.info("Script game {} human {} spoke: {}{} @{}",
+        log.info("Script game {} human {} spoke during {}: {}{} @{}",
                 sessionId, player,
+                game.phase.name(),
                 message.length() > 60 ? message.substring(0, 60) : message,
                 isClue ? "（公开线索）" : "", mentioned);
         Map<String, Object> r = new LinkedHashMap<>();

@@ -113,6 +113,21 @@ class ScriptOutlineFullTest {
         assertTrue(outline.containsKey("storyline"), "概略应含剧情线");
     }
 
+    @Test
+    @DisplayName("O-1b: SETUP 期间 Gal 发言可实时回显并排队，待完整剧本就绪后交给讨论引擎")
+    void setupDiscussionSayQueuesForLaterRounds() {
+        mockScriptLlm();
+        ScriptGameService svc = newService(mock(SSEController.class));
+        String sid = SESSION + "-setup-say";
+        svc.initGame(sid, "庄园", List.of("Alice", "Bob"), "chat", true);
+
+        Map<String, Object> result = svc.discussionSay(sid, "Alice", "我们先从现场情况说起。", false);
+
+        assertEquals(Boolean.TRUE, result.get("ok"));
+        assertEquals(ScriptGameService.Phase.SETUP, svc.getGame(sid).phase);
+        assertEquals(1, svc.getGame(sid).pendingHumanEvents.size());
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  O-2：generateFull 异步完成 → INVESTIGATION + 完整剧本 + 地图
     // ═══════════════════════════════════════════════════════════

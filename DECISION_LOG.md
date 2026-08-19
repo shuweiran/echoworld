@@ -597,3 +597,9 @@ oleplay.tts.mimo.* yml 双份 + AppConfig.TtsConfig.MimoConfig（enabled/api-key
 - **原因**：①主人「只接入地图生成llm」「不要用pro要用多模态的2.5」——给地图/结构生成配独立 LLM（小米 MiMo mimo-v2.5 多模态），对话/剧本等主链路保持 DeepSeek；②推理模型特性（reasoning_tokens 吞预算）必须调参——不改则结构树正文为空、必失败；③key 安全——只进本机 openclaw.json，不写 application.yml 明文、不进 git/jar
 - **放弃**：①用 mimo-v2.5-pro（主人明确不要 pro）；②让多模态直接出坐标/网格（P-0804-H 教训：几何仍程序化，多模态只做语义/结构树）；③地图生成与主链路共用 LLM 客户端（双 provider 解耦，互不影响）
 - **影响**：①定向 mvn 4 类全绿（含 ScriptGameServiceTest/StructureEndpointTest Spring 上下文）；②真机：地图 LLM + custom 结构蓝图均走 MiMo 成功（148s），主链路无回归；③**部署上线**：新 jar 147,921,076B @13:14:59 + PID 8440（双 key 注入）；stderr 0B + ERROR 全 SSE 断连 benign；④ⓘ 并行批次曾覆盖打包/重启，已重新部署；⑤未 git commit（统一 gate 未获授权）
+
+### D-077 剧本杀 SETUP 期复用 Gal 交流并把消息交给两轮收尾（P-0819-A）
+- **决策**：概略先行的 `SETUP` 阶段开放与一般模式 Gal 相同的输入区；`discussion_say` 在 SETUP 只做身份/内容校验、实时 `script_speech` 回显并写入 `pendingHumanEvents`，不提前启动讨论引擎；完整剧本就绪后沿用既有 `discussionMaxRounds=2` 讨论链路消费这些消息。full 模式仍按原路径进入 INVESTIGATION，chat 模式仍在就绪后进入 DISCUSSION。
+- **原因**：后台完整剧本生成是异步的，准备页不应空等；直接复用讨论事件队列可保留玩家输入且不复制一套临时对话引擎，现有两轮收尾与阶段守卫保持单一事实源。
+- **放弃**：①准备期直接启动完整讨论引擎（角色/秘密尚未落位，存在上下文不完整）；②准备期另建临时 LLM 对话端点（重复上下文与消息管线，后台就绪时还需合并）；③full 模式跳过搜证直接讨论（改变真剧本杀既有流程）。
+- **影响**：SETUP 可交流且消息不丢；chat 模式生成完成后仍执行两轮并自动进入 VOTE；full 模式行为零改变；新增 O-1b 回归测试。
