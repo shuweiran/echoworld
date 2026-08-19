@@ -81,11 +81,12 @@ class ScriptGamePrivateChatTest {
         toInvestigation(svc, List.of("Alice", "Bob", "Carol"));
         ScriptGameService.ScriptGame game = svc.getGame(SESSION);
         String maid = playerWithRole(game, "女仆"); // 真凶角色
+        String sender = game.players.stream().filter(p -> !p.equals(maid)).findFirst().orElseThrow();
 
-        Map<String, Object> res = svc.privateSay(SESSION, "Alice", maid, "那晚你去过书房吗？");
+        Map<String, Object> res = svc.privateSay(SESSION, sender, maid, "那晚你去过书房吗？");
 
         assertEquals(Boolean.TRUE, res.get("ok"));
-        assertEquals("Alice", res.get("from"));
+        assertEquals(sender, res.get("from"));
         assertEquals(maid, res.get("to"));
         assertNotNull(res.get("reply"), "AI 角色应有应答");
         assertFalse(String.valueOf(res.get("reply")).isBlank());
@@ -93,9 +94,9 @@ class ScriptGamePrivateChatTest {
         assertEquals(2, ((List<?>) res.get("history")).size(), "1 条发送 + 1 条应答");
 
         // 历史查询（任意方向键可查）
-        List<Map<String, Object>> hist = svc.getPrivateChatHistory(SESSION, maid, "Alice");
+        List<Map<String, Object>> hist = svc.getPrivateChatHistory(SESSION, maid, sender);
         assertEquals(2, hist.size());
-        assertEquals("Alice", hist.get(0).get("from"));
+        assertEquals(sender, hist.get(0).get("from"));
         assertEquals(maid, hist.get(1).get("from"));
     }
 

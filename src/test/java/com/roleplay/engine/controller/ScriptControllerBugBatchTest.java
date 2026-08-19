@@ -11,6 +11,7 @@ import com.roleplay.engine.simulation.SimulationService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -69,7 +70,8 @@ class ScriptControllerBugBatchTest {
         when(svc.getPlayerKeys("sessionB")).thenReturn(Map.of("Bob", "keyB"));
 
         ScriptController ctl = newScriptController(svc);
-        ResponseEntity<Map<String, Object>> resp = ctl.getKeys("", "keyB");
+        ReflectionTestUtils.setField(ctl, "dmKey", "dm-test-key");
+        ResponseEntity<Map<String, Object>> resp = ctl.getKeys("", "keyB", "dm-test-key");
         assertEquals(200, resp.getStatusCode().value());
         assertEquals("sessionB", resp.getBody().get("session_id"), "keys 应返回 key 反查到的对局");
         assertEquals("keyB", ((Map<?, ?>) resp.getBody().get("player_keys")).get("Bob"));

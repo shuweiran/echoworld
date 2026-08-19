@@ -94,6 +94,9 @@ roleplay:
     default: "free"
     language: "zh"
   game:
+    approval:
+      # 审批门行为由现有恢复/审批回归覆盖；生产默认值另在主配置中保持单人可收官。
+      enabled: true
     # P-0811-D：五层 persona 卡外部持久化目录（与主 yml 同步键；测试指向 target/ 构建目录，
     # 避免污染 ./data/persona；持久化专项用例经 CharacterController.setPersonaCardsDir 指 @TempDir 临时目录）
     persona-cards-dir: "target/persona-test-cards"
@@ -119,6 +122,7 @@ roleplay:
     discussion:
       # 批次 D 发言门控：与主 yml 同步默认值（silence-floor=0.15 / priority-decay-rounds=3 / wait-bias=0.5 / cold-break=true）
       max-rounds: 2
+      min-duration-ms: 0
       silence-floor: 0.15
       priority-decay-rounds: 3
       wait-bias: 0.5

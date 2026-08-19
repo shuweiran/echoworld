@@ -81,6 +81,9 @@ public class ScriptGameService {
     /** GAP-3: 剧本杀讨论轮数（可配置，默认 2，与蓝图降级路径对齐）。 */
     @Value("${roleplay.game.discussion.max-rounds:2}")
     private int discussionMaxRounds = 2;
+    /** 讨论引擎即使快速完成两轮，也给真人留下可见/可发言的最短窗口。 */
+    @Value("${roleplay.game.discussion.min-duration-ms:8000}")
+    private long discussionMinDurationMs = 8000;
 
     /** 批次 D: 发言门控静默阈值（demo 实测安全区间 [0.10, 0.20]，默认 0.15；0.25 会冷场失衡）。 */
     @Value("${roleplay.game.discussion.silence-floor:0.15}")
@@ -122,6 +125,9 @@ public class ScriptGameService {
 
     /** P1（测试钩子）：运行时切换投票超时（毫秒），对齐 RouterService.setSerialRound 先例。 */
     public void setVoteTimeoutMs(long ms) { this.voteTimeoutMs = ms; }
+
+    /** 测试/本地演示钩子：调整讨论最短可交互窗口。 */
+    public void setDiscussionMinDurationMs(long ms) { this.discussionMinDurationMs = Math.max(0, ms); }
 
     /** P-0805-A（B4，测试钩子）：运行时切换重投次数上限。 */
     public void setMaxRevotes(int n) { this.maxRevotes = Math.max(0, n); }
@@ -835,9 +841,9 @@ public class ScriptGameService {
                     : talkativenessByName.getOrDefault(role, ScriptSchemaV1.DEFAULT_TALKATIVENESS);
             game.playerTalkativeness.put(player, Math.max(0.0, Math.min(1.0, tt)));
         }
-        // 批次 D: 人类玩家标记（当前剧本杀全员为真人玩家；AI 讨论角色由引擎代声）
+        // 未由 Controller 指定单人扮演者时，兼容旧局：全员真人。概略期已指定的标记必须保留。
         for (String player : game.players) {
-            game.playerIsHuman.put(player, true);
+            game.playerIsHuman.putIfAbsent(player, true);
         }
         // C3: 每玩家 roleKey —— 概略态 init 已发放则保留（generate_full 不覆盖，重连/认证连续）；
         // 完整路径（init outlineOnly=false）直接生成
@@ -1361,10 +1367,10 @@ public class ScriptGameService {
 
     /** 投票进度聚合载荷（API-10 响应 + script_vote_progress SSE 共用，单事实源）。 */
     private Map<String, Object> buildVoteProgress(ScriptGame game) {
-        // 在线玩家（本局玩家 − 托管）：托管票已作废、不计入进度
+        // 需表态者=真人且未托管；NPC 仍是嫌疑人候选，但不阻塞单人前端收官。
         List<String> eligible = new ArrayList<>();
         for (String p : game.players) {
-            if (!game.trustees.contains(p)) eligible.add(p);
+            if (isHumanPlayer(game, p) && !game.trustees.contains(p)) eligible.add(p);
         }
         int voted = 0;
         int abstained = 0;
@@ -1374,13 +1380,14 @@ public class ScriptGameService {
             else if (game.abstainedVoters.contains(p)) abstained++;
             else pending.add(p);
         }
-        // 候选人聚合：与 D6 countValidVotes 同口径（托管票忽略、票面归一为规范玩家名）；只出票数不出投票人
+        // 候选人必须在首票前完整可选；票数仍只按 D6 的有效票聚合。
         Map<String, Integer> count = countValidVotes(game);
         List<Map<String, Object>> candidates = new ArrayList<>();
-        for (Map.Entry<String, Integer> e : count.entrySet()) {
+        for (String player : game.players) {
+            if (game.trustees.contains(player)) continue;
             Map<String, Object> c = new LinkedHashMap<>();
-            c.put("name", e.getKey());
-            c.put("votes", e.getValue());
+            c.put("name", player);
+            c.put("votes", count.getOrDefault(player, 0));
             c.put("point", ""); // P2：由相关线索/讨论摘要推导（MVP 空，前端可隐藏）
             candidates.add(c);
         }
@@ -1444,7 +1451,7 @@ public class ScriptGameService {
                 int voted = 0;
                 int total = 0;
                 for (String p : game.players) {
-                    if (game.trustees.contains(p)) continue;
+                    if (!isHumanPlayer(game, p) || game.trustees.contains(p)) continue;
                     total++;
                     if (game.votes.containsKey(p) || game.abstainedVoters.contains(p)) voted++;
                 }
@@ -2554,7 +2561,7 @@ public class ScriptGameService {
         if (voteTimeoutEnabled && game.voteStartedAt > 0
                 && System.currentTimeMillis() - game.voteStartedAt >= voteTimeoutMs) {
             for (String p : game.players) {
-                if (!game.votes.containsKey(p) && !game.trustees.contains(p)) {
+                if (isHumanPlayer(game, p) && !game.votes.containsKey(p) && !game.trustees.contains(p)) {
                     game.trustees.add(p);
                     abstained.add(p);
                 }
@@ -2636,7 +2643,7 @@ public class ScriptGameService {
         if (quorumEnabled) {
             int online = 0;
             for (String p : game.players) {
-                if (!game.trustees.contains(p)) online++;
+                if (isHumanPlayer(game, p) && !game.trustees.contains(p)) online++;
             }
             int quorum = (online + 1) / 2; // ceil(n/2)
             result.put("online_players", online);
@@ -3056,8 +3063,19 @@ public class ScriptGameService {
                 log.warn("Script game {} discussion rounds failed: {}", game.sessionId, e.getMessage());
             } finally {
                 game.discussionActive = false;
+                // LLM/降级模板可能在瞬间完成两轮；保留一个最短窗口，让真人看见 Gal
+                // 舞台并有机会发言，避免 DISCUSSION→VOTE 在同一屏内快速翻转。
+                long elapsed = System.currentTimeMillis() - game.phaseStartedAt;
+                long remaining = Math.max(0, discussionMinDurationMs - elapsed);
+                if (remaining > 0) {
+                    try {
+                        Thread.sleep(remaining);
+                    } catch (InterruptedException interrupted) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
                 // P1: 统一进 VOTE 入口（投票计时/quorum 重置/快照/阶段推送；GAP-8 A3-3 自动进投票语义不变）
-                enterVotePhase(game);
+                if (game.phase == Phase.DISCUSSION) enterVotePhase(game);
             }
         });
     }
@@ -3558,6 +3576,19 @@ public class ScriptGameService {
 
     public ScriptGame getGame(String sessionId) {
         return touchGame(sessionId);
+    }
+
+    /** 单人前端局仅扮演者需要人工表态；其余角色仍参与讨论和作为嫌疑人候选。 */
+    public void designateHumanPlayer(String sessionId, String humanPlayer) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null || humanPlayer == null || !game.players.contains(humanPlayer)) return;
+        game.playerIsHuman.clear();
+        for (String player : game.players) game.playerIsHuman.put(player, player.equals(humanPlayer));
+        saveSnapshot(game);
+    }
+
+    private static boolean isHumanPlayer(ScriptGame game, String player) {
+        return game.playerIsHuman.getOrDefault(player, true);
     }
 
     /**
@@ -4130,6 +4161,7 @@ public class ScriptGameService {
         content.put("player_ap", new LinkedHashMap<>(game.playerAp));
         content.put("player_ap_max", new LinkedHashMap<>(game.playerApMax));
         content.put("player_talkativeness", new LinkedHashMap<>(game.playerTalkativeness));
+        content.put("human_players", game.players.stream().filter(p -> isHumanPlayer(game, p)).toList());
         content.put("player_keys", new LinkedHashMap<>(game.playerKeys));
         content.put("votes", new LinkedHashMap<>(game.votes));
         // P-0816-G（UI 重设计阶段一 API-11 弃票，决策 U8）：弃票集合随快照整包 JSON 加键落库
@@ -4249,9 +4281,10 @@ public class ScriptGameService {
         game.playerApMax.putAll(intMap(c.get("player_ap_max")));
         // 批次 D: talkativeness 快照恢复（旧快照无此键 → 空 map，门控按缺省 0.5 兜底）
         game.playerTalkativeness.putAll(doubleMap(c.get("player_talkativeness")));
-        // 批次 D: 人类玩家标记（全员真人，缺省 true；恢复后按玩家补齐）
+        // 旧快照无 human_players 时兼容为全员真人。
+        java.util.Set<String> humanPlayers = new java.util.HashSet<>(strList(c.get("human_players")));
         for (String p : game.players) {
-            game.playerIsHuman.put(p, true);
+            game.playerIsHuman.put(p, humanPlayers.isEmpty() || humanPlayers.contains(p));
         }
         game.playerKeys.putAll(strMap(c.get("player_keys")));
         game.votes.putAll(strMap(c.get("votes")));

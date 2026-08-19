@@ -154,8 +154,8 @@ roleplay:
     # 三个挂载点均写盘。目录不存在自动创建；未配置（空）→ 仅内存不落盘（零破坏）。
     persona-cards-dir: "./data/persona"
     approval:
-      # 审批门（D7）：剧本杀揭晓 / 狼人杀投票结算挂起等待 DM 审批；true=手动审批（超时自动驳回回滚），false=自动通过
-      enabled: true
+      # 单人/本地默认自动通过，保证剧本杀可在前端完整收官；需主持人审核时显式设为 true。
+      enabled: false
       timeout-seconds: 60
     ap:
       # 行动点（C2）：剧本杀玩家初始 AP 基础值（角色 ap_bonus 叠加；搜证消耗，行动力限制，蓝图 P2）
@@ -188,6 +188,8 @@ roleplay:
       #   wait-bias=人类发言中未被点名 AI 的静默等待系数（默认 0.5）；
       #   cold-break=冷场破冰开关（连续全员静默→按动机指定破冰者，默认 true）
       max-rounds: 2
+      # 最短讨论窗口（毫秒）：即使 LLM 很快完成两轮，也让真人有时间看到 Gal 并发言。
+      min-duration-ms: 8000
       silence-floor: 0.15
       priority-decay-rounds: 3
       wait-bias: 0.5

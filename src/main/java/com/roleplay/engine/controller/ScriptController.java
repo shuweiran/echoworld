@@ -83,6 +83,9 @@ public class ScriptController {
         String theme = (String) body.getOrDefault("theme", "默认主题");
         // P-0803-K（剧本杀双版本）：对局模式 —— 缺省 "full"=真剧本杀（搜证+地图）/ "chat"=简单对话版（无取证，直接多人对话）
         String mode = (String) body.getOrDefault("mode", "full");
+        // 单人前端对局：仅扮演者需实际表态；其余点亮角色由讨论引擎驱动为 NPC。
+        // 未传保持旧行为（全员真人），不影响联机/既有调用方。
+        String humanPlayer = String.valueOf(body.getOrDefault("human_player", "")).trim();
         // P-0810-17（阶段 1，两阶段生成）：outline_only 缺省 true —— init 只生成概略（快 <10s，
         // 不再同步双 LLM 生成完整剧本+地图）；完整剧本+地图由 POST /api/script/generate_full 后台异步补齐。
         // outline_only=false 保留既有同步完整生成路径（向后兼容旧调用方/测试）。
@@ -111,6 +114,11 @@ public class ScriptController {
             }
         }
         Map<String, Object> state = scriptGameService.initGame(sessionId, theme, players, mode, outlineOnly);
+        if (!humanPlayer.isBlank()) {
+            scriptGameService.designateHumanPlayer(sessionId, humanPlayer);
+            ScriptGameService.ScriptGame initialized = scriptGameService.getGame(sessionId);
+            if (initialized != null) state = initialized.toMap(humanPlayer);
+        }
         // D5: 将剧本局注册到 RouterService，secrets 随对话注入对应角色上下文
         ScriptGameService.ScriptGame game = scriptGameService.getGame(sessionId);
         if (game != null) {
@@ -269,7 +277,11 @@ public class ScriptController {
      *  currentSessionId 回退错位，role_key 串局 403）；无 key 保持 session_id/current 解析。 */
     @GetMapping("/keys")
     public ResponseEntity<Map<String, Object>> getKeys(@RequestParam(defaultValue = "") String session_id,
-                                                       @RequestParam(defaultValue = "") String player_key) {
+                                                       @RequestParam(defaultValue = "") String player_key,
+                                                       @RequestHeader(value = "X-DM-Key", defaultValue = "") String dmKeyHeader) {
+        if (!dmKeyOk(dmKeyHeader)) {
+            return ResponseEntity.status(403).body(Map.of("error", "DM 权限校验失败：请配置并提供 X-DM-Key"));
+        }
         String sid = session_id.isBlank() ? currentSessionId : session_id;
         // P-0810-17（B3）：优先 player_key 反查（该 key 属于哪个对局以服务层为准，key 与对局一一对应）
         if (player_key != null && !player_key.isBlank()) {
@@ -279,6 +291,12 @@ public class ScriptController {
         if (sid.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
         Map<String, String> keys = scriptGameService.getPlayerKeys(sid);
         return ResponseEntity.ok(Map.of("session_id", sid, "player_keys", keys));
+    }
+
+    /** 仅供既有直接控制器测试调用；与 HTTP 路由同样按空 DM key 拒绝。 */
+    @Deprecated
+    public ResponseEntity<Map<String, Object>> getKeys(String sessionId, String playerKey) {
+        return getKeys(sessionId, playerKey, "");
     }
 
     /**
@@ -314,10 +332,9 @@ public class ScriptController {
         return ResponseEntity.ok(scriptGameService.advancePhase(sessionId));
     }
 
-    /** C4: DM key 校验 —— 未配置（空）时放开（与审批门同开放模式），配置后严格匹配。 */
+    /** C4: DM key 校验 —— 安全默认拒绝；未配置口令时不得开放真相或全员令牌。 */
     private boolean dmKeyOk(String providedKey) {
-        if (dmKey == null || dmKey.isBlank()) return true;
-        return providedKey != null && dmKey.equals(providedKey);
+        return dmKey != null && !dmKey.isBlank() && providedKey != null && dmKey.equals(providedKey);
     }
 
     @PostMapping("/search")
@@ -325,7 +342,9 @@ public class ScriptController {
         String player = body.getOrDefault("player", "");
         String location = body.getOrDefault("location", "");
         String playerKey = body.getOrDefault("player_key", "");
-        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
+        // P-0819-Q：显式 session_id 优先，避免同名玩家/多局并发时搜证落到旧会话。
+        String sessionId = body.getOrDefault("session_id", "");
+        if (sessionId == null || sessionId.isBlank()) sessionId = playerSessions.getOrDefault(player, currentSessionId);
         Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
         if (denied != null) return ResponseEntity.status(403).body(denied);
         return ResponseEntity.ok(scriptGameService.search(sessionId, player, location));
@@ -417,7 +436,23 @@ public class ScriptController {
 
     @PostMapping("/start_discussion")
     public ResponseEntity<Map<String, Object>> startDiscussion(@RequestBody Map<String, String> body) {
-        String sessionId = body.getOrDefault("session_id", currentSessionId);
+        String player = body.getOrDefault("player", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        String sessionId = resolveSessionId(player, playerKey, body.getOrDefault("session_id", ""));
+        if (playerKey.isBlank()) return ResponseEntity.status(403).body(Map.of("error", "缺少玩家 roleKey"));
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        ScriptGameService.ScriptGame beforeGame = scriptGameService.getGame(sessionId);
+        if (beforeGame != null) {
+            Map<String, Object> playerView = beforeGame.toMap(player);
+            Object locations = playerView.get("locations");
+            Object searched = playerView.get("searched_locations");
+            if (locations instanceof List<?> locs && !locs.isEmpty()
+                    && searched instanceof List<?> searchedLocs && searchedLocs.isEmpty()) {
+                return ResponseEntity.ok(Map.of("phase", "investigation", "transitioned", false,
+                        "error", "请至少完成一次搜证后再进入讨论"));
+            }
+        }
         boolean transitioned = scriptGameService.startDiscussion(sessionId);
         ScriptGameService.ScriptGame game = scriptGameService.getGame(sessionId);
         if (game == null) {
@@ -453,7 +488,12 @@ public class ScriptController {
 
     @PostMapping("/start_voting")
     public ResponseEntity<Map<String, Object>> startVoting(@RequestBody Map<String, String> body) {
-        String sessionId = body.getOrDefault("session_id", currentSessionId);
+        String player = body.getOrDefault("player", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        String sessionId = resolveSessionId(player, playerKey, body.getOrDefault("session_id", ""));
+        if (playerKey.isBlank()) return ResponseEntity.status(403).body(Map.of("error", "缺少玩家 roleKey"));
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
         ScriptGameService.ScriptGame game = scriptGameService.getGame(sessionId);
         if (game == null) return ResponseEntity.ok(Map.of("phase", "not_found", "error", "游戏不存在"));
         String before = game.getPhase().name().toLowerCase();
@@ -687,14 +727,23 @@ public class ScriptController {
 
     @PostMapping("/resolve")
     public ResponseEntity<Map<String, Object>> resolve(@RequestBody Map<String, String> body) {
-        String sessionId = body.getOrDefault("session_id", currentSessionId);
-        return ResponseEntity.ok(scriptGameService.resolveVote(sessionId));
+        String player = body.getOrDefault("player", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        String sessionId = resolveSessionId(player, playerKey, body.getOrDefault("session_id", ""));
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        // D-079：揭晓按钮必须推进 VOTE -> REVEAL；仅计算 resolveVote 不会改变阶段。
+        return ResponseEntity.ok(scriptGameService.advancePhase(sessionId));
     }
 
     /** GAP-4b: REVEAL 展示后由前端确认结束对局 → ENDED（终态，含结果落库 GAP-4c）。 */
     @PostMapping("/finish")
     public ResponseEntity<Map<String, Object>> finish(@RequestBody Map<String, String> body) {
-        String sessionId = body.getOrDefault("session_id", currentSessionId);
+        String player = body.getOrDefault("player", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        String sessionId = resolveSessionId(player, playerKey, body.getOrDefault("session_id", ""));
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
         return ResponseEntity.ok(scriptGameService.confirmEnded(sessionId));
     }
 

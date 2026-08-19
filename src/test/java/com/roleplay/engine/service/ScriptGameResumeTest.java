@@ -364,11 +364,8 @@ class ScriptGameResumeTest {
         ResponseEntity<Map<String, Object>> legacySearch = ctl.search(Map.of("player", "Alice", "location", "书房"));
         assertEquals(200, legacySearch.getStatusCode().value(), "无 key 兼容放行");
 
-        // DM keys 端点：返回全员令牌一览（P-0810-17 B3：新增可选 player_key 参数，缺省保持旧行为）
-        Map<String, Object> keysResp = ctl.getKeys(sessionId, "").getBody();
-        @SuppressWarnings("unchecked")
-        Map<String, String> keys = (Map<String, String>) keysResp.get("player_keys");
-        assertEquals(3, keys.size(), "DM 面板可见全员令牌");
-        assertEquals(aliceKey, keys.get("Alice"));
+        // DM keys 端点：未配置/未携带 DM key 时不能泄露全员令牌。
+        ResponseEntity<Map<String, Object>> keysResp = ctl.getKeys(sessionId, "");
+        assertEquals(403, keysResp.getStatusCode().value(), "无 DM key 不得取得全员令牌");
     }
 }

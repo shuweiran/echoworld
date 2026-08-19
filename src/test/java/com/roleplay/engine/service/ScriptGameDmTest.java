@@ -240,17 +240,16 @@ class ScriptGameDmTest {
     //  ═══════════════════════════════════════════════════════════
 
     @Test
-    @DisplayName("C4-5: controller 层 —— DM key 未配置放开；配置后 无/错 key 403、正确 key 200")
+    @DisplayName("C4-5: controller 层 —— DM key 未配置时安全拒绝；配置后无/错 key 403、正确 key 200")
     void controllerDmKeyGate() throws Exception {
         ScriptGameService svc = newService();
         String sid = "dm-c45";
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
 
-        // ① 未配置 key（默认放开，与审批门同模式）
+        // ① 未配置 key 也安全拒绝：DM 状态/全员 roleKey 不得在未鉴权时泄露。
         ScriptController open = new ScriptController(svc, mock(RouterService.class), mock(SimulationService.class));
         ResponseEntity<Map<String, Object>> openResp = open.dmStatus(sid, "");
-        assertEquals(200, openResp.getStatusCode().value(), "未配置 DM key 时放开");
-        assertEquals("investigation", openResp.getBody().get("phase"));
+        assertEquals(403, openResp.getStatusCode().value(), "未配置 DM key 时安全拒绝");
 
         // ② 配置 key 后：无/错 key → 403
         ScriptController gated = new ScriptController(svc, mock(RouterService.class), mock(SimulationService.class));
@@ -287,6 +286,6 @@ class ScriptGameDmTest {
 
         ScriptController ctl = new ScriptController(svc, mock(RouterService.class), mock(SimulationService.class));
         ResponseEntity<Map<String, Object>> resp = ctl.advance(new LinkedHashMap<>(Map.of("session_id", "")), "");
-        assertTrue(resp.getBody().get("error").toString().contains("缺少 session_id"), "缺 session_id 报错");
+        assertEquals(403, resp.getStatusCode().value(), "未配置 DM key 时先拒绝未鉴权请求");
     }
 }

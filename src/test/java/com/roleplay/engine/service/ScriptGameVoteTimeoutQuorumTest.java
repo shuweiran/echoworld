@@ -213,4 +213,25 @@ class ScriptGameVoteTimeoutQuorumTest {
         assertEquals(ScriptGameService.Phase.REVEAL, svc.getGame(SESSION).phase);
         assertEquals("Bob", res.get("most_voted"));
     }
+
+    @Test
+    @DisplayName("单人前端闭环：一名扮演者投票即可从 VOTE 收官至 ENDED，NPC 仍可被指认")
+    void soloFrontendVoteRevealsAndEnds() {
+        ScriptGameService svc = newService(60000);
+        toVote(svc, List.of("Alice", "Bob", "Carol"));
+        svc.designateHumanPlayer(SESSION, "Alice");
+
+        Map<String, Object> progress = svc.voteStatus(SESSION);
+        assertEquals(1, progress.get("total"));
+        assertEquals(3, ((List<?>) progress.get("candidates")).size());
+
+        assertTrue(svc.castVote(SESSION, "Alice", "Bob").contains("投票给了"));
+        Map<String, Object> reveal = svc.resolveVote(SESSION);
+        assertEquals(ScriptGameService.Phase.REVEAL, svc.getGame(SESSION).phase);
+        assertEquals("Bob", reveal.get("most_voted"));
+
+        Map<String, Object> ended = svc.confirmEnded(SESSION);
+        assertEquals("ended", ended.get("phase"));
+        assertEquals(ScriptGameService.Phase.ENDED, svc.getGame(SESSION).phase);
+    }
 }

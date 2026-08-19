@@ -110,7 +110,7 @@ class ScriptPresentEndpointTest {
         String sid = init.get("session_id").asText();
 
         // 取林深的 role_key（本人视图）
-        String statusRes = getJson("/api/script/status?player=" + java.net.URLEncoder.encode("林深", java.nio.charset.StandardCharsets.UTF_8));
+        String statusRes = getJson("/api/script/status?player=林深");
         JsonNode st = mapper.readTree(statusRes);
         String key = st.has("role_key") ? st.get("role_key").asText() : "";
         Map<String, Object> out = new LinkedHashMap<>();
@@ -160,6 +160,7 @@ class ScriptPresentEndpointTest {
         Map<String, Object> searchBody = new LinkedHashMap<>();
         searchBody.put("session_id", sid);
         searchBody.put("player", player);
+        searchBody.put("player_key", key);
         searchBody.put("location", "客厅");
         String searchRes = postJson("/api/script/search", searchBody);
         JsonNode sRes = mapper.readTree(searchRes);
@@ -183,6 +184,8 @@ class ScriptPresentEndpointTest {
         //    HTTP 层 discussion 窗口受「讨论引擎自动收束」约束不可稳定观测）
         Map<String, Object> dsBody = new LinkedHashMap<>();
         dsBody.put("session_id", sid);
+        dsBody.put("player", player);
+        dsBody.put("player_key", key);
         postJson("/api/script/start_discussion", dsBody);
         // 讨论自动收束进 VOTE（mock LLM 极快）；等至非 discussion 态
         String phase = "";

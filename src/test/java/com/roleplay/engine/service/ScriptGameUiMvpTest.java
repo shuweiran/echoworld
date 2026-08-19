@@ -328,11 +328,10 @@ class ScriptGameUiMvpTest {
         assertEquals(List.of(), r.get("trustees"));
         @SuppressWarnings("unchecked")
         List<Map<String, Object>> candidates = (List<Map<String, Object>>) r.get("candidates");
-        assertEquals(2, candidates.size(), "两名候选人各有 1 票");
-        for (Map<String, Object> c : candidates) {
-            assertEquals(1, c.get("votes"), "聚合票数");
-            assertEquals("", c.get("point"), "MVP point 空占位");
-        }
+        assertEquals(3, candidates.size(), "三名在线玩家均应为候选人");
+        assertEquals(2L, candidates.stream().filter(c -> Integer.valueOf(1).equals(c.get("votes"))).count(), "两名候选人各有 1 票");
+        assertEquals(1L, candidates.stream().filter(c -> Integer.valueOf(0).equals(c.get("votes"))).count(), "弃票者仍显示为 0 票候选人");
+        assertTrue(candidates.stream().allMatch(c -> "".equals(c.get("point"))), "MVP point 空占位");
         // 只出聚合不出投票人：响应中不含「谁投了谁」的票面映射
         assertFalse(r.containsKey("votes"), "不泄露票面映射");
         assertFalse(r.toString().contains("Alice->"), "无 voter→suspect 明文");
@@ -376,10 +375,10 @@ class ScriptGameUiMvpTest {
         assertFalse(game.votes.containsKey("Carol"), "不进 votes 票型统计");
         assertEquals(1, game.abstainedVoters.size());
 
-        // quorum 在线数仍计（voteStatus total 含弃票者）、票型统计不含弃票（candidates 票数=正常票）
+        // quorum 在线数仍计；首票前候选人仍须完整返回且全为 0 票。
         Map<String, Object> status = svc.voteStatus(SESSION);
         assertEquals(3, status.get("total"), "弃票玩家仍计在线（quorum 口径）");
-        assertEquals(0, ((List<?>) status.get("candidates")).size(), "无人投正常票 → 无候选人");
+        assertEquals(3, ((List<?>) status.get("candidates")).size(), "无人投正常票也应返回全部候选人");
         assertEquals(1, status.get("abstained"));
 
         // 重复弃票拒绝
@@ -514,5 +513,25 @@ class ScriptGameUiMvpTest {
         assertTrue(sse.events.stream().anyMatch(e -> "script_vote_progress".equals(e.getKey())
                 && Integer.valueOf(1).equals(((Map<?, ?>) e.getValue()).get("abstained"))),
                 "弃票应推 script_vote_progress 且 abstained=1");
+    }
+
+    @Test
+    @DisplayName("单人前端局：NPC 保留为嫌疑人，但只要求扮演者投票")
+    @SuppressWarnings("unchecked")
+    void soloFrontendPlayerCanCompleteVoteWithoutWaitingForNpcInput() {
+        ScriptGameService svc = newService();
+        svc.initGame(SESSION, "庄园", List.of("Alice", "Bob", "Carol"));
+        svc.designateHumanPlayer(SESSION, "Alice");
+        svc.startVoting(SESSION);
+
+        Map<String, Object> progress = svc.voteStatus(SESSION);
+        assertEquals(1, progress.get("total"), "仅扮演者需要在前端表态");
+        assertEquals(0, progress.get("voted"));
+        List<Map<String, Object>> candidates = (List<Map<String, Object>>) progress.get("candidates");
+        assertEquals(3, candidates.size(), "NPC 仍必须作为嫌疑人候选展示");
+
+        assertTrue(svc.castVote(SESSION, "Alice", "Bob").contains("投票给了"));
+        Map<String, Object> goal = (Map<String, Object>) svc.getGoal(SESSION).get("goal");
+        assertEquals(Map.of("voted", 1, "total", 1), goal.get("progress"));
     }
 }
