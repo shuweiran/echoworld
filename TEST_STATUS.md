@@ -1828,6 +1828,11 @@ oleplay-v4/frontend/src/phaser/simGroupFilter.ts——纯函数 shouldShowWorldM
 - **兼容性**：保留既有 `/api/scenes/map` 与 `/api/structure/generate` 后端接口；晨雾镇专用入口和 P-0820-L 占用文件未改；未同步 8000 static。
 - **纪律**：未启动 `spring-boot:run`，未 git commit。
 
+## Round 188 / v188（2026-08-20）（P-0820-M 地图保存与复用）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules，产物 `index-Bphn4DbG.js` / `index-2RooXbjo.css`。
+- **持久化验证**：统一地图生成结果增加“保存地图”和“保存并进入 2D 探索”；保存调用现有 `setGeneralMap(scriptId, map)`，写入 `roleplay_demo2_general_maps_v1`，GameBridge 命中当前场景缓存时直接复用。
+- **纪律**：未启动 `spring-boot:run`，未同步 8000 static，未 git commit。
+
 ## Round 187 / v187（2026-08-20）（P-0820-H 晨雾镇实跑）
 - **实跑方式**：通过现有 8000 的 `POST /api/simulation/load-characters` 注入晨雾镇 collision 地图与 8 个测试角色，再调用 `POST /api/simulation/start`。
 - **运行结果**：启动成功；运行约 30 秒时 `running=true`、`tick=296`、`agentCount=8`；出现 3 组自动对话、6 个社会接触事件、关系状态开始写入；之后保持 5 个角色在对话中，其他角色继续漫游/等待。
@@ -1873,3 +1878,8 @@ oleplay-v4/frontend/src/phaser/simGroupFilter.ts——纯函数 shouldShowWorldM
 - **构建/部署**：前端 `npm run build` 通过（Vite 144 modules）；静态入口更新为 `index-CcWLGV7W.js`；`mvn -DskipTests package` BUILD SUCCESS。
 - **在线验证**：8000 已切换至 PID 35252；`GET /` 200 且引用新 JS，`GET /assets/index-CcWLGV7W.js` 200（2,114,286 bytes）。
 - **备注**：本轮打包跳过测试；功能测试结果见 Round 193 的 TypeScript/Vite 构建及交互约束核查。
+
+## Round 195 / v195（2026-08-20）（P-0820-O 导演旁听可见反馈）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
+- **交互核查**：导演模式的每个活动会话组均创建“👁 旁听对话”点击入口；点击只设置本地观察组、打开经典视图，不调 join/send API；右侧消息以 `recentConversations.group === selectedGroup.id` 过滤，空档显示成员及等待下一次 AI 调度说明。
+- **发布验证**：`mvn -DskipTests package` BUILD SUCCESS；8000 PID 30512，`/` 引用 `index-CVsyNIxg.js`，新 JS 200。
