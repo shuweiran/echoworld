@@ -24,11 +24,22 @@ export const simChatConfig = {
   maxSentenceChars: 60,
   /** 2D 世界角色气泡文本截断上限（SimulationScene 渲染现状 50） */
   maxBubbleChars: 50,
+  /** 导演旁听仅加速本地回放，不加快后端 AI 思考/发言，方便观察连续对话。 */
+  observerTypingCharsPerSec: 12,
+  /** 旁听时两句之间的短停顿。 */
+  observerInterSentencePauseMs: 650,
 } as const;
 
 /** 打字机参数的单行摘要（调试/演示用） */
 export function simChatConfigSummary(): string {
   return `打字机 ${simChatConfig.typingCharsPerSec}字/秒｜句间停顿 ${simChatConfig.interSentencePauseMs / 1000}s｜暂停超时 ${simChatConfig.pauseTimeoutMs / 1000}s｜句长上限 ${simChatConfig.maxSentenceChars}字`;
+}
+
+/** 按当前观察身份选择本地回放节奏；不改变后端模拟时钟。 */
+export function simChatPlaybackTiming(observing: boolean) {
+  return observing
+    ? { charsPerSec: simChatConfig.observerTypingCharsPerSec, tickMs: Math.round(1000 / simChatConfig.observerTypingCharsPerSec), pauseMs: simChatConfig.observerInterSentencePauseMs }
+    : { charsPerSec: simChatConfig.typingCharsPerSec, tickMs: simChatConfig.typingTickMs, pauseMs: simChatConfig.interSentencePauseMs };
 }
 
 /**

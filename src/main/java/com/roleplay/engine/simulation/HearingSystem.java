@@ -5,6 +5,8 @@ import java.util.*;
 public class HearingSystem {
 
     private final SpatialGrid spatialGrid;
+    /** 当前地图的实体障碍；墙/建筑的直线遮挡会阻断普通对话和听觉。 */
+    private volatile List<Obstacle> obstacles = List.of();
 
     public record HearingResult(String speakerName, String listenerName,
                                  double distance, double volume,
@@ -15,6 +17,17 @@ public class HearingSystem {
 
     public HearingSystem(SpatialGrid spatialGrid) {
         this.spatialGrid = spatialGrid;
+    }
+
+    public void setObstacles(List<Obstacle> obstacles) {
+        this.obstacles = obstacles == null ? List.of() : List.copyOf(obstacles);
+    }
+
+    private boolean soundBlocked(AgentState a, AgentState b) {
+        for (Obstacle obstacle : obstacles) {
+            if (obstacle.blocksSound() && obstacle.intersectsLine(a.getX(), a.getY(), b.getX(), b.getY())) return true;
+        }
+        return false;
     }
 
     public List<HearingResult> computeAudibility(Collection<AgentState> agents) {
@@ -30,6 +43,7 @@ public class HearingSystem {
 
             for (AgentState listener : nearby) {
                 if (listener == speaker) continue;
+                if (soundBlocked(speaker, listener)) continue;
                 double dist = speaker.distanceTo(listener);
                 double attenuation = 1.0 / (1.0 + dist * dist * 0.0001);
                 double effectiveRange = rawRange * attenuation * listener.getHearRange() / 200.0;
@@ -68,6 +82,7 @@ public class HearingSystem {
 
         for (AgentState other : nearby) {
             if (other == self) continue;
+            if (soundBlocked(self, other)) continue;
             double dist = self.distanceTo(other);
             double attenuation = 1.0 / (1.0 + dist * dist * 0.0001);
             double effectiveRange = rawRange * attenuation * other.getHearRange() / 200.0;
@@ -79,6 +94,7 @@ public class HearingSystem {
     }
 
     public boolean canHearEachOther(AgentState a, AgentState b) {
+        if (soundBlocked(a, b)) return false;
         double dist = a.distanceTo(b);
         double volA = computeVolume(a);
         double volB = computeVolume(b);

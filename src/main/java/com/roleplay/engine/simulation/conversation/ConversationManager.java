@@ -30,7 +30,7 @@ public class ConversationManager {
     private static final long CONVERSATION_COOLDOWN_MS = 5_000;
     /** Phase 1 Track fusion: 两两距离 < 70px → 可对话（P-0815-A：由原「5 格」注释修正为 px 语义，
      *  与 SpatialTrackResolver.DEFAULT_CONVERSATION_DISTANCE 同值；legacy 路径（trackDirector==null）使用）。 */
-    private static final double CONVERSATION_DISTANCE_THRESHOLD = 70.0;
+    private static final double CONVERSATION_DISTANCE_THRESHOLD = 48.0;
 
     /** 调研报告 2.4 #3：玩家 joinGroup 距组最近成员的最大距离（px，对齐前端 findApproachableGroups
      *  成员 100px / 群中心 120px 语义，取宽松端 120）。超距拒绝（防“人在千里外也能入组”）。 */
@@ -439,13 +439,46 @@ public class ConversationManager {
         return JoinResult.ok(group);
     }
 
-    /** 玩家与组内最近成员距离 < {@link #JOIN_GROUP_MAX_DISTANCE}（px）才允许加入。 */
+    /** 玩家与组内最近成员距离 < {@link #JOIN_GROUP_MAX_DISTANCE}（px）且声线路径未被墙体阻断，才允许加入。 */
     private boolean nearGroup(AgentState player, ConversationGroup group) {
         double best = Double.MAX_VALUE;
         for (AgentState m : group.getParticipantList()) {
-            best = Math.min(best, player.distanceTo(m));
+            if (canConverse(player, m)) {
+                best = Math.min(best, player.distanceTo(m));
+            }
         }
         return best < JOIN_GROUP_MAX_DISTANCE;
+    }
+
+    /**
+     * 对话资格的唯一空间判定：既要在声学范围内，也不能被 blocksSound 墙体/建筑遮挡。
+     * 这样手动加入、玩家消息自动建组及已建组的持续性共用同一条规则。
+     */
+    private boolean canConverse(AgentState a, AgentState b) {
+        return world != null && world.getHearingSystem().canHearEachOther(a, b);
+    }
+
+    /**
+     * 群聊允许成员经可听见的同伴形成连通团；若隔墙后图不再连通，则自然散场，
+     * 防止既有会话在角色迁移/移动后继续穿墙交流。
+     */
+    private boolean groupIsAudiblyConnected(ConversationGroup group) {
+        List<AgentState> members = group.getParticipantList();
+        if (members.size() < 2) return true;
+        Set<String> reached = new HashSet<>();
+        ArrayDeque<AgentState> queue = new ArrayDeque<>();
+        queue.add(members.get(0));
+        reached.add(members.get(0).getAgentName());
+        while (!queue.isEmpty()) {
+            AgentState current = queue.removeFirst();
+            for (AgentState candidate : members) {
+                if (!reached.contains(candidate.getAgentName()) && canConverse(current, candidate)) {
+                    reached.add(candidate.getAgentName());
+                    queue.addLast(candidate);
+                }
+            }
+        }
+        return reached.size() == members.size();
     }
 
     /** 重算组内全部成员的轨道分配（join/leave 后即时生效；每 tick 由 SimulationOrchestrator 再回写）。 */
@@ -501,7 +534,10 @@ public class ConversationManager {
                 double d = player.distanceTo(a);
                 // P-0815-A：自动 DYAD 距离上限（调研报告 2.4 #3）——nearest 超过
                 // MAX_AUTO_DYAD_DISTANCE 不建组（玩家在角落时最近的 AI 也可能几百 px 外）。
-                if (d < MAX_AUTO_DYAD_DISTANCE && d < minDist) { minDist = d; nearest = a; }
+                if (d < MAX_AUTO_DYAD_DISTANCE && d < minDist && canConverse(player, a)) {
+                    minDist = d;
+                    nearest = a;
+                }
             }
             if (nearest != null) {
                 String gid = player.getAgentName() + "+" + nearest.getAgentName();
@@ -530,6 +566,9 @@ public class ConversationManager {
         List<String> toRemove = new ArrayList<>();
         for (ConversationGroup group : activeGroups.values()) {
             if (!group.isActive()) {
+                toRemove.add(group.getGroupId());
+            } else if (!groupIsAudiblyConnected(group)) {
+                // 墙体/建筑或移动造成声学网络断开：不保留“隔墙仍在聊”的僵尸会话。
                 toRemove.add(group.getGroupId());
             } else if (group.isAwaitingPlayback()) {
                 // P-0814-B：等待「播出完毕」的组——有玩家成员不自动解散（玩家输入/点击唤醒，

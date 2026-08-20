@@ -183,6 +183,8 @@ export class SimulationScene extends Phaser.Scene {
   // ── C-2：气泡单例 + 避让 ──
   /** 非空时世界内只显示该 agent 的气泡（单轨：用户在场 → 只播一人）；null = 显示全部（多轨） */
   private bubbleFilter: string | null = null;
+  /** 会话组未被旁听前的首句预览（agentName → text）；独立于 currentMessage，避免世界消息刷屏。 */
+  private conversationPreviews = new Map<string, string>();
   /** agent → 气泡避让层数（重叠时向上抬，硬约束不重叠） */
   private bubbleLanes = new Map<string, number>();
 
@@ -457,6 +459,7 @@ export class SimulationScene extends Phaser.Scene {
         const gid = ground?.[y]?.[x] ?? 1;
         const col = collision?.[y]?.[x] ?? 0;
         const fill = col !== 0 ? 0x223044 : tileColor(gid);
+        // 契约瓦片自身完整渲染：不叠整图背景，避免视觉模糊和路径/碰撞边界失真。
         g.fillStyle(fill, 1);
         g.fillRect(x * tileW, y * tileH, tileW + 0.5, tileH + 0.5);
       }
@@ -839,6 +842,20 @@ export class SimulationScene extends Phaser.Scene {
     }
   }
 
+  /** 设置地图上的会话首句预览；只展示调用方明确提供的少量开场白。 */
+  setConversationPreviews(previews: Array<{ agentName: string; text: string }>) {
+    const next = new Map(previews.filter(p => p.agentName && p.text).map(p => [p.agentName, p.text]));
+    const same = next.size === this.conversationPreviews.size && [...next].every(([k, v]) => this.conversationPreviews.get(k) === v);
+    if (same) return;
+    this.conversationPreviews = next;
+    this.computeBubbleLanes(Array.from(this.lastAgentData.values()));
+    for (const [n, c] of this.agents) {
+      const parts = this.agentParts.get(n);
+      const data = this.lastAgentData.get(n);
+      if (c && parts && data) this.renderAgent(data, c, parts);
+    }
+  }
+
   /**
    * C-2：气泡避让层计算（硬约束：角色气泡不能重叠）。
    * 收集本帧可见气泡（filter 生效时只看单人），按 y 升序 x 升序确定性排序；
@@ -846,8 +863,8 @@ export class SimulationScene extends Phaser.Scene {
    * 层号存 bubbleLanes 供 renderAgent 使用（气泡锚定 agent 头部上方）。
    */
   private computeBubbleLanes(agents: SimAgent[]) {
-    const R = 12;            // 角色半径（renderAgent 同值）
-    const BASE = -R - 36;    // 气泡基准偏移（renderAgent 同值）
+    const R = 7;             // 96×64 大地图：角色半径收敛到约 1.3 格，避免遮挡房屋/道路
+    const BASE = -R - 30;    // 气泡基准偏移（renderAgent 同值）
     const BW = 20;           // 气泡高（renderAgent 同值）
     const STEP = BW + 2;     // 层步进
     const MAX_LANES = 4;
@@ -858,9 +875,10 @@ export class SimulationScene extends Phaser.Scene {
     const entries: { name: string; x: number; y: number; w: number }[] = [];
     for (const a of agents) {
       if (!a || !a.agentName) continue;
-      const msg = a.currentMessage && !a.currentMessage.startsWith('(主控') ? a.currentMessage : '';
+      const msg = this.conversationPreviews.get(a.agentName)
+        || (a.currentMessage && !a.currentMessage.startsWith('(主控') ? a.currentMessage : '');
       if (!msg) continue;
-      if (this.bubbleFilter != null && a.agentName !== this.bubbleFilter) continue;
+      if (!this.conversationPreviews.has(a.agentName) && this.bubbleFilter != null && a.agentName !== this.bubbleFilter) continue;
       const short = msg.length > TRUNC ? msg.slice(0, TRUNC) + '...' : msg;
       const tw = Math.min(short.length * FONT, MAX_W) + 16;
       entries.push({ name: a.agentName, x: a.x, y: a.y, w: tw });
@@ -945,7 +963,7 @@ export class SimulationScene extends Phaser.Scene {
     emojiLast?: string;
     bubbleLast?: string;
   }) {
-    const r = 12;
+    const r = 7;
     c.setPosition(a.x, a.y);
     const color = agentColor(a.agentName);
     const { dot, emoji: emojiT, name: nameT, sprite } = parts;
@@ -981,8 +999,9 @@ export class SimulationScene extends Phaser.Scene {
 
     // 消息气泡（替代 Canvas roundRect 气泡）
     // C-2：bubbleFilter 非空时只显示该 agent 气泡（世界内单轨只播一人）；避让层抬升防重叠
-    const msg = a.currentMessage && !a.currentMessage.startsWith('(主控') ? a.currentMessage : '';
-    const showBubble = msg && (this.bubbleFilter == null || a.agentName === this.bubbleFilter);
+    const preview = this.conversationPreviews.get(a.agentName);
+    const msg = preview || (a.currentMessage && !a.currentMessage.startsWith('(主控') ? a.currentMessage : '');
+    const showBubble = Boolean(preview) || Boolean(msg && (this.bubbleFilter == null || a.agentName === this.bubbleFilter));
     if (showBubble) {
       const short = msg.length > 50 ? msg.slice(0, 50) + '...' : msg;
       const fontSize = 11;
@@ -991,7 +1010,7 @@ export class SimulationScene extends Phaser.Scene {
       const th = 20;
       const bx = -tw / 2;
       const lane = this.bubbleLanes.get(a.agentName) ?? 0;
-      const by = -r - 36 - lane * 22;
+      const by = -r - 30 - lane * 22;
       if (parts.bubbleBg) {
         parts.bubbleBg.setSize(tw, th).setPosition(bx + tw / 2, by + th / 2).setFillStyle(0x1e293b, 0.8);
       } else {
@@ -1127,8 +1146,10 @@ export class SimulationScene extends Phaser.Scene {
     const text = action === 'join' ? '💬 加入对话' : action === 'leave' ? '🚪 离开对话' : '👁 旁听对话';
     const w = 92;
     const h = 22;
-    const x = right - w;
-    const y = top - h - 4;
+    // 上缘/右缘的成员框会让操作按钮落到负坐标或画布外，导致“看似有组但点不到”。
+    // 将操作胶囊钳在世界边界内，导演旁听与玩家加入共用此命中区域。
+    const x = Phaser.Math.Clamp(right - w, 4, WORLD_W - w - 4);
+    const y = Phaser.Math.Clamp(top - h - 4, 4, WORLD_H - h - 4);
     const btn = this.add.container(x, y);
     // Container 无 origin（子对象以容器本地 (0,0) 为基准）——bg/label 放 (w/2,h/2)，命中区 Rectangle(0,0,w,h) 即覆盖按钮可视区
     const bg = this.add.rectangle(w / 2, h / 2, w, h, 0x0f172a, 0.92).setStrokeStyle(1, color, 0.95);

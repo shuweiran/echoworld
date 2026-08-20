@@ -1310,6 +1310,10 @@ textarea { min-height: 76px; padding: 9px 10px; resize: vertical; }
 .sim-chat-msg.status-playing .status-tag { color: var(--phase-investigation); animation: sim-blink 1s infinite; }
 /* C-2：打字机光标（播放中逐字揭示的闪烁竖线） */
 .sim-chat-msg .typewriter-caret { color: var(--phase-investigation); animation: sim-blink 0.6s infinite; }
+.sim-history-row { width: 100%; display: flex; justify-content: space-between; gap: 10px; padding: 6px 4px; border: 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent); background: transparent; color: var(--text); text-align: left; font-size: 12px; cursor: pointer; }
+.sim-history-row:not(.sim-history-time):hover { background: var(--panel); }
+.sim-history-row span { color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sim-history-time { cursor: default; }
 @keyframes sim-blink { 50% { opacity: 0.35; } }
 
 /* ── P-0803-E：小地图（调研项 2 方案 B，DOM canvas 覆盖层） ── */

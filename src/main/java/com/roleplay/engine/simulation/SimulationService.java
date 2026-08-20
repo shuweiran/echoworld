@@ -263,7 +263,8 @@ public class SimulationService {
             Agent agent = new Agent(persona, "npc", llmClient);
             double x = 100 + Math.random() * 800;
             double y = 100 + Math.random() * 400;
-            double hearRange = 180 + Math.random() * 80;
+            // 大地图社会实验：原 180~260px 会跨越整栋建筑；收敛为近距离交谈尺度。
+            double hearRange = 85 + Math.random() * 25;
             double moveSpeed = moveSpeedBase + Math.random() * moveSpeedRandomRange;
 
             world.registerAgent(agent, x, y, hearRange, moveSpeed);
@@ -333,7 +334,8 @@ public class SimulationService {
             Agent agent = new Agent(p, "npc", llmClient);
             double[] spawn = pickSpawnPoint(spawnObstacles);
             double x = spawn[0], y = spawn[1];
-            double hearRange = 180 + Math.random() * 80;
+            // 大地图社会实验：原 180~260px 会跨越整栋建筑；收敛为近距离交谈尺度。
+            double hearRange = 85 + Math.random() * 25;
             double moveSpeed = moveSpeedBase + Math.random() * moveSpeedRandomRange;
 
             world.registerAgent(agent, x, y, hearRange, moveSpeed);
@@ -394,7 +396,7 @@ public class SimulationService {
         persona.setPersonaDesc(personaDesc == null ? "" : personaDesc);
         Agent agent = new Agent(persona, "npc", llmClient);
         double[] spawn = pickSpawnPoint(world.getObstacles());
-        world.registerAgent(agent, spawn[0], spawn[1], 180 + Math.random() * 80,
+        world.registerAgent(agent, spawn[0], spawn[1], 85 + Math.random() * 25,
                 moveSpeedBase + Math.random() * moveSpeedRandomRange);
         socialState.registerAgent(name);
         ensureSchedulesAndSuppliers();

@@ -53,6 +53,7 @@ public class SimulationWorld {
         this.movementSystem = new MovementSystem(WORLD_WIDTH, WORLD_HEIGHT, WORLD_MARGIN, spatialGrid);
         this.hearingSystem = new HearingSystem(spatialGrid);
         this.obstacles = Obstacle.createScene(currentScene, WORLD_WIDTH, WORLD_HEIGHT);
+        this.hearingSystem.setObstacles(this.obstacles);
     }
 
     public SpatialGrid getSpatialGrid() { return spatialGrid; }
@@ -161,6 +162,7 @@ public class SimulationWorld {
         this.currentScene = sceneName;
         this.obstacles = Obstacle.createScene(sceneName, WORLD_WIDTH, WORLD_HEIGHT);
         this.movementSystem.setObstacles(this.obstacles);
+        this.hearingSystem.setObstacles(this.obstacles);
         log.info("Scene changed to: {} ({} obstacles)", sceneName, obstacles.size());
     }
 
@@ -174,6 +176,7 @@ public class SimulationWorld {
                 : new CopyOnWriteArrayList<>(custom);
         this.currentScene = label == null || label.isBlank() ? "custom" : "custom:" + label;
         this.movementSystem.setObstacles(this.obstacles);
+        this.hearingSystem.setObstacles(this.obstacles);
         log.info("Custom obstacles set: {} (label={})", obstacles.size(), currentScene);
     }
 

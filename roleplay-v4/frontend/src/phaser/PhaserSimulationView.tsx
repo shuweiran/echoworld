@@ -21,7 +21,7 @@ import Phaser from 'phaser';
 import { SimulationScene, type SceneCallbacks, type AgentAnim } from './SimulationScene';
 import { AVAILABLE_SCENES, type SimGroup } from './simulationData';
 import type { ScriptMap } from './mapData';
-import { simChatConfig, cleanWorldText, truncateText, simChatConfigSummary } from './simChatConfig';
+import { simChatConfig, cleanWorldText, truncateText, simChatConfigSummary, simChatPlaybackTiming } from './simChatConfig';
 import { AnnouncementBanner } from '../components/AnnouncementBanner';
 import { AnnouncementTicker } from '../components/AnnouncementTicker';
 import { api, assetFileUrl, asepriteJsonUrl } from '../api/client';
@@ -94,6 +94,10 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   const [localMsgs, setLocalMsgs] = useState<SimChatMsg[]>([]);    // 玩家发言 + 系统提示
   const [chatInput, setChatInput] = useState('');
   const [chatOpen, setChatOpen] = useState(false);                 // 仅加入会话组后展开；默认地图全宽
+  /** 页面/浏览器切走时只暂停本地回放，回来后从同一字继续。 */
+  const [pageHidden, setPageHidden] = useState(() => typeof document !== 'undefined' && document.hidden);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyMode, setHistoryMode] = useState<'group' | 'time'>('group');
   // P-0813-D：galChat 时默认 Gal 视图；可切回经典列表
   const [galView, setGalView] = useState(true);
   /**
@@ -443,6 +447,9 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     return out;
   }, [conversations, bump]);
 
+  const isObserverPlayback = Boolean(joinedGroup && chatOpen && !playerName?.trim());
+  const playbackTiming = simChatPlaybackTiming(isObserverPlayback);
+
   // ── C-2：打字机队列引擎 ──
   const clearPlaybackTimers = () => {
     if (typingTimerRef.current) { clearInterval(typingTimerRef.current); typingTimerRef.current = null; }
@@ -475,12 +482,12 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
         nextTimerRef.current = setTimeout(() => {
           nextTimerRef.current = null;
           startNext();
-        }, simChatConfig.interSentencePauseMs);
+    }, playbackTiming.pauseMs);
       } else {
         revealRef.current.set(msg.id, cur + 1);
         bump(v => v + 1);
       }
-    }, simChatConfig.typingTickMs);
+    }, playbackTiming.tickMs);
   };
 
   /** 出队播下一段（队列严格串行：只有当前段播完/被跳过后才轮到下一段） */
@@ -506,8 +513,21 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worldMsgs]);
 
-  // C-2：暂停/恢复 —— 输入框有文字 → 冻结当前播放进度；发送后（清空）恢复
-  const paused = chatInput.trim().length > 0;
+  // 输入框有字或页面切到后台（切换浏览器/标签）都冻结本地回放；后端 AI 仍按自己的时钟继续。
+  const inputPaused = chatInput.trim().length > 0;
+  const paused = inputPaused || pageHidden;
+  useEffect(() => {
+    const syncVisibility = () => setPageHidden(document.hidden);
+    const markHidden = () => setPageHidden(true);
+    document.addEventListener('visibilitychange', syncVisibility);
+    window.addEventListener('blur', markHidden);
+    window.addEventListener('focus', syncVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', syncVisibility);
+      window.removeEventListener('blur', markHidden);
+      window.removeEventListener('focus', syncVisibility);
+    };
+  }, []);
   useEffect(() => {
     pausedRef.current = paused;
     if (paused) {
@@ -524,23 +544,23 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
             nextTimerRef.current = setTimeout(() => {
               nextTimerRef.current = null;
               startNext();
-            }, simChatConfig.interSentencePauseMs);
+        }, playbackTiming.pauseMs);
           } else {
             revealRef.current.set(msg.id, cur + 1);
             bump(v => v + 1);
           }
-        }, simChatConfig.typingTickMs);
+        }, playbackTiming.tickMs);
       } else {
         startNext();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paused]);
+  }, [paused, isObserverPlayback]);
 
   // C-2：60s 暂停超时看门狗 —— 输入框持续有字且无操作 → 跳过当前句（跳 done，继续下一段）
   useEffect(() => {
     const wd = setInterval(() => {
-      if (pauseStartRef.current != null && Date.now() - pauseStartRef.current >= simChatConfig.pauseTimeoutMs) {
+      if (inputPaused && pauseStartRef.current != null && Date.now() - pauseStartRef.current >= simChatConfig.pauseTimeoutMs) {
         pauseStartRef.current = null; // 重置，避免同一暂停期连续跳
   if (playingRef.current) finishPlaying();
         // 输入框仍有字 → 保持暂停等恢复；无字 → 播下一一轮
@@ -549,7 +569,7 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     }, 1000);
     return () => clearInterval(wd);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [inputPaused]);
 
   // 一般模式的世界消息只进入右侧群聊面板；地图上不显示任何聊天气泡。
   useEffect(() => {
@@ -569,6 +589,40 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     if (!groupId) return [];
     return allMsgs.filter(m => m.group === groupId || (m.kind !== 'world' && m.group === groupId));
   }, [allMsgs, joinedGroup?.id]);
+  const historyByGroup = useMemo(() => {
+    const buckets = new Map<string, SimChatMsg[]>();
+    for (const msg of allMsgs) {
+      if (!msg.group) continue;
+      const list = buckets.get(msg.group) || [];
+      list.push(msg);
+      buckets.set(msg.group, list);
+    }
+    return [...buckets.entries()].sort((a, b) => (b[1][b[1].length - 1]?.ts ?? 0) - (a[1][a[1].length - 1]?.ts ?? 0));
+  }, [allMsgs]);
+  const historyByTime = useMemo(() => {
+    const buckets = new Map<string, SimChatMsg[]>();
+    for (const msg of allMsgs) {
+      const label = new Date(msg.ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+      const list = buckets.get(label) || [];
+      list.push(msg);
+      buckets.set(label, list);
+    }
+    return [...buckets.entries()];
+  }, [allMsgs]);
+  /** 每个未旁听会话组只保留最早一句作为地图预览，点击旁听后该组预览收起，避免气泡刷屏。 */
+  const conversationPreviews = useMemo(() => {
+    const selectedId = joinedGroup?.id;
+    return groups.flatMap(g => {
+      if (!g.id || g.id === selectedId) return [];
+      const first = worldMsgs.find(m => m.group === g.id);
+      return first ? [{ agentName: first.who, text: first.text }] : [];
+    });
+  }, [groups, worldMsgs, joinedGroup?.id]);
+
+  useEffect(() => {
+    const sc = gameRef.current?.scene.getScene('SimulationScene') as SimulationScene | null;
+    sc?.setConversationPreviews(conversationPreviews);
+  }, [conversationPreviews]);
 
   // 新消息自动滚动到底部（C-2：仅在新消息到达或本就在底部时滚动，避免打字机逐字刷新时打断上翻阅读）
   const prevLenRef = useRef(0);
@@ -620,9 +674,18 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
       const d = await r.json();
       const list = (d.groups || []) as SimGroup[];
       setGroups(list);
-      // P-0813-K：currentTrack（玩家所在群）→ joinedGroup（Gal 面板群聊模式数据源）
+      // currentTrack 只对真正加入世界的玩家有意义。导演旁听没有 currentTrack；此前每 4 秒
+      // 把已选旁听组重置为 null，导致右侧只闪出几行便自动关闭。
       const track = d.currentTrack ? String(d.currentTrack) : '';
-      setJoinedGroup(track ? (list.find(g => g.id === track) ?? null) : null);
+      const hasPlayer = Boolean((playerNameRef.current || '').trim())
+        && worldAgentsRef.current.includes((playerNameRef.current || '').trim());
+      if (hasPlayer) {
+        setJoinedGroup(track ? (list.find(g => g.id === track) ?? null) : null);
+      } else {
+        setJoinedGroup(previous => previous
+          ? (list.find(g => g.id === previous.id) ?? previous)
+          : null);
+      }
       const sc = gameRef.current?.scene.getScene('SimulationScene') as SimulationScene | null;
       const pn = ((playerNameRef.current || '').trim()) || 'me';
       // 玩家角色在场（世界角色列表含玩家名）→ 场景叠加「加入对话」入口；不在场不显示
@@ -661,16 +724,14 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
    * P-0803-G：群组「加入/离开对话」按钮点击后join/leave API → 成功/失败可见提示；手动刷新一次状态。   * 后端错误（组不存在/重复加入/已在组等）message 原样展示（聊天面板系统消耗+ 地图角标）：   */
   const handleGroupAction = useCallback(async (groupId: string, action: 'join' | 'leave' | 'observe') => {
     if (action === 'observe') {
-      const selected = groups.find(g => g.id === groupId) ?? null;
-      if (!selected) {
-        setJoinMsg({ kind: 'error', text: '该会话组已结束，请等待下一次聚集。' });
-        return;
-      }
+      // 群组按钮来自上一帧快照，4 秒轮询间可能已换组；旁听不改后端状态，保留该 id 即可
+      // 让右侧先打开并等待下一条同 group 消息，而不是把每一次迟到点击判成失败。
+      const selected = groups.find(g => g.id === groupId) ?? { id: groupId, participants: [] };
       setJoinedGroup(selected);
       setGalView(false);
       setGalOpen(false);
       setChatOpen(true);
-      setJoinMsg({ kind: 'ok', text: `正在旁听：${selected.participants?.join('、') || selected.id}` });
+      setJoinMsg({ kind: 'ok', text: `正在旁听：${selected.participants?.join('、') || '会话组'}` });
       return;
     }
     const hasPlayer = Boolean((playerNameRef.current || '').trim());
@@ -945,8 +1006,12 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
             <div
               style={{ padding: '6px 12px', fontSize: 12, color: 'var(--text-2)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)', flexShrink: 0 }}
             >
-              <span title={simChatConfigSummary()}>💬 {joinedGroup?.participants?.join('、') || '会话组'} {activeMsgs.length > 0 ? `（${activeMsgs.length} 条）` : ''}</span>
+              <span title={simChatConfigSummary()}>
+                💬 {joinedGroup?.participants?.join('、') || '会话组'} {activeMsgs.length > 0 ? `（${activeMsgs.length} 条）` : ''}
+                {isObserverPlayback ? ` · 旁听 ${playbackTiming.charsPerSec}字/秒` : ''}
+              </span>
               <span style={{ display: 'flex', gap: 6 }}>
+                <button className="btn btn-small" onClick={() => setHistoryOpen(v => !v)} title="按会话组或时间查看已收到的记录">🗂 记录</button>
                 {/* P-0813-G：对话中 → 「退出对话」按钮（回到自由探索；面板淡出/隐藏） */}
                 {galChat && galView && galOpen && (
                   <button className="btn btn-small sim-gal-exit" onClick={exitConversation} title="退出对话，回到自由探索">🚪 退出对话</button>
@@ -1003,6 +1068,33 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
                     </div>
                   ))}
                 </div>
+                {historyOpen && (
+                  <div style={{ borderTop: '1px solid var(--border)', padding: '8px 10px', maxHeight: 190, overflowY: 'auto', background: 'var(--panel-2)', flexShrink: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7, fontSize: 12 }}>
+                      <strong>旁听记录</strong>
+                      <span style={{ display: 'flex', gap: 4 }}>
+                        <button className={`btn btn-small ${historyMode === 'group' ? 'btn-primary' : ''}`} onClick={() => setHistoryMode('group')}>按组</button>
+                        <button className={`btn btn-small ${historyMode === 'time' ? 'btn-primary' : ''}`} onClick={() => setHistoryMode('time')}>按时间</button>
+                      </span>
+                    </div>
+                    {historyMode === 'group' ? historyByGroup.map(([groupId, messages]) => (
+                      <button
+                        key={groupId}
+                        className="sim-history-row"
+                        onClick={() => {
+                          setJoinedGroup(groups.find(g => g.id === groupId) ?? { id: groupId, participants: [] });
+                          setHistoryOpen(false);
+                        }}
+                      >
+                        <strong>{groupId}</strong><span>{messages.length} 条 · {new Date(messages[messages.length - 1].ts).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                      </button>
+                    )) : historyByTime.map(([time, messages]) => (
+                      <div className="sim-history-row sim-history-time" key={time}>
+                        <strong>{time}</strong><span>{messages.map(m => `${m.group || '系统'} · ${m.who}`).join('；')}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
                 {Boolean(playerName?.trim()) ? (
                   <div style={{ display: 'flex', gap: 6, padding: '8px 10px', borderTop: '1px solid var(--border)', background: 'var(--panel-2)', flexShrink: 0 }}>
                     <input
