@@ -1,0 +1,1335 @@
+/* =========================================================
+   galGeneral.css — 一般模式「呈现接管」Gal 界面（P-0810-08）
+   复用 gal.css 像素主题变量（在 .galg-page 内重新声明，互不污染），
+   样式全部以 .galg- 前缀隔离。
+   ========================================================= */
+
+.galg-page {
+  /* P-0817-D（阶段C）：底色层次对齐全局蓝黑色板（bg #0c1322 / panel #141e33 /
+     文字 #e8eef9 / dim #93a1bd / border 蓝化 #2b3854）；像素风字体与霓虹粉 accent 不动 */
+  --gal-bg: #0c1322;
+  --gal-bg2: #141e33;
+  --gal-panel: rgba(20, 30, 51, 0.92);
+  --gal-border: #2b3854;
+  --gal-border2: #3d4d75;
+  /* P-0817-B（阶段A）：accent 族改别名映射消费全局语义 accent 变体（值不变），
+     像素风配色作为 Gal 专属变体保留；其余 --gal-* 保持本地定义 */
+  --gal-accent: var(--color-accent-gal);
+  --gal-accent2: var(--color-accent-gal-2);
+  --gal-gold: var(--color-accent-gal-gold);
+  --gal-text: #e8eef9;
+  --gal-dim: #93a1bd;
+  --gal-font: 'Courier New', 'NSimSun', 'SimSun', monospace;
+
+  position: relative;
+  min-height: calc(100vh - 72px);
+  max-height: calc(100vh - 72px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 14px 12px;
+  color: var(--gal-text);
+  background:
+    radial-gradient(900px 500px at 80% -10%, rgba(255, 106, 213, 0.10), transparent 60%),
+    radial-gradient(800px 480px at 10% 0%, rgba(77, 225, 255, 0.10), transparent 55%),
+    var(--gal-bg);
+  font-family: var(--gal-font);
+  letter-spacing: 0.04em;
+}
+
+/* ---------- 顶部栏 ---------- */
+.galg-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  background: var(--gal-panel);
+  border-radius: 0;
+  box-shadow: 0 0 0 3px var(--gal-border), 0 0 0 6px rgba(0, 0, 0, 0.55), 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.galg-top-btn {
+  background: transparent;
+  border: 1px solid var(--gal-border2);
+  color: var(--gal-text);
+  font-family: var(--gal-font);
+  font-size: 12px;
+  padding: 5px 10px;
+  cursor: pointer;
+  border-radius: 0;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4);
+}
+.galg-top-btn:hover {
+  border-color: var(--gal-accent2);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4), 0 0 12px rgba(77, 225, 255, 0.35);
+}
+.galg-classic-btn {
+  border-color: var(--gal-gold);
+  color: var(--gal-gold);
+}
+.galg-classic-btn:hover {
+  border-color: var(--gal-gold);
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4), 0 0 12px rgba(255, 209, 102, 0.35);
+}
+
+.galg-top-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1 1 220px;
+}
+.galg-top-title {
+  font-size: 15px;
+  font-weight: bold;
+  color: var(--gal-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-shadow: 0 0 10px rgba(255, 106, 213, 0.35);
+}
+.galg-top-sub {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.galg-mode-chip {
+  font-size: 11px;
+  color: var(--gal-accent2);
+  border: 1px solid var(--gal-border2);
+  padding: 1px 7px;
+  background: rgba(77, 225, 255, 0.08);
+  text-shadow: 0 0 6px rgba(77, 225, 255, 0.4);
+}
+.galg-top-session {
+  font-size: 10px;
+  color: var(--gal-dim);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 角色成员小头像 */
+.galg-members {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.galg-member {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--gal-text);
+  box-shadow: 0 0 8px rgba(0, 0, 0, 0.5);
+  cursor: default;
+}
+
+.galg-top-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-left: auto;
+}
+
+/* ---------- 主体/舞台 ---------- */
+.galg-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.galg-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* 分列布局（角色 ≤2）：1 人居中 / 2 人左右分列，对话框浮于底部 */
+.galg-stage-split {
+  gap: 8px;
+}
+.galg-split-row {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 30px;
+  padding: 10px 8px 0;
+  min-height: 0;
+}
+.galg-split-slot {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+}
+.galg-slot-left { justify-content: flex-end; }
+.galg-slot-right { justify-content: flex-start; }
+.galg-slot-single { justify-content: center; }
+
+/* 居中布局（角色 >2）：横排居中，说话者放大置前，其余置灰 */
+.galg-stage-center {
+  gap: 6px;
+}
+.galg-center-row {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 8px 0;
+  min-height: 0;
+}
+.galg-center-slot {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+}
+.galg-center-hint {
+  text-align: center;
+  font-size: 10px;
+  color: var(--gal-dim);
+}
+
+/* 底部：对话框 + 发言框（复用 gal.css 组件） */
+.galg-bottom {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 4px 8px 10px;
+}
+.galg-bottom .gal-dialog,
+.galg-bottom .gal-choice-bar {
+  box-shadow: 0 0 0 3px var(--gal-border), 0 0 0 6px rgba(0, 0, 0, 0.55), 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+
+.galg-identity {
+  font-size: 10px;
+  color: var(--gal-dim);
+  text-align: center;
+}
+
+/* ---------- 历史记录抽屉 ---------- */
+.galg-drawer-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 3, 12, 0.55);
+  z-index: 1200;
+}
+.galg-drawer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 400px;
+  max-width: 92vw;
+  background: var(--gal-bg2);
+  border-left: 3px solid var(--gal-border2);
+  box-shadow: -10px 0 30px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  font-family: var(--gal-font);
+  color: var(--gal-text);
+}
+.galg-drawer-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--gal-border);
+  background: var(--gal-panel);
+}
+.galg-drawer-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: var(--gal-gold);
+  text-shadow: 0 0 8px rgba(255, 209, 102, 0.35);
+}
+.galg-drawer-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.galg-sort-btn {
+  background: transparent;
+  border: 1px solid var(--gal-border2);
+  color: var(--gal-dim);
+  font-family: var(--gal-font);
+  font-size: 11px;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-radius: 0;
+}
+.galg-sort-btn.active {
+  color: var(--gal-accent2);
+  border-color: var(--gal-accent2);
+}
+.galg-drawer-close {
+  background: transparent;
+  border: 1px solid var(--gal-border2);
+  color: var(--gal-text);
+  font-size: 12px;
+  padding: 3px 8px;
+  cursor: pointer;
+  border-radius: 0;
+}
+.galg-drawer-close:hover { border-color: var(--gal-accent); }
+
+.galg-rollback-msg {
+  margin: 8px 12px 0;
+  font-size: 11px;
+  color: var(--gal-gold);
+}
+
+.galg-msg-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.galg-drawer-empty {
+  margin: 30px auto;
+  text-align: center;
+  color: var(--gal-dim);
+  font-size: 13px;
+}
+.galg-drawer-empty-sub {
+  font-size: 10px;
+  margin-top: 6px;
+  color: var(--gal-dim);
+  opacity: 0.7;
+}
+
+.galg-msg-row {
+  border: 1px solid var(--gal-border);
+  background: color-mix(in srgb, var(--gal-bg2) 60%, transparent);
+  padding: 7px 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border-radius: 0;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.35);
+}
+.galg-msg-row.galg-msg-agent { border-left: 3px solid var(--gal-accent); }
+.galg-msg-row.galg-msg-user { border-left: 3px solid var(--gal-gold); }
+.galg-msg-row.galg-msg-arbiter { border-left: 3px solid var(--gal-accent2); }
+.galg-msg-row.galg-msg-system { border-left: 3px solid var(--gal-dim); }
+
+.galg-msg-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.galg-msg-type {
+  font-size: 10px;
+  padding: 0 6px;
+  border: 1px solid;
+  line-height: 16px;
+}
+.galg-type-agent { color: var(--gal-accent); border-color: var(--gal-accent); }
+.galg-type-user { color: var(--gal-gold); border-color: var(--gal-gold); }
+.galg-type-arbiter { color: var(--gal-accent2); border-color: var(--gal-accent2); }
+.galg-type-system { color: var(--gal-dim); border-color: var(--gal-dim); }
+.galg-msg-name { font-size: 11px; font-weight: bold; color: var(--gal-text); }
+.galg-msg-time { font-size: 10px; color: var(--gal-dim); }
+.galg-msg-round { font-size: 10px; color: var(--gal-dim); border: 1px solid var(--gal-border); padding: 0 4px; }
+
+.galg-rollback-btn {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid #8f7a2f;
+  color: var(--gal-gold);
+  font-family: var(--gal-font);
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  border-radius: 0;
+}
+.galg-rollback-btn:hover:not(:disabled) {
+  border-color: var(--gal-gold);
+  box-shadow: 0 0 8px rgba(255, 209, 102, 0.4);
+}
+.galg-rollback-btn:disabled { opacity: 0.4; cursor: default; }
+
+.galg-msg-content {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--gal-text);
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+/* ---------- 场景卡 ---------- */
+.galg-scene-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 3, 12, 0.55);
+  z-index: 1200;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  padding: 60px 16px;
+}
+.galg-scene-card {
+  width: 360px;
+  max-width: 92vw;
+  background: var(--gal-bg2);
+  border: 3px solid var(--gal-border2);
+  box-shadow: 0 0 0 6px rgba(0, 0, 0, 0.55), 0 10px 30px rgba(0, 0, 0, 0.6);
+  padding: 12px 14px;
+  font-family: var(--gal-font);
+  color: var(--gal-text);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.galg-scene-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.galg-scene-title {
+  font-size: 13px;
+  font-weight: bold;
+  color: var(--gal-gold);
+  text-shadow: 0 0 8px rgba(255, 209, 102, 0.35);
+}
+.galg-scene-close {
+  background: transparent;
+  border: 1px solid var(--gal-border2);
+  color: var(--gal-text);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  border-radius: 0;
+}
+.galg-scene-close:hover { border-color: var(--gal-accent); }
+.galg-scene-name {
+  font-size: 16px;
+  font-weight: bold;
+  color: var(--gal-accent2);
+  text-shadow: 0 0 10px rgba(77, 225, 255, 0.4);
+}
+.galg-scene-desc {
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--gal-text);
+  max-height: 120px;
+  overflow-y: auto;
+}
+.galg-targets-title {
+  font-size: 12px;
+  font-weight: bold;
+  color: var(--gal-accent);
+}
+.galg-targets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.galg-target-item {
+  font-size: 12px;
+  color: var(--gal-text);
+  line-height: 1.5;
+}
+.galg-target-placeholder {
+  color: var(--gal-dim);
+}
+.galg-target-note {
+  font-size: 10px;
+  color: var(--gal-dim);
+  opacity: 0.8;
+  margin-left: 4px;
+}
+
+/* ---------- P-0810-16：场景卡目标（真实渲染） ---------- */
+.galg-goal-label {
+  font-weight: bold;
+}
+.galg-goal-player {
+  color: var(--gal-accent2);
+  text-shadow: 0 0 6px rgba(77, 225, 255, 0.25);
+}
+.galg-goal-ai {
+  color: var(--gal-text);
+}
+.galg-goal-mask {
+  color: var(--gal-dim);
+  letter-spacing: 1px;
+}
+.galg-goal-status {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  font-size: 10px;
+  line-height: 1.6;
+  border: 1px solid var(--gal-border2);
+  border-radius: 0;
+  vertical-align: 1px;
+}
+.galg-goal-status-not_started { color: var(--gal-dim); }
+.galg-goal-status-in_progress { color: var(--gal-gold); border-color: rgba(255, 209, 102, 0.5); }
+.galg-goal-status-completed { color: #7dffa8; border-color: rgba(125, 255, 168, 0.5); }
+.galg-goal-status-failed { color: #ff9d9d; border-color: rgba(255, 157, 157, 0.5); }
+.galg-goal-revealed {
+  color: var(--gal-gold);
+  text-shadow: 0 0 6px rgba(255, 209, 102, 0.3);
+}
+
+/* =========================================================
+   P-0810-15 追加：① 溢出滚动补齐 ② 抽屉/弹窗可拉伸 ③ 立绘左布局+说话才出现 ④ 背景槽位
+   ========================================================= */
+
+/* ---------- ① 溢出滚动（通用规则：内容超出可视范围 → overflow-y: auto） ---------- */
+
+/* 顶栏成员小头像：多人溢出时横向滚动 */
+.galg-members {
+  max-width: 260px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 2px;
+}
+
+/* 历史抽屉整体：内容超高兜底滚动（消息列表自身 flex:1 滚动） */
+.galg-drawer {
+  overflow-y: auto;
+}
+
+/* 场景卡弹窗：内容超高滚动 */
+.galg-scene-card {
+  max-height: calc(100vh - 140px);
+  overflow-y: auto;
+}
+
+/* 场景卡目标列表：超出卡片可滚动（随卡片滚动，加自身上限防爆） */
+.galg-targets {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+/* 消息内容超长：可滚动（抽屉内） */
+.galg-msg-content {
+  max-height: 140px;
+  overflow-y: auto;
+}
+
+/* 立绘区自身：多人/长立绘溢出滚动 */
+.galg-side-portraits {
+  overflow-y: auto;
+}
+
+/* 像素风滚动条（gal 全局范围；参考 global.css 既有暗色滚动条，这里换成 gal 主题） */
+.galg-page ::-webkit-scrollbar,
+.gal-page ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.galg-page ::-webkit-scrollbar-track,
+.gal-page ::-webkit-scrollbar-track {
+  background: color-mix(in srgb, var(--gal-bg) 85%, transparent);
+  border: 1px solid var(--gal-border);
+}
+.galg-page ::-webkit-scrollbar-thumb,
+.gal-page ::-webkit-scrollbar-thumb {
+  background: var(--gal-border2);
+  border: 1px solid var(--gal-bg);
+  border-radius: 0;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.galg-page ::-webkit-scrollbar-thumb:hover,
+.gal-page ::-webkit-scrollbar-thumb:hover {
+  background: var(--gal-accent2);
+}
+.galg-page ::-webkit-scrollbar-corner,
+.gal-page ::-webkit-scrollbar-corner {
+  background: var(--gal-bg2);
+}
+
+/* ---------- ② 弹出栏/侧边栏可拉伸（CSS resize + min 约束 + overflow 配合） ---------- */
+
+/* 历史抽屉：横向可拖拽拉伸（右手柄在右下角） */
+.galg-drawer.galg-history {
+  resize: horizontal;
+  overflow: auto;
+  min-width: 320px;
+  max-width: 92vw;
+}
+
+/* 场景卡弹窗：双向可拉伸 */
+.galg-scene-card {
+  resize: both;
+  min-width: 320px;
+  min-height: 240px;
+  max-width: 92vw;
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+}
+
+/* 拖拽手柄（像素风角标，webkit 系） */
+.galg-drawer.galg-history::-webkit-resizer,
+.galg-scene-card::-webkit-resizer {
+  background:
+    linear-gradient(135deg, transparent 0 6px, var(--gal-border2) 6px 7px, transparent 7px 9px, var(--gal-border2) 9px 10px, transparent 10px 12px, var(--gal-border2) 12px 13px, transparent 13px);
+  border: 1px solid var(--gal-bg);
+}
+
+/* 拖拽提示条（非 webkit 浏览器也能感知可拉伸） */
+.galg-drawer.galg-history::after {
+  content: '⟷ 拖拽此处调整宽度';
+  position: sticky;
+  bottom: 0;
+  display: block;
+  text-align: right;
+  font-size: 9px;
+  color: var(--gal-dim);
+  background: linear-gradient(180deg, transparent, var(--gal-bg2) 60%);
+  padding: 2px 14px 4px 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ---------- ③ 立绘左布局：左立绘（说话才出现）+ 右聊天区 ---------- */
+
+.galg-stage-side {
+  position: relative;
+  flex-direction: row;
+  gap: 12px;
+  min-height: 0;
+}
+
+/* 左立绘区（竖排）：固定宽度，内容（说话角色）底部对齐 */
+.galg-side-portraits {
+  flex: 0 0 210px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 8px 6px;
+  min-height: 0;
+  background: rgba(10, 7, 24, 0.55);
+  box-shadow: 0 0 0 2px var(--gal-border), inset 0 0 40px rgba(0, 0, 0, 0.45);
+}
+
+/* 说话角色立绘：淡入出现（切换角色 key 变化重挂载触发动画） */
+.galg-side-slot {
+  display: flex;
+  justify-content: center;
+  align-items: flex-end;
+  animation: galgCharIn 0.45s steps(5) both;
+}
+@keyframes galgCharIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.86); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* 无 active 时的场景氛围占位 */
+.galg-side-idle {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 26px 10px;
+  text-align: center;
+}
+.galg-side-idle-icon {
+  font-size: 26px;
+  color: var(--gal-accent2);
+  text-shadow: 0 0 14px rgba(77, 225, 255, 0.7);
+  animation: galgPulse 2.2s steps(4) infinite;
+}
+@keyframes galgPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+.galg-side-idle-text {
+  font-size: 12px;
+  color: var(--gal-dim);
+}
+.galg-side-idle-hint {
+  font-size: 10px;
+  color: var(--gal-dim);
+  opacity: 0.7;
+  line-height: 1.6;
+}
+
+/* 右聊天区：对话框 + 底部发言框，纵向撑满 */
+.galg-side-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+.galg-side-main .galg-bottom {
+  width: 100%;
+}
+
+/* ---------- ④ 背景槽位（最底层 div；真实 url 或场景色渐变占位） ---------- */
+
+.galg-bg {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background-size: cover;
+  background-position: center;
+  pointer-events: none;
+  transition: background-image 0.5s;
+}
+
+/* 半透明遮罩：暗化背景，保证立绘/对话框可读性 */
+.galg-bg-veil {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(1200px 700px at 50% 0%, color-mix(in srgb, var(--gal-bg) 25%, transparent), transparent 60%),
+    linear-gradient(180deg, color-mix(in srgb, var(--gal-bg) 55%, transparent) 0%, color-mix(in srgb, var(--gal-bg) 72%, transparent) 100%);
+}
+
+/* 背景状态标签（生成中提示；不阻塞交互） */
+.galg-bg-tag {
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  z-index: 3;
+  font-size: 10px;
+  color: var(--gal-accent2);
+  border: 1px solid var(--gal-border2);
+  background: color-mix(in srgb, var(--gal-bg) 70%, transparent);
+  padding: 2px 8px;
+  text-shadow: 0 0 6px rgba(77, 225, 255, 0.5);
+}
+
+/* 舞台内容层浮于背景之上 */
+.galg-stage-side .galg-side-portraits,
+.galg-stage-side .galg-side-main {
+  position: relative;
+  z-index: 1;
+}
+
+/* =========================================================
+   P-0810-18 追加：Galgame 分层布局（默认，立绘在对话框后方）
+   调研文档 tmp/调研-Galgame布局.md §5/§6；.galg-stage-side 左列样式原样保留（变体）
+   分层（底→顶）：.galg-bg(z0) → .galg-sprites(z1,pointer-events:none)
+   → .galg-click-catcher(z1.5 点空白推进) → .galg-foreground(z2 底部居中)
+   ========================================================= */
+
+.galg-stage-layered {
+  position: relative;
+  flex-direction: column;
+  overflow: hidden; /* 保沉浸：立绘/背景不撑出舞台，无页面滚动 */
+  min-height: 0;
+}
+
+/* ── 立绘层（z1，absolute 全屏；pointer-events 穿透保证能点到发言框/推进层） ── */
+.galg-sprites {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* 立绘槽位：底部对齐（脚踩舞台底边），高度 78%（70–90% 可调），底部对齐缩放 */
+.galg-sprite-slot {
+  position: absolute;
+  bottom: 0;
+  height: 78%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  transform-origin: bottom center;
+}
+.galg-slot-left { left: 0; }
+.galg-slot-center { left: 50%; transform: translateX(-50%); }
+.galg-slot-right { right: 0; }
+
+/* 槽内立绘：高度驱动（fill 模式），0.35s 平滑过渡（交叉淡化） */
+.galg-sprite-slot .gal-char {
+  height: 100%;
+  justify-content: flex-end;
+  transition: opacity 0.35s ease, transform 0.35s ease, filter 0.35s ease;
+}
+.galg-sprite-slot .gal-char .gal-char-sprite {
+  height: 100%;
+  box-sizing: border-box;
+  padding: 4px 8px 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  /* 中和 gal.css 的立绘级缩放/动画（非说话 scale(.88) / 说话 scale(1.15)+galFadeIn）——
+     分层模式高亮/弱化全部由槽位级（.galg-slot-active）控制，避免双重缩放 */
+  transform: none;
+  animation: none;
+}
+/* 真实立绘图 / 占位 SVG：高度撑满槽位，宽度按比例（尺寸以容器高度驱动） */
+.galg-sprite-slot .gal-char-img-fill {
+  height: 100%;
+  width: auto;
+  object-fit: contain;
+}
+.galg-sprite-slot .gal-char-fill .gal-sprite {
+  height: 100%;
+  width: auto;
+}
+/* 无 _t 透明图时底部渐隐兜底（CSS mask：融进对话框边缘） */
+.galg-sprite-slot .gal-char-img-mask {
+  -webkit-mask-image: linear-gradient(180deg, #000 78%, transparent 100%);
+  mask-image: linear-gradient(180deg, #000 78%, transparent 100%);
+}
+/* 去除槽位内立绘的渐变卡片底/扫描线/名字行（经典 Gal：名字在对话框名签，立绘下无文字） */
+.galg-sprite-slot .gal-char .gal-char-sprite {
+  background: transparent !important; /* 覆盖 GalCharacter 内联渐变卡（inline style 压不过 !important） */
+}
+.galg-sprite-slot .gal-char-scan { display: none; }
+.galg-sprite-slot .gal-char-name,
+.galg-sprite-slot .gal-char-title { display: none; }
+
+/* 说话者高亮（scale 1.04 + 发光/亮度）/ 非说话者弱化（opacity .45 + grayscale + 退后） */
+.galg-sprite-slot.galg-slot-active .gal-char {
+  opacity: 1;
+  filter: brightness(1.08) drop-shadow(0 0 12px rgba(255, 255, 255, 0.30)) drop-shadow(0 0 26px rgba(125, 95, 255, 0.38));
+  transform: scale(1.04);
+}
+.galg-sprite-slot:not(.galg-slot-active) .gal-char {
+  opacity: 0.45;
+  filter: grayscale(1) brightness(0.8);
+  transform: scale(0.96);
+}
+/* 说话者切换：槽位内容换角色时淡入（平滑，非硬切；真实立绘 0.35s ease） */
+.galg-sprite-slot.galg-slot-active .gal-char {
+  animation: galgSpriteIn 0.35s ease both;
+}
+@keyframes galgSpriteIn {
+  from { opacity: 0; transform: scale(0.94); }
+  to { opacity: 1; transform: scale(1.04); }
+}
+
+/* 无角色时的立绘层占位（等 roster 到达） */
+.galg-sprites-idle {
+  position: absolute;
+  left: 50%;
+  top: 42%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--gal-dim);
+  font-size: 13px;
+}
+.galg-sprites-idle span:first-child {
+  font-size: 26px;
+  color: var(--gal-accent2);
+  text-shadow: 0 0 14px rgba(77, 225, 255, 0.7);
+  animation: galgPulse 2.2s steps(4) infinite;
+}
+
+/* ── 点击推进层（立绘层之上/前景层之下；点空白=跳过/下一句） ── */
+/* 注意：z-index 只接受整数（调研文档的 "z1.5" 是层号记法，落地用 1——同层内
+   DOM 树序在后（sprites 之后）→ 自然盖在立绘层上，且低于前景层 z2 */
+.galg-click-catcher {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  cursor: pointer;
+}
+
+/* ── 前景层（z2 底部居中）：候选区(上方) + 对话框 + 输入框；容器穿透、子元素恢复可点 ── */
+/* P-0811-G(A-2)：全宽长条 —— 对话框横贯底部（用户确认目标样式：全宽长条） */
+.galg-foreground {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: min(98%, 1600px);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0 12px 12px;
+  pointer-events: none;
+}
+.galg-foreground > * { pointer-events: auto; }
+
+/* P-0811-G(A-3)：候选区（对话框上方）——正常文档流排在 GalDialogBox 之前 */
+.galg-choices-slot {
+  max-height: 26vh;
+  overflow-y: auto;
+}
+.galg-choices-slot .gal-choices {
+  grid-template-columns: repeat(2, 1fr);
+}
+.galg-choices-slot:empty { display: none; }
+
+/* P-0811-G：输入区（对话框下方）——面板化（与 .gal-choice-bar 同款像素框） */
+.galg-input-slot {
+  background: var(--gal-panel);
+  padding: 8px 10px;
+  box-shadow: 0 0 0 3px var(--gal-border), 0 0 0 6px rgba(0, 0, 0, 0.55), 0 10px 30px rgba(0, 0, 0, 0.5);
+}
+.galg-input-slot .gal-input-row,
+.galg-input-slot .gal-input-hint {
+  padding: 0 4px;
+}
+
+/* 对话框 Gal 化：底部居中、半透明深底（框后立绘下半部隐约可见）、限高 32vh */
+.galg-foreground .gal-dialog-wrap {
+  min-height: 0;
+  position: relative;
+}
+.galg-foreground .gal-dialog {
+  position: relative;
+  width: 100%;
+  min-height: 0;
+  max-height: 32vh;
+  background: color-mix(in srgb, var(--gal-bg) 85%, transparent);
+  backdrop-filter: blur(2px);
+}
+/* 经典 Gal 无「上屏 log」概念（历史记录抽屉承接）；隐藏避免与名签重叠 */
+.galg-foreground .gal-log { display: none; }
+
+/* 角色名框：贴对话框左上角上沿外凸名签（说话者名字） */
+.galg-foreground .gal-dialog-head {
+  position: absolute;
+  left: -4px;
+  top: -28px;
+  z-index: 3;
+  background: var(--gal-panel);
+  border: 2px solid var(--gal-border2);
+  padding: 3px 10px;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.5), 0 0 14px rgba(85, 67, 143, 0.4);
+}
+.galg-foreground .gal-dialog-head .gal-dialog-name { font-size: 13px; }
+.galg-foreground .gal-dialog-head .gal-dialog-avatar {
+  width: 24px;
+  height: 28px;
+}
+/* 旁白/系统消息（无 head）：文本保持居中，顶部不贴名签 */
+.galg-foreground .gal-dialog-narrator { padding-top: 14px; }
+
+/* =========================================================
+   P-0813-G：2D 模拟视图 Gal 式对话区（SimGalChatPanel）UI 重设计
+   风格：与 2D 场景（#0f172a 深蓝灰）协调的「深色半透明毛玻璃」——
+   圆角卡片 + 模糊背景 + 柔和阴影 + 霓虹描边 + 过渡动画；
+   布局（顶→底）：提示行 → 上屏 log → 对话框（头像+名字+打字机正文+▼点击继续）
+   → 候选区 → 输入区；对话中淡入，退出对话淡出/隐藏。
+   ========================================================= */
+
+/* 对话面板容器（淡入动画；退出时父组件卸载即消失） */
+.sim-gal-panel {
+  animation: simGalPanelIn 0.3s ease both;
+}
+@keyframes simGalPanelIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.sim-gal-chat {
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px 10px;
+  background:
+    radial-gradient(240px 160px at 85% -10%, rgba(255, 106, 213, 0.08), transparent 60%),
+    radial-gradient(220px 140px at 5% 110%, rgba(77, 225, 255, 0.08), transparent 55%),
+    rgba(13, 17, 35, 0.55);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-radius: 12px;
+  border: 1px solid rgba(125, 150, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05), 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+.sim-gal-chat-tip {
+  opacity: 0.85;
+}
+
+/* 对话框本体：毛玻璃深底 + 圆角 + 柔和阴影 + 霓虹描边 */
+.sim-gal-chat .gal-dialog-wrap {
+  min-height: 0;
+  gap: 6px;
+}
+.sim-gal-chat .gal-dialog {
+  background: rgba(10, 14, 32, 0.78);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 106, 213, 0.22);
+  border-radius: 14px;
+  padding: 12px 14px;
+  min-height: 96px;
+  max-height: 40vh;
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 0 18px rgba(255, 106, 213, 0.07);
+  transition: box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
+}
+.sim-gal-chat .gal-dialog:hover {
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 24px rgba(255, 106, 213, 0.18);
+  border-color: rgba(255, 106, 213, 0.45);
+  transform: translateY(-1px);
+}
+/* 玩家气泡：右侧金色柔光 */
+.sim-gal-chat .gal-dialog.gal-dialog-player {
+  border-color: rgba(255, 209, 102, 0.4);
+  background: rgba(26, 22, 10, 0.78);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.45), 0 0 18px rgba(255, 209, 102, 0.10);
+}
+/* 系统/旁白：居中青色 */
+.sim-gal-chat .gal-dialog.gal-dialog-system,
+.sim-gal-chat .gal-dialog.gal-dialog-narrator {
+  border-color: rgba(77, 225, 255, 0.25);
+  background: rgba(8, 14, 26, 0.78);
+}
+
+/* 名字区：彩色发光名签 + 圆角头像 */
+.sim-gal-chat .gal-dialog-head {
+  gap: 8px;
+}
+.sim-gal-chat .gal-dialog-avatar {
+  width: 30px;
+  height: 34px;
+  border-radius: 9px;
+  background: linear-gradient(180deg, rgba(34, 27, 64, 0.95), rgba(18, 14, 36, 0.95));
+  border: 1px solid rgba(125, 150, 255, 0.35);
+  box-shadow: 0 0 10px rgba(77, 225, 255, 0.15);
+  padding: 2px;
+}
+.sim-gal-chat .gal-dialog-name {
+  font-size: 13px;
+  letter-spacing: 0.06em;
+  padding: 2px 10px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(125, 150, 255, 0.25);
+  border-radius: 999px;
+  text-shadow: 0 0 10px currentColor;
+}
+
+/* 正文：舒适行距 + 温和字色 */
+.sim-gal-chat .gal-dialog-text {
+  font-size: 14px;
+  line-height: 1.8;
+  min-height: 44px;
+  letter-spacing: 0.03em;
+  color: #e8edff;
+}
+.sim-gal-chat .gal-dialog-player .gal-dialog-text {
+  color: var(--gal-gold, #ffd166);
+}
+
+/* 「▼ 点击继续」：呼吸脉冲（打字中=■ 跳过） */
+.sim-gal-chat .gal-dialog-hint {
+  font-size: 11px;
+  color: rgba(148, 163, 184, 0.9);
+  animation: simGalHintPulse 1.6s ease-in-out infinite;
+}
+@keyframes simGalHintPulse {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+.sim-gal-chat .gal-caret {
+  color: var(--gal-accent, #ff6ad5);
+}
+
+/* 上屏 log：暗色小字 */
+.sim-gal-chat .gal-log {
+  max-height: 72px;
+  font-size: 10.5px;
+  color: rgba(148, 163, 184, 0.8);
+  background: rgba(15, 23, 42, 0.4);
+  border-radius: 8px;
+  padding: 5px 8px;
+}
+.sim-gal-chat .gal-log-name {
+  color: #cbd5e1;
+}
+
+/* 候选区：圆角玻璃按钮 */
+.sim-gal-chat .gal-choices {
+  gap: 6px;
+  margin-top: 6px;
+}
+.sim-gal-chat .gal-choice-btn {
+  border-radius: 10px;
+  background: rgba(30, 41, 59, 0.72);
+  border: 1px solid rgba(125, 150, 255, 0.28);
+  color: #e2e8f0;
+  font-size: 12px;
+  padding: 7px 10px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  transition: border-color 0.15s ease, background 0.15s ease, transform 0.15s ease;
+}
+.sim-gal-chat .gal-choice-btn:hover {
+  border-color: var(--gal-gold, #ffd166);
+  background: rgba(51, 65, 85, 0.85);
+  color: var(--gal-gold, #ffd166);
+  text-shadow: 0 0 8px rgba(255, 209, 102, 0.5);
+  transform: translateX(2px);
+}
+
+/* 输入区：毛玻璃输入框 + 圆角发送按钮 */
+.sim-gal-chat .gal-input-row {
+  gap: 8px;
+  margin-top: 8px;
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid rgba(125, 150, 255, 0.22);
+  border-radius: 12px;
+  padding: 6px 8px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.sim-gal-chat .gal-input {
+  border-radius: 8px;
+  background: rgba(10, 14, 32, 0.75);
+  border: 1px solid rgba(125, 150, 255, 0.18);
+  font-size: 13px;
+  padding: 7px 10px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.sim-gal-chat .gal-input:focus {
+  border-color: rgba(77, 225, 255, 0.6);
+  box-shadow: 0 0 0 3px rgba(77, 225, 255, 0.14), 0 0 14px rgba(77, 225, 255, 0.2);
+}
+.sim-gal-chat .gal-send-btn {
+  border-radius: 9px;
+  background: linear-gradient(135deg, #4de1ff, #38bdf8);
+  border: none;
+  color: #06222e;
+  padding: 7px 14px;
+  font-size: 12px;
+  box-shadow: 0 3px 10px rgba(77, 225, 255, 0.3);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.sim-gal-chat .gal-send-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 5px 14px rgba(77, 225, 255, 0.45);
+}
+.sim-gal-chat .gal-input-hint {
+  font-size: 10px;
+  color: rgba(148, 163, 184, 0.85);
+  margin-top: 4px;
+}
+
+/* ---------- 未对话占位（Gal 面板不渲染时的提示区） ---------- */
+.sim-gal-idle {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+  background: rgba(13, 17, 35, 0.35);
+  animation: simGalIdleIn 0.4s ease both;
+}
+@keyframes simGalIdleIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.sim-gal-idle-icon {
+  font-size: 30px;
+  color: var(--gal-accent2, #4de1ff);
+  text-shadow: 0 0 16px rgba(77, 225, 255, 0.7);
+  animation: simGalIdlePulse 2.2s ease-in-out infinite;
+}
+@keyframes simGalIdlePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.55; transform: scale(0.94); }
+}
+.sim-gal-idle-title {
+  font-size: 14px;
+  font-weight: bold;
+  color: #cbd5e1;
+  letter-spacing: 0.08em;
+}
+.sim-gal-idle-hint {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.9;
+}
+
+/* ---------- 接近提示 DOM 层叠（地图底部居中） ---------- */
+.sim-approach-toast {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #e8edff;
+  background: rgba(15, 23, 42, 0.82);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(77, 225, 255, 0.4);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), 0 0 18px rgba(77, 225, 255, 0.18);
+  animation: simGalToastIn 0.3s ease both;
+  pointer-events: none;
+  white-space: nowrap;
+}
+@keyframes simGalToastIn {
+  from { opacity: 0; transform: translate(-50%, 8px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.sim-approach-toast-icon {
+  font-size: 14px;
+  animation: simGalIdlePulse 1.8s ease-in-out infinite;
+}
+
+/* 「退出对话」按钮（面板头部） */
+.sim-gal-exit {
+  border-color: rgba(248, 113, 113, 0.55) !important;
+  color: #fca5a5 !important;
+}
+.sim-gal-exit:hover {
+  border-color: #f87171 !important;
+  box-shadow: 0 0 10px rgba(248, 113, 113, 0.4) !important;
+}
+
+/* ── P-0813-K：群接近提示（👥 加入对话，紫色区分 1v1 的 💬） ── */
+.sim-approach-toast-group {
+  border-color: rgba(167, 139, 250, 0.55);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5), 0 0 18px rgba(167, 139, 250, 0.28);
+}
+.sim-approach-toast-group .sim-approach-toast-icon {
+  filter: drop-shadow(0 0 6px rgba(167, 139, 250, 0.6));
+}
+
+/* ── P-0813-K：Gal 面板群聊模式头部（群名/成员列表，玩家高亮） ── */
+.sim-gal-group-head {
+  flex-shrink: 0;
+  margin-bottom: 6px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(167, 139, 250, 0.16), rgba(56, 189, 248, 0.08));
+  border: 1px solid rgba(167, 139, 250, 0.35);
+}
+.sim-gal-group-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #d8ccff;
+  letter-spacing: 0.3px;
+  text-shadow: 0 0 10px rgba(167, 139, 250, 0.35);
+}
+.sim-gal-group-members {
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #9aa3c7;
+}
+.sim-gal-group-member.is-me {
+  color: var(--phase-investigation);
+  font-weight: 700;
+}
+/* P-0814-C：推进按钮样式已删除（主人指示：不要按钮，改播放完毕自动推进）——
+   自动推进逻辑见 useAutoPlaybackDone.ts（队列排空 → 自动 POST /api/simulation/playback_done） */
+
+/* ══════════ P-0815-B：剧本杀聊天部件 Gal 化（ScriptGalChatPanel）══════════ */
+/* 容器：填充 ChatMessageFlow 中间消息流对话区（flex:1 由内联样式承担，此处补样式细化） */
+.script-gal-chat {
+  gap: 6px;
+}
+/* 玩法旁路轻量条：阶段/角色/秘密/线索 chips（只读展示，不替代右侧 ScriptStatePanel） */
+.script-gal-info {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: var(--gal-panel, rgba(18, 16, 38, 0.75));
+  box-shadow: 0 0 0 2px var(--gal-border, #3a3a6e), 0 4px 14px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.script-gal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  color: var(--gal-text, #e8eef9);
+  white-space: nowrap;
+}
+.script-gal-chip-phase {
+  background: rgba(77, 225, 255, 0.14);
+  border-color: rgba(77, 225, 255, 0.45);
+  color: var(--phase-investigation);
+  font-weight: 700;
+}
+.script-gal-chip-secret {
+  background: rgba(251, 191, 36, 0.10);
+  border-color: rgba(251, 191, 36, 0.40);
+  color: #fcd34d;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.script-gal-chip-warn {
+  background: rgba(248, 113, 113, 0.14);
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fca5a5;
+  font-weight: 700;
+}
+/* P-0818-D：讨论「当前发言」操作条 + 反驳弹药（Gal 输入区上方；承接原讨论流逐条按钮语义） */
+.script-gal-action-bar {
+  background: rgba(12, 19, 34, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 5px 8px;
+}
+.script-gal-action-bar .btn {
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.script-gal-action-msg {
+  color: var(--gal-gold, #e8c15a);
+  font-size: 11px;
+}
+.script-gal-ammo {
+  background: rgba(59, 47, 95, 0.22);
+  border: 1px dashed rgba(139, 123, 255, 0.4);
+  border-radius: 8px;
+  padding: 5px 8px;
+}
+/* P-0819-A：SETUP 期间沿用一般模式 Gal 的自由交流输入；消息先回显并排队，
+   后台完整剧本就绪后由两轮讨论收尾。 */
+.script-gal-setup-input {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid rgba(77, 225, 255, 0.28);
+  border-radius: 8px;
+  background: rgba(12, 19, 34, 0.58);
+}
+.script-gal-setup-hint {
+  color: var(--gal-accent2, #4de1ff);
+  font-size: 11px;
+  line-height: 1.45;
+}

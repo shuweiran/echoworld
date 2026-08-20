@@ -1,0 +1,111 @@
+/* Material library page */
+.material-page {
+  display: flex; flex-direction: column;
+  height: 100vh; background: #0f0f1a;
+}
+
+.material-body {
+  flex: 1; min-height: 0; padding: 16px;
+  overflow: hidden;
+}
+
+.material-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  height: 100%;
+}
+
+/* Editor panel */
+.material-editor {
+  background: rgba(255,255,255,.02);
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 10px;
+  padding: 20px;
+  overflow: auto;
+}
+
+.material-editor .form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* List panel */
+.material-list {
+  background: rgba(255,255,255,.02);
+  border: 1px solid rgba(255,255,255,.06);
+  border-radius: 10px;
+  overflow: auto;
+}
+
+.list-header {
+  padding: 12px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(255,255,255,.3);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border-bottom: 1px solid rgba(255,255,255,.04);
+  position: sticky;
+  top: 0;
+  background: #0f0f1a;
+  z-index: 1;
+}
+
+.material-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255,255,255,.03);
+  transition: background .1s;
+}
+
+.material-item:hover {
+  background: rgba(255,255,255,.03);
+}
+
+.item-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+}
+
+.char-avatar-sm {
+  width: 28px; height: 28px; border-radius: 50%;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 600; color: #fff;
+  flex-shrink: 0;
+}
+
+.scene-icon {
+  font-size: 20px;
+  width: 28px; text-align: center;
+  flex-shrink: 0;
+}
+
+.item-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #ddd;
+}
+
+.item-preview {
+  font-size: 11px;
+  color: rgba(255,255,255,.3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 280px;
+}
+
+.item-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}

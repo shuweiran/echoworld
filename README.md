@@ -1,25 +1,21 @@
-# 🎭 Roleplay Engine — Java
+# 🎭 Roleplay Engine
 
-> 一个可运行的 AI 多角色互动引擎：让多个 AI 角色在 2D 空间中移动、感知、对话，并支持自由角色扮演、狼人杀和剧本杀完整流程。
+> **AI characters that move, perceive, choose when to speak — and only know what they can actually hear.**
+
+Roleplay Engine 是一个 Spatial Multi-Agent Social Simulation Engine：让多个 LLM 角色生活在同一个 2D 世界里。空间距离、听觉范围、私密房间和动机会共同决定：谁能互动、谁应该发言、谁能听见、每个角色究竟知道什么。
 
 <p align="center">
   <img src="https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk" alt="Java 21" />
   <img src="https://img.shields.io/badge/Spring%20Boot-3.4-6DB33F?logo=springboot" alt="Spring Boot 3.4" />
   <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=111827" alt="React 19" />
   <img src="https://img.shields.io/badge/Phaser-3.90-4D9DE0" alt="Phaser 3.90" />
-  <img src="https://img.shields.io/badge/tests-985%20passing-2EA44F" alt="985 tests passing" />
+  <img src="https://img.shields.io/badge/tests-988%20passing-2EA44F" alt="988 tests passing" />
   <a href="https://github.com/shuweiran/roleplay-java/actions/workflows/ci.yml"><img src="https://github.com/shuweiran/roleplay-java/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
 </p>
 
-如果这个项目对你有帮助，欢迎点一个 **Star** ⭐。你也可以直接打开 Issue 分享一个角色、场景或剧本杀玩法想法。
+## 看到它在做什么
 
-一般模式现在包含“晨雾镇 · AI 社会实验”入口：通过一般模式 Phaser 2D 主链路加载 8 个角色与专用 96×64 室外城镇地图（草地、道路、河流、建筑碰撞），角色位置、移动和对话均来自后端 SimulationService。地图只展示空间与会话组，点击并加入某一组后才显示右侧该组的对话与发言区；预览环境同样转发真实 API。
-
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/shuweiran/roleplay-java)
-
-## 运行画面
-
-下面是一次真实剧本杀流程：角色选择 → 搜证 → 讨论 → 投票 → 揭晓 → 结束。
+下面是实际运行的剧本杀流程；剧本杀和狼人杀不是项目身份本身，而是用来验证空间互动、发言门控和隐藏信息隔离的可玩场景。
 
 | 角色选择 | 搜证 | 讨论 |
 |---|---|---|
@@ -29,150 +25,154 @@
 |---|---|---|
 | ![投票阶段](work/full_play/05-vote.png) | ![揭晓阶段](work/full_play/07-reveal.png) | ![结束状态](work/full_play/08-ended.png) |
 
-## 5 分钟运行
+## Speak → Hear → Know
 
-### 前置条件
+多人 AI 最难的问题可能不是“让它们说话”，而是决定：谁现在应该闭嘴、谁真的听见了、谁不应该知道。
 
-- JDK 21+
-- Maven 3.9+
-- Node.js 20+（需要重新构建前端时）
-- 一个 OpenAI 兼容的 LLM API Key；默认配置使用 DeepSeek
-
-### 1. 配置 LLM Key
-
-PowerShell：
-
-```powershell
-$env:ROLEPLAY_LLM_API_KEY = "你的 API Key"
+```text
+                         2D WORLD
+                            │
+                 position / hearing / rooms
+                            ↓
+                 ┌────────────────────┐
+                 │  WHO SHOULD SPEAK? │  SpeechGate
+                 └──────────┬─────────┘
+                            ↓
+                 ┌────────────────────┐
+                 │   WHO CAN HEAR?    │  Spatial Track Resolver
+                 └──────────┬─────────┘
+                            ↓
+             ┌────────────────────────────────┐
+             │ WHAT DOES EACH AGENT KNOW?    │
+             │ MERGED / WEAK / ISOLATED      │
+             └──────────────┬─────────────────┘
+                            ↓
+                         LLM AGENTS
 ```
 
-Bash：
+### SpeechGate：不是所有 Agent 都要抢话
+
+每轮先决定“是否发言”，再决定“说什么”。被点名、被提问、新线索、情绪事件和冷场破冰会触发发言；没有足够动机的角色可以保持沉默，直接跳过一次 LLM 内容生成。
+
+### Spatial Track：空间决定上下文
+
+`MERGED` 获得完整对话上下文，`WEAK` 只能获得旁听摘要，`ISOLATED` 不获得这段聊天内容，只能进行内心独白。Alice 和 Bob 在房间里私聊时，远处的 Charlie 不会自动知道原话；Charlie 靠近后也只会获得模糊摘要。
+
+### Hidden Information：用游戏验证 Agent 能否保守秘密
+
+狼人杀和剧本杀把信息隔离变成可验证的社会实验：狼人、平民、预言家、主持人和不同玩家应当看到不同事实；私聊不能泄漏，公开讨论仍然可以共享。
+
+## 功能
+
+- **Spatial social simulation**：移动、A* 寻路、碰撞、听觉范围、房间和地图热点真实影响 Agent 互动。
+- **Selective speech**：SpeechGate 根据事件、动机、人格化 talkativeness 和等待偏置决定发言或沉默。
+- **Context isolation**：World Director 与 Track Director 共同生成 `MERGED / WEAK / ISOLATED` 上下文。
+- **Playable scenarios**：自由角色扮演、狼人杀、剧本杀完整流程。
+- **Java backend + React frontend**：后端权威模拟，前端 Phaser 3.90 负责 2D 渲染和交互。
+- **Supporting integrations**：OpenAI 兼容 LLM、MiMo TTS、ComfyUI 图片生成、REST/SSE、MCP 和审批门。
+
+> Memory Retrieval、TTS 和图片生成是可选支撑能力；Memory 组件目前不是默认主链路，因此不把它包装成核心卖点。
+
+## Quick Start
+
+### 本地运行
+
+前置：JDK 21、Maven 3.9+、Node.js 20+。
 
 ```bash
-export ROLEPLAY_LLM_API_KEY="你的 API Key"
-```
-
-### 2. 构建并启动后端
-
-```bash
+git clone https://github.com/shuweiran/roleplay-java.git
+cd roleplay-java
+export ROLEPLAY_LLM_API_KEY="your-api-key"
 mvn -q package -DskipTests
 java -jar target/roleplay-engine-1.0.0-SNAPSHOT.jar
 ```
 
-浏览器打开：**http://localhost:8000**
+打开 <http://localhost:8000>。不配置 Key 也可以运行测试和规则/BSP 降级路径。
 
-### 2.1 Docker 一键启动（推荐体验）
+### Docker
 
-安装 Docker Desktop 后：
+仓库包含完整的 `roleplay-v4/frontend` 源码，Docker 和 CI 使用同一份前端构建入口：
 
 ```bash
 docker compose up --build
 ```
 
-PowerShell 配置 API Key：
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/shuweiran/roleplay-java)
 
-```powershell
-$env:ROLEPLAY_LLM_API_KEY = "你的 API Key"
-docker compose up --build
-```
-
-容器会自动构建 React 前端和 Java 后端，持久化 H2 数据到 `roleplay-data` 卷；浏览器仍访问 **http://localhost:8000**。
-
-### 2.2 部署公开 Demo
-
-点击上方 **Deploy to Render** 按钮，或在 Render 中从仓库导入 `render.yaml`。首次部署时填入 `ROLEPLAY_LLM_API_KEY`，Render 会自动构建 Docker 镜像并提供公开 `onrender.com` 地址。
-
-> Render 免费实例可能会休眠，适合演示和分享；正式长期 Demo 建议使用不会休眠的实例，并设置 API 用量和访问保护。
-
-### 3. 修改前端（可选）
+### 前端开发
 
 ```bash
 cd roleplay-v4/frontend
 npm ci
+npm run dev
 npm run build
 ```
 
-开发模式：
+### 验证
 
 ```bash
-npm run dev
-```
-
-### 4. 验证项目
-
-```bash
-# 后端全量测试：985 tests / 0 failures / 0 errors
-mvn -q test
-
-# 前端 TypeScript + Vite 生产构建
+mvn -q test       # 当前基线：988 tests / 0 failures / 0 errors / 0 skipped
 cd roleplay-v4/frontend
 npm run build
 ```
 
-> 如果你是在本项目维护环境中操作，请先阅读 [`AGENTS.md`](AGENTS.md)；8000 端口可能已有运行实例，按项目协作规则不要重复启动服务。
+## 配置外部 AI 服务
 
-## 它能做什么？
-
-- **AI 角色聊天**：多个角色拥有独立人格、记忆、目标和情绪，可进行自由对话与私聊。
-- **铁轨系统（Track System）**：根据上下文可见性在 `MERGED`、`WEAK`、`ISOLATED` 三种轨道间调度，控制角色之间能听见什么、看见什么。
-- **2D 互动世界**：角色移动、A* 寻路、碰撞、听觉范围、障碍物、地图热点和 Phaser 渲染。
-- **剧本杀**：LLM 生成剧本 → 秘密分发 → 搜证 → 讨论 → 投票 → 揭晓 → 结束；支持断线恢复和主持人（DM）面板。
-- **狼人杀**：昼夜循环、角色技能、投票、胜负判定和玩家视角脱敏。
-- **AI 语音**：支持 TTS、角色声线配置和局内消息朗读。
-- **事件驱动**：REST + SSE 推送状态、角色发言、剧本阶段和全局广播。
-
-## 技术栈
-
-| 层 | 技术 |
-|---|---|
-| 后端 | Java 21、Spring Boot 3.4、Spring MVC、SSE、Spring Data JPA |
-| 前端 | React 19、TypeScript、Vite、Zustand、Phaser 3.90 |
-| 数据库 | H2（开发/测试） |
-| AI | OpenAI 兼容 API；默认 DeepSeek；地图生成可使用 MiMo 通道 |
-| 测试 | JUnit 5、Mockito、AssertJ、Spring Boot Test、RANDOM_PORT |
-
-## 项目结构
+本地默认仍使用 `application.yml` 和环境变量。运行后可通过设置页或统一接口覆盖当前进程配置：
 
 ```text
-src/main/java/                 Java 后端、游戏规则、AI 编排、REST/SSE API
-src/test/java/                 后端单元测试与集成测试
-roleplay-v4/frontend/src/      React 前端与 Phaser 2D 视图
-src/main/resources/static/     Spring Boot 提供的前端静态产物
-docs/                          架构契约、测试方案、问题清单和变更记录
-work/full_play/                本 README 使用的真实流程截图
+GET  /api/config/integrations   # provider 状态，不返回明文密钥
+POST /api/config/integrations   # LLM / 地图 LLM / TTS / ComfyUI 图片配置
 ```
 
-## 当前状态
+不保存外部覆盖时，默认本地配置不变。
 
-- 后端全量测试：**985 passed**
-- 前端生产构建：**通过，Vite 143 modules**
-- 剧本杀流程：SETUP → INVESTIGATION → DISCUSSION → VOTE → REVEAL → ENDED
-- 当前没有公开在线 Demo；本地启动后访问 `http://localhost:8000`
+## Architecture
 
-详细架构和阶段状态见 [`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md)，测试台账见 [`TEST_STATUS.md`](TEST_STATUS.md)。
+```text
+SimulationOrchestrator
+  ├─ WorldDirectorService       → 角色此刻想做什么
+  ├─ InteractionDetector       → 谁与谁发生社会互动
+  ├─ TrackDirectorService       → MERGED / WEAK / ISOLATED
+  ├─ MovementConstraint         → 聚集、听觉带、避让
+  ├─ ConversationManager        → 对话组与轮次
+  ├─ SpeechGate                 → 是否发言
+  ├─ TrackStrategy              → 每个 Agent 的上下文
+  └─ LLM + SSE                  → 生成行为并推送世界状态
+```
 
-## GitHub 信息
+```text
+src/main/java/                 Java 后端、模拟、游戏规则、REST/SSE API
+src/test/java/                 单元测试与集成测试
+roleplay-v4/frontend/src/      React、Zustand、Phaser 2D 前端源码
+src/main/resources/static/     Spring Boot 提供的前端构建产物
+docs/                          架构契约、测试方案、问题清单和变更记录
+work/full_play/                README 使用的真实流程截图
+```
 
-仓库地址：[github.com/shuweiran/roleplay-java](https://github.com/shuweiran/roleplay-java)
+## Roadmap
 
-推荐在 GitHub 仓库设置以下 Topics，帮助 AI Agent、角色扮演和游戏开发方向的访客发现项目：
+- [x] SpeechGate：事件触发发言与低动机静默
+- [x] Spatial Track：`MERGED / WEAK / ISOLATED` 上下文隔离
+- [x] 2D 世界：移动、听觉、碰撞、地图与会话组
+- [x] 狼人杀 / 剧本杀作为隐藏信息验证场景
+- [ ] 录制 15–20 秒 Alice / Bob / Charlie 核心 Demo GIF
+- [ ] 完善公开 Demo 与社区技术文章
 
-`ai` · `llm` · `roleplay` · `multi-agent` · `chatbot` · `game-ai` · `react` · `spring-boot` · `phaser` · `story-game`
+## GitHub
 
-推荐 About 描述：
+仓库：[github.com/shuweiran/roleplay-java](https://github.com/shuweiran/roleplay-java)
 
-> AI multi-agent roleplay engine with 2D worlds, character chat, Werewolf and Script Murder game modes.
+推荐 Topics：`ai` · `llm` · `multi-agent` · `social-simulation` · `roleplay` · `game-ai` · `context-isolation` · `speech-gate` · `phaser` · `spring-boot`
 
-### 适合分享的项目亮点
+推荐 About：
 
-这是一个把 **LLM 角色聊天、空间感知、2D 地图和规则游戏** 放在同一个可运行引擎里的实验项目：AI 角色不仅会回复文本，还会移动、听见附近事件、隐藏或共享上下文，并参与剧本杀的搜证、讨论、投票和揭晓。
+> Spatial multi-agent simulation where AI characters move, perceive, choose when to speak, and share context based on what they can actually hear.
 
-分享时建议使用这几个关键词：`AI agents`、`roleplay`、`LLM game`、`2D world`、`script murder`、`Phaser`。
+## Contributing
 
-## 许可证
+欢迎提交 Issue、Pull Request 或新的社会模拟场景。请先阅读 [`AGENTS.md`](AGENTS.md)、[`PROJECT_CONTEXT.md`](PROJECT_CONTEXT.md) 和 [`DECISION_LOG.md`](DECISION_LOG.md)。
 
-本项目当前处于持续开发阶段。使用、部署或二次开发前，请先确认仓库中的许可证文件和第三方模型/API 服务条款。
+## License
 
-## 贡献与反馈
-
-欢迎提交 Issue，最好附上：运行环境、复现步骤、后端日志、浏览器控制台错误和相关截图。涉及架构改动前，请先阅读 [`DECISION_LOG.md`](DECISION_LOG.md)。
+[MIT](LICENSE)

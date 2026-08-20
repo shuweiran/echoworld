@@ -1883,3 +1883,12 @@ oleplay-v4/frontend/src/phaser/simGroupFilter.ts——纯函数 shouldShowWorldM
 - **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
 - **交互核查**：导演模式的每个活动会话组均创建“👁 旁听对话”点击入口；点击只设置本地观察组、打开经典视图，不调 join/send API；右侧消息以 `recentConversations.group === selectedGroup.id` 过滤，空档显示成员及等待下一次 AI 调度说明。
 - **发布验证**：`mvn -DskipTests package` BUILD SUCCESS；8000 PID 30512，`/` 引用 `index-CVsyNIxg.js`，新 JS 200。
+
+## Round 196 / v196（2026-08-20）（P-0820-O 晨雾镇视觉与首句预览）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
+- **视觉/交互核查**：手绘俯视底图由 Phaser 作为底层纹理加载，碰撞瓦片仍保持高不透明度；每个未旁听会话组只取最早一条 `group` 消息显示在发言者头顶，进入该组后即时收起预览，避免世界聊天刷屏。
+
+## Round 197 / v197（2026-08-20）（P-0820-P GitHub 开源完整度验收）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
+- **后端测试**：`mvn test -q` EXIT=0；Surefire 汇总为 988 tests、0 failures、0 errors、0 skipped。
+- **发布文件核查**：根仓库纳入前端源码与必要配置，未纳入 `node_modules`、`dist`、临时目录、日志或数据库文件；新增 MIT LICENSE；README 与 CI/Docker 路径保持一致。
