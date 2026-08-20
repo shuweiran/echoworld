@@ -1782,3 +1782,17 @@ oleplay-v4/frontend/src/phaser/simGroupFilter.ts——纯函数 shouldShowWorldM
 - v175（2026-08-19，P-0819-N）：Chrome 回归发现并修复 GameBridge mode 恢复竞态，改用 scriptSessionId 兜底；frontend npm run build 通过（143 modules，index-BD_HucNw.js）；Maven package 通过；8000 重启后 GET / = 200 且引用新 bundle。
 - v176（2026-08-19，P-0819-O）：剧本杀 2D 联动；frontend npm run build 通过（tsc + Vite 143 modules，index-DUmEOI7C.js）；Maven package 通过；dist 静态资源同步；8000 后台 GET / = 200；Chrome 刷新页面成功加载新 bundle。地图真机搜证/交互后的 Gal 状态刷新留待下一轮完整剧本杀复跑。
 - v177（2026-08-19，P-0819-O 稳定性修复）：第一轮 Chrome 地图实测加载成功、AI 角色可见，但发现每 3 秒出现一次 Phaser tileset 处理错误；定位为轮询重建触发，改用 `useMemo` 固定 `aiCharacters` 引用。frontend npm run build、Maven package、静态同步、8000 `/`=200 均通过；修复后第二轮浏览器连接中断，未将地图标记为最终真机通过。
+- v178（2026-08-19，P-0819-O 真机收尾）：修复后新局进入搜证阶段，打开地图后观察 10 秒轮询：地图仍可见、canvas=2、tileset 重复错误 0；点击地图热点后出现 `script-map-result` 搜证结果卡，线索库保持 5 条、AP 保持 3/3；再观察 5 秒仍无 tileset 错误/地图重建。唯一 warning 是后端重启后旧对局恢复失败，属旧会话清理提示。
+
+## Round 181 / v181（2026-08-20 10:42-10:45）（P-0820-A 项目完整度验收）
+- **后端**：`mvn -q test` EXIT=0；surefire 汇总 **985 tests / 0 failures / 0 errors / 0 skipped**。
+- **前端**：`npm run build` EXIT=0；TypeScript 通过，Vite **143 modules**，产物 `index-DMFpURUH.js` / `index-2RooXbjo.css`。
+- **仓库一致性**：`git diff --check` PASS；当前分支 `master`，工作区仅保留既有 3 个文档改动，无业务代码改动。
+- **盘点结论**：GitHub remote 存在，但仓库当前无 `.github/`、GitHub Actions、证书或徽章配置；GitHub 官方证书不能由项目测试自动颁发，需个人注册并通过 GitHub Certification 考试。
+- **纪律**：未启动 `spring-boot:run`，未操作 8000 端口，未 git commit。
+
+## Round 182 / v182（2026-08-20）（P-0820-G 外部 API 配置接线）
+- **后端**：`mvn -q -DskipTests compile` EXIT=0；随后全量 `mvn -q test` EXIT=0，surefire 汇总仍为 **985 tests / 0 failures / 0 errors / 0 skipped**。
+- **前端**：`npm run build` EXIT=0；TypeScript 通过，Vite **143 modules**，产物 `index-DFsBvT69.js` / `index-2RooXbjo.css`。
+- **变更范围**：新增 `/api/config/integrations`；运行时接入 LLM/地图 LLM/TTS/ComfyUI 图片设置；默认不调用保存接口时不改变 YAML/环境变量本地配置。
+- **仓库一致性**：`git diff --check` PASS；未启动 `spring-boot:run`，未操作 8000 端口，未 git commit。

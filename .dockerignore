@@ -1,0 +1,12 @@
+.git
+.github
+target
+data
+logs
+tmp
+work
+models
+roleplay-v4/frontend/node_modules
+roleplay-v4/frontend/dist
+*.log
+*.jar

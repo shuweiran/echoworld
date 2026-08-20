@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: roleplay-engine-demo
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: ROLEPLAY_LLM_API_KEY
+        sync: false
+      - key: SERVER_PORT
+        value: "10000"

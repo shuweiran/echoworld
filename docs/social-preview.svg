@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Roleplay Engine — AI characters in a 2D world</title>
+  <desc id="desc">An open-source multi-agent roleplay engine with 2D worlds, character chat, Werewolf and Script Murder.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07111f"/>
+      <stop offset="0.55" stop-color="#102747"/>
+      <stop offset="1" stop-color="#24143f"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5ee7ff"/>
+      <stop offset="1" stop-color="#ff6ad5"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <circle cx="1080" cy="110" r="210" fill="#3d2a72" opacity="0.28"/>
+  <circle cx="1170" cy="520" r="280" fill="#0f7892" opacity="0.18"/>
+  <g opacity="0.18" stroke="#8bb7e8" stroke-width="1">
+    <path d="M0 500H1280M0 540H1280M0 580H1280"/>
+    <path d="M80 440L260 640M240 440L420 640M400 440L580 640M560 440L740 640M720 440L900 640M880 440L1060 640M1040 440L1220 640"/>
+  </g>
+  <g transform="translate(770 165)" filter="url(#glow)">
+    <circle cx="0" cy="0" r="38" fill="#172e56" stroke="#5ee7ff" stroke-width="4"/>
+    <circle cx="150" cy="-70" r="30" fill="#3a1e56" stroke="#ff6ad5" stroke-width="4"/>
+    <circle cx="205" cy="105" r="32" fill="#173d55" stroke="#64e8c3" stroke-width="4"/>
+    <circle cx="-130" cy="125" r="28" fill="#3b315b" stroke="#ffc857" stroke-width="4"/>
+    <path d="M34 -12L124 -58M22 28L178 91M-20 31L-108 105M-126 99L-32 24" fill="none" stroke="url(#accent)" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(88 102)">
+    <rect width="92" height="8" rx="4" fill="url(#accent)"/>
+    <text x="0" y="112" fill="#f4f8ff" font-family="Inter,Segoe UI,sans-serif" font-size="66" font-weight="800">Roleplay</text>
+    <text x="0" y="184" fill="#f4f8ff" font-family="Inter,Segoe UI,sans-serif" font-size="66" font-weight="800">Engine</text>
+    <text x="4" y="242" fill="#a9c2df" font-family="Inter,Segoe UI,sans-serif" font-size="28">AI characters. A living 2D world.</text>
+    <text x="4" y="303" fill="#d6e4f5" font-family="Inter,Segoe UI,sans-serif" font-size="22">Multi-agent roleplay · Phaser · Script Murder · Werewolf</text>
+  </g>
+  <g transform="translate(92 520)">
+    <rect width="410" height="52" rx="26" fill="#122c4b" stroke="#355b85"/>
+    <text x="26" y="34" fill="#8deeff" font-family="ui-monospace,SFMono-Regular,monospace" font-size="21">github.com/shuweiran/roleplay-java</text>
+  </g>
+</svg>

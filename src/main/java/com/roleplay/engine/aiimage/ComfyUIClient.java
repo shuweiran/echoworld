@@ -59,7 +59,7 @@ public class ComfyUIClient {
     private static final String CLIENT_ID_PREFIX = "roleplay-java-";
 
     private final ObjectMapper mapper;
-    private final String baseUrl;
+    private volatile String baseUrl;
     private final int timeoutSeconds;
     private final int pollIntervalMs;
     private final HttpClient http;
@@ -88,6 +88,13 @@ public class ComfyUIClient {
         while (u.endsWith("/")) u = u.substring(0, u.length() - 1);
         return u;
     }
+
+    /** 运行时切换 ComfyUI 地址，供 /api/config/integrations 使用。 */
+    public void setBaseUrl(String url) {
+        this.baseUrl = trimTrailingSlash(url);
+    }
+
+    public String baseUrl() { return baseUrl; }
 
     // ── 工作流构建（占位符替换，纯函数可单测）──────────────────────────
 

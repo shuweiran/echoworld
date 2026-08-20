@@ -1,0 +1,15 @@
+services:
+  roleplay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      ROLEPLAY_LLM_API_KEY: ${ROLEPLAY_LLM_API_KEY:?Set ROLEPLAY_LLM_API_KEY before starting}
+    volumes:
+      - roleplay-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  roleplay-data:

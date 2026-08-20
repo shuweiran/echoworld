@@ -134,11 +134,11 @@ public class ImageGenService {
     private final ExecutorService executor;
     private final ComfyUIClient comfyClient;
     private final Path outputRoot;
-    private final String loraName;
+    private volatile String loraName;
     /** P-0810-05：表情 img2img 强度（yml roleplay.ai-image.img2img-denoise，默认 0.5）。 */
-    private final double img2imgDenoise;
+    private volatile double img2imgDenoise;
     /** P-0810-14：单任务总超时（yml roleplay.ai-image.timeout-seconds，场景背景同步等待上限）。 */
-    private final int timeoutSeconds;
+    private volatile int timeoutSeconds;
     /** P-0810-14：场景背景图缓存（scene 键 → URL；相同键不重复生成，内存 + 磁盘双重）。 */
     private final Map<String, String> sceneBackgroundUrls = new ConcurrentHashMap<>();
     /** P-0810-14：场景背景图在途任务（scene 键 → future；并发同键去重只生成一次）。 */
@@ -195,6 +195,16 @@ public class ImageGenService {
     /** P-0810-04：抠背景开关（测试/运行时切换；false=只存原图）。 */
     public void setRmbgEnabled(boolean enabled) {
         this.rmbgEnabled = enabled;
+    }
+
+    /** 运行时更新图片生成 provider 设置；后续新任务立即使用。 */
+    public void applyRuntimeSettings(AiImageProperties props) {
+        if (props == null) return;
+        comfyClient.setBaseUrl(props.getComfyuiBaseUrl());
+        loraName = props.getLoraName() == null ? "" : props.getLoraName().trim();
+        img2imgDenoise = Math.max(0, Math.min(1, props.getImg2imgDenoise()));
+        timeoutSeconds = Math.max(1, props.getTimeoutSeconds());
+        rmbgEnabled = props.isRmbgEnabled();
     }
 
     public boolean isRmbgEnabled() {

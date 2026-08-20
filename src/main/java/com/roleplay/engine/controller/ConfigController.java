@@ -1,6 +1,9 @@
 package com.roleplay.engine.controller;
 
 import com.roleplay.engine.config.AppConfig;
+import com.roleplay.engine.aiimage.AiImageProperties;
+import com.roleplay.engine.aiimage.ImageGenService;
+import com.roleplay.engine.service.MimoTtsService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -15,12 +18,28 @@ import java.util.*;
 public class ConfigController {
 
     private final AppConfig appConfig;
+    private final AiImageProperties imageProperties;
+    private final MimoTtsService ttsService;
+    private final ImageGenService imageService;
 
     // In-memory config overrides (replaces api_key.json)
     private final Map<String, Object> runtimeConfig = new HashMap<>();
 
     public ConfigController(AppConfig appConfig) {
+        this(appConfig, null, null);
+    }
+
+    public ConfigController(AppConfig appConfig, AiImageProperties imageProperties, MimoTtsService ttsService) {
+        this(appConfig, imageProperties, ttsService, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ConfigController(AppConfig appConfig, AiImageProperties imageProperties, MimoTtsService ttsService,
+                            ImageGenService imageService) {
         this.appConfig = appConfig;
+        this.imageProperties = imageProperties;
+        this.ttsService = ttsService;
+        this.imageService = imageService;
     }
 
     private String maskKey(String key) {
@@ -70,6 +89,104 @@ public class ConfigController {
             appConfig.getLlm().setModel(model.trim());
         }
         return ResponseEntity.ok().build();
+    }
+
+    /**
+     * 三类外部能力的统一配置读写入口。GET 永远只返回密钥是否已配置与掩码，
+     * POST 只更新请求中出现的字段，配置立即作用于后续请求（重启后回到环境变量/YAML）。
+     */
+    @GetMapping("/integrations")
+    public ResponseEntity<Map<String, Object>> getIntegrations() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        AppConfig.LLMConfig llm = appConfig.getLlm();
+        AppConfig.MapLlmConfig map = appConfig.getMapLlm();
+        out.put("llm", providerView(llm.getApiBase(), llm.getModel(), llm.getApiKey()));
+        out.put("map_llm", providerView(map.getBaseUrl(), map.getModel(), map.getApiKey()));
+        if (ttsService != null) out.put("tts", ttsService.statusMap());
+        else out.put("tts", providerView(appConfig.getTts().getMimo().getBaseUrl(),
+                appConfig.getTts().getMimo().getModelBasic(), appConfig.getTts().getMimo().getApiKey()));
+        if (imageProperties != null) {
+            Map<String, Object> image = new LinkedHashMap<>();
+            image.put("provider", "comfyui");
+            image.put("base_url", imageProperties.getComfyuiBaseUrl());
+            image.put("lora_name", imageProperties.getLoraName());
+            image.put("rmbg_enabled", imageProperties.isRmbgEnabled());
+            image.put("img2img_denoise", imageProperties.getImg2imgDenoise());
+            image.put("configured", imageProperties.getComfyuiBaseUrl() != null && !imageProperties.getComfyuiBaseUrl().isBlank());
+            out.put("image", image);
+        }
+        return ResponseEntity.ok(out);
+    }
+
+    @PostMapping("/integrations")
+    public ResponseEntity<Void> setIntegrations(@RequestBody Map<String, Object> body) {
+        updateLlm(body.get("llm"), appConfig.getLlm());
+        updateMapLlm(body.get("map_llm"), appConfig.getMapLlm());
+        Object tts = body.get("tts");
+        if (tts instanceof Map<?, ?> m) {
+            AppConfig.TtsConfig.MimoConfig cfg = appConfig.getTts().getMimo();
+            setString(m, "api_key", cfg::setApiKey, true);
+            setString(m, "base_url", cfg::setBaseUrl, false);
+            setString(m, "model", cfg::setModelBasic, false);
+            setBoolean(m, "enabled", cfg::setEnabled);
+            setString(m, "voice", cfg::setDefaultVoice, false);
+        }
+        Object image = body.get("image");
+        if (image instanceof Map<?, ?> m && imageProperties != null) {
+            setString(m, "base_url", imageProperties::setComfyuiBaseUrl, false);
+            setString(m, "lora_name", imageProperties::setLoraName, false);
+            if (m.containsKey("rmbg_enabled")) imageProperties.setRmbgEnabled(bool(m.get("rmbg_enabled"), imageProperties.isRmbgEnabled()));
+            if (m.containsKey("img2img_denoise")) {
+                double d = number(m.get("img2img_denoise"), imageProperties.getImg2imgDenoise());
+                imageProperties.setImg2imgDenoise(Math.max(0, Math.min(1, d)));
+            }
+            if (imageService != null) imageService.applyRuntimeSettings(imageProperties);
+        }
+        return ResponseEntity.ok().build();
+    }
+
+    private Map<String, Object> providerView(String base, String model, String key) {
+        Map<String, Object> view = new LinkedHashMap<>();
+        view.put("base_url", base);
+        view.put("model", model);
+        view.put("configured", key != null && !key.isBlank());
+        view.put("api_key_masked", maskKey(key));
+        return view;
+    }
+
+    private void updateLlm(Object raw, AppConfig.LLMConfig cfg) {
+        if (!(raw instanceof Map<?, ?> m)) return;
+        setString(m, "api_key", cfg::setApiKey, true);
+        setString(m, "base_url", cfg::setApiBase, false);
+        setString(m, "model", cfg::setModel, false);
+        if (m.containsKey("temperature")) cfg.setTemperature(number(m.get("temperature"), cfg.getTemperature()));
+        if (m.containsKey("max_tokens")) cfg.setMaxTokens((int) number(m.get("max_tokens"), cfg.getMaxTokens()));
+    }
+
+    private void updateMapLlm(Object raw, AppConfig.MapLlmConfig cfg) {
+        if (!(raw instanceof Map<?, ?> m)) return;
+        setString(m, "api_key", cfg::setApiKey, true);
+        setString(m, "base_url", cfg::setBaseUrl, false);
+        setString(m, "model", cfg::setModel, false);
+    }
+
+    private void setString(Map<?, ?> map, String key, java.util.function.Consumer<String> setter, boolean allowEmpty) {
+        if (!map.containsKey(key) || map.get(key) == null) return;
+        String value = String.valueOf(map.get(key)).trim();
+        if (allowEmpty || !value.isBlank()) setter.accept(value);
+    }
+
+    private void setBoolean(Map<?, ?> map, String key, java.util.function.Consumer<Boolean> setter) {
+        if (map.containsKey(key)) setter.accept(bool(map.get(key), false));
+    }
+
+    private boolean bool(Object value, boolean fallback) {
+        return value == null ? fallback : Boolean.parseBoolean(String.valueOf(value));
+    }
+
+    private double number(Object value, double fallback) {
+        try { return value == null ? fallback : Double.parseDouble(String.valueOf(value)); }
+        catch (NumberFormatException e) { return fallback; }
     }
 
     @GetMapping("/language")
