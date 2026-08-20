@@ -5,6 +5,7 @@ import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.SessionRegistry;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
+import com.roleplay.engine.simulation.map.SocialExperimentMap;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -183,6 +184,58 @@ public class SimulationController {
     @GetMapping("/state")
     public Map<String, Object> getState() {
         return simulationService.getState();
+    }
+
+    /** 返回一般模式 AI 社会实验的确定性起始地图，供前端加载或作为 load-characters 的 map 参数。 */
+    @GetMapping("/social-map")
+    public Map<String, Object> getSocialExperimentMap() {
+        return SocialExperimentMap.generate();
+    }
+
+    /** 动态加入一般模式 2D 社会实验。 */
+    @PostMapping("/agent")
+    public Map<String, Object> addAgent(@RequestBody Map<String, Object> body) {
+        String name = body == null ? "" : String.valueOf(body.getOrDefault("name", ""));
+        String persona = body == null ? "" : String.valueOf(body.getOrDefault("persona", ""));
+        return simulationService.addSocialAgent(name, persona);
+    }
+
+    /** 动态移除一般模式 2D 社会实验角色，并清理关系/记忆/目标。 */
+    @DeleteMapping("/agent/{agentName}")
+    public Map<String, Object> removeAgent(@PathVariable String agentName) {
+        return simulationService.removeSocialAgent(agentName);
+    }
+
+    @GetMapping("/social")
+    public Map<String, Object> getSocialState() {
+        return simulationService.getSocialState();
+    }
+
+    @GetMapping("/social/{agentName}")
+    public Map<String, Object> getAgentSocialState(@PathVariable String agentName) {
+        return simulationService.getSocialState(agentName);
+    }
+
+    /** 给角色注入可观测的社会目标，可带 targetAgent 触发寻找某人的目标语义。 */
+    @PostMapping("/social/{agentName}/goal")
+    public Map<String, Object> setSocialGoal(@PathVariable String agentName,
+                                               @RequestBody Map<String, String> body) {
+        if (!simulationService.hasAgent(agentName)) {
+            return Map.of("status", "error", "message", "Agent not found");
+        }
+        simulationService.setSocialGoal(agentName,
+                body == null ? "" : body.getOrDefault("goal", ""),
+                body == null ? "" : body.getOrDefault("targetAgent", ""));
+        return Map.of("status", "ok", "agent", agentName);
+    }
+
+    @DeleteMapping("/social/{agentName}/goal")
+    public Map<String, Object> clearSocialGoal(@PathVariable String agentName) {
+        if (!simulationService.hasAgent(agentName)) {
+            return Map.of("status", "error", "message", "Agent not found");
+        }
+        simulationService.clearSocialGoal(agentName);
+        return Map.of("status", "ok", "agent", agentName);
     }
 
     @PostMapping("/send/{agentName}")

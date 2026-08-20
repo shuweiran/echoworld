@@ -19,6 +19,7 @@ import com.roleplay.engine.simulation.director.WorldDirectorService;
 import com.roleplay.engine.simulation.movement.MovementConstraint;
 import com.roleplay.engine.simulation.movement.MovementTarget;
 import com.roleplay.engine.simulation.schedule.SchedulerService;
+import com.roleplay.engine.simulation.social.SocialState;
 import com.roleplay.engine.simulation.track.InteractionDetector;
 import com.roleplay.engine.simulation.track.TrackAssignment;
 import org.slf4j.Logger;
@@ -68,6 +69,7 @@ public class SimulationService {
     private final WorldDirectorService worldDirector;
     /** Phase 3 dual-director architecture: Track Director (谁知道什么). */
     private final TrackDirectorService trackDirector = new TrackDirectorService();
+    private final SocialState socialState = new SocialState();
     /** Phase 3 outer orchestrator (需求文档第十四条: Router → Orchestrator → Track/World). */
     private SimulationOrchestrator orchestrator;
     /** Phase 4: 轨道 → 运动约束（纯规则，零 LLM）。 */
@@ -148,6 +150,7 @@ public class SimulationService {
         conversationManager.setAgentTaskManager(agentTaskManager);
         // 演讲与广播合并地基：PUBLIC_SPEAKING 轮次产出 → 统一广播管线（自动选演讲/广播形态）
         conversationManager.setSpeechBroadcastListener(this::onSpeechBroadcast);
+        conversationManager.setConversationCompletedListener(socialState::recordConversation);
         // P-0813-F：节奏控制接线（仅 2D 模拟世界注入；剧本杀/狼人杀各局自有
         // ConversationManager 实例不接此配置 → 保持原节奏，零影响）。
         conversationManager.setPacing(pacingCfg.isEnabled(),
@@ -264,6 +267,7 @@ public class SimulationService {
             double moveSpeed = moveSpeedBase + Math.random() * moveSpeedRandomRange;
 
             world.registerAgent(agent, x, y, hearRange, moveSpeed);
+            socialState.registerAgent(p[0]);
             world.getState(p[0]).setEmotion(Emotion.NEUTRAL);
         }
 
@@ -333,6 +337,7 @@ public class SimulationService {
             double moveSpeed = moveSpeedBase + Math.random() * moveSpeedRandomRange;
 
             world.registerAgent(agent, x, y, hearRange, moveSpeed);
+            socialState.registerAgent(p.getName());
             AgentState state = world.getState(p.getName());
             if (state != null) {
                 state.setEmotion(Emotion.NEUTRAL);
@@ -378,7 +383,38 @@ public class SimulationService {
         conversationManager.stopAll();
         if (schedulerService != null) schedulerService.clear();
         world.clearAgents();
+        socialState.clear();
     }
+
+    /** 动态加入一般模式 2D 世界的 AI。 */
+    public synchronized Map<String, Object> addSocialAgent(String name, String personaDesc) {
+        if (name == null || name.isBlank()) return Map.of("status", "error", "message", "name required");
+        if (world.getAgent(name) != null) return Map.of("status", "error", "message", "Agent already exists");
+        Persona persona = new Persona(name);
+        persona.setPersonaDesc(personaDesc == null ? "" : personaDesc);
+        Agent agent = new Agent(persona, "npc", llmClient);
+        double[] spawn = pickSpawnPoint(world.getObstacles());
+        world.registerAgent(agent, spawn[0], spawn[1], 180 + Math.random() * 80,
+                moveSpeedBase + Math.random() * moveSpeedRandomRange);
+        socialState.registerAgent(name);
+        ensureSchedulesAndSuppliers();
+        return Map.of("status", "ok", "agent", name, "x", spawn[0], "y", spawn[1]);
+    }
+
+    /** 动态移除一般模式 2D 世界的 AI，并清理其社会状态。 */
+    public synchronized Map<String, Object> removeSocialAgent(String name) {
+        if (name == null || world.getAgent(name) == null) return Map.of("status", "error", "message", "Agent not found");
+        world.removeAgent(name);
+        socialState.removeAgent(name);
+        return Map.of("status", "ok", "agent", name);
+    }
+
+    public Map<String, Object> getSocialState() { return socialState.toMap(); }
+    public Map<String, Object> getSocialState(String agent) { return socialState.forAgent(agent); }
+    public void setSocialGoal(String agent, String goal, String targetAgent) {
+        socialState.setGoal(agent, goal, targetAgent);
+    }
+    public void clearSocialGoal(String agent) { socialState.clearGoal(agent); }
 
     /**
      * P-0802-P3（改造方案 §4.2.2）：2D 局中改名 —— world.renameAgent（agents/states 换键 + persona 改名）
@@ -450,6 +486,7 @@ public class SimulationService {
         result.put("recentConversations", world.getRecentConversations());
         result.put("worldNarration", world.getWorldNarration());
         result.put("directorActive", world.isDirectorActive());
+        result.put("social", socialState.toMap());
         return result;
     }
 

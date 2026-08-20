@@ -74,7 +74,8 @@ public class DyadStrategy implements ConversationStrategy {
 
     @Override
     public boolean shouldContinue(ConversationGroup group) {
-        return group.getRoundCount() < 6 && group.idleMs() < 25_000;
+        // 自然离场是普通 2D 对话的主要结束机制；这里仅保留较高安全上限与空闲兜底。
+        return group.getRoundCount() < 20 && group.idleMs() < 60_000;
     }
 
     private String buildContext(AgentState self, AgentState other, ConversationGroup group) {

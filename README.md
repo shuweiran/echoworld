@@ -13,6 +13,8 @@
 
 如果这个项目对你有帮助，欢迎点一个 **Star** ⭐。你也可以直接打开 Issue 分享一个角色、场景或剧本杀玩法想法。
 
+一般模式现在包含“晨雾镇 · AI 社会实验”入口：通过一般模式 Phaser 2D 主链路加载 8 个角色与专用 96×64 室外城镇地图（草地、道路、河流、建筑碰撞），角色位置、移动和对话均来自后端 SimulationService。地图只展示空间与会话组，点击并加入某一组后才显示右侧该组的对话与发言区；预览环境同样转发真实 API。
+
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/shuweiran/roleplay-java)
 
 ## 运行画面

@@ -62,6 +62,9 @@ public class ConversationManager {
      *  由 SimulationService 注册，把 AI 演讲接入 AnnouncementService 统一管线。 */
     private java.util.function.Consumer<SpeechTurn> speechBroadcastListener;
 
+    /** 一般模式社会状态回写：对话组每轮完成后通知关系/记忆层。 */
+    private java.util.function.Consumer<Map<String, Object>> conversationCompletedListener;
+
     /** 方案B 共存开关：init 注入的 AnnouncementService（可空）。executeRound 在
      *  split 模式下抑制方案A 回调，避免与 SpeechStrategy 内联广播重复推送。 */
     private AnnouncementService announcementService;
@@ -259,6 +262,10 @@ public class ConversationManager {
 
     public void setSpeechBroadcastListener(java.util.function.Consumer<SpeechTurn> listener) {
         this.speechBroadcastListener = listener;
+    }
+
+    public void setConversationCompletedListener(java.util.function.Consumer<Map<String, Object>> listener) {
+        this.conversationCompletedListener = listener;
     }
 
     /** P-0810-17（B1）：设置剧本杀讨论发言逐轮回调（见 {@link #scriptSpeechListener}）。 */
@@ -592,6 +599,10 @@ public class ConversationManager {
             while (group.isActive() && strategy.shouldContinue(group) && !stopped) {
                 try {
                     executeRound(group, strategy);
+                    if (group.getKind() == GroupKind.AI_AUTO) {
+                        applyNaturalDepartures(group, finalMode);
+                    }
+                    if (!group.isActive() || group.getParticipantCount() < 2) break;
                     if (playbackDriven) {
                         // P-0814-A：点击驱动 —— 一轮生成完即停，等「播出完毕」信号（notifyPlaybackDone）
                         // 再生成下一轮；无玩家/未点击时组保持等待（tick 跳过 idle 解散），
@@ -613,6 +624,67 @@ public class ConversationManager {
             }
             dissolveGroup(groupId);
         }, executor);
+    }
+
+    /**
+     * 普通 AI 对话的自然离场：每轮结束后按节奏抽样，不打断正在生成的本轮发言。
+     * 安全上限仍由策略保留，但正常结束优先由离场/剩余人数决定。
+     */
+    private void applyNaturalDepartures(ConversationGroup group, ConversationMode mode) {
+        int round = group.getRoundCount();
+        if (round < 2 || group.getParticipantCount() <= 1) return;
+        List<AgentState> candidates = new ArrayList<>();
+        for (AgentState state : group.getParticipantList()) {
+            if (!state.isPlayerControlled()) candidates.add(state);
+        }
+        if (candidates.isEmpty()) return;
+
+        double base = mode == ConversationMode.DYAD ? 0.10 : 0.07;
+        int departures = 0;
+        for (AgentState state : candidates) {
+            if (group.getParticipantCount() - departures <= 1) break;
+            double chance = base + Math.min(0.14, Math.max(0, round - 3) * 0.018);
+            chance += switch (state.getEmotion()) {
+                case BORED, SAD, SHY -> 0.08;
+                case ANGRY, EXCITED -> 0.04;
+                default -> 0.0;
+            };
+            chance += (1.0 - group.getEngagement(state.getAgentName())) * 0.12;
+            if (ThreadLocalRandom.current().nextDouble() >= Math.min(0.38, chance)) continue;
+
+            if (!group.removeParticipant(state.getAgentName())) continue;
+            state.setInConversation(false);
+            state.setVx(0);
+            state.setVy(0);
+            state.clearTarget();
+            departures++;
+            Map<String, Object> event = new LinkedHashMap<>();
+            event.put("event", "conversation_departure");
+            event.put("group", group.getGroupId());
+            event.put("mode", group.getMode().name());
+            event.put("tick", world.getTickCount());
+            event.put("round", round);
+            event.put("agent", state.getAgentName());
+            event.put("reason", departureReason(state));
+            world.addConversationEntry(event);
+            if (conversationCompletedListener != null) {
+                try { conversationCompletedListener.accept(new LinkedHashMap<>(event)); }
+                catch (Exception e) { log.warn("Departure social state callback failed: {}", e.getMessage()); }
+            }
+            log.info("Natural departure: group={} agent={} round={} reason={}",
+                    group.getGroupId(), state.getAgentName(), round, event.get("reason"));
+        }
+        if (departures > 0 && group.getParticipantCount() >= 2) recomputeTrackAssignments(group);
+    }
+
+    private String departureReason(AgentState state) {
+        return switch (state.getEmotion()) {
+            case BORED -> "话题变得无聊";
+            case SAD, SHY -> "暂时想独处";
+            case ANGRY -> "情绪不适合继续交谈";
+            case EXCITED -> "突然想去做别的事";
+            default -> "想去处理自己的事情";
+        };
     }
 
     private void executeRound(ConversationGroup group, ConversationStrategy strategy) {
@@ -790,6 +862,13 @@ public class ConversationManager {
             convEntry.put(entry.getKey(), val);
         }
         world.addConversationEntry(convEntry);
+        if (conversationCompletedListener != null) {
+            try {
+                conversationCompletedListener.accept(new LinkedHashMap<>(convEntry));
+            } catch (Exception e) {
+                log.warn("Conversation social state callback failed: {}", e.getMessage());
+            }
+        }
 
         if (!responses.isEmpty()) {
             log.info("Group {} round {} | {} responses",

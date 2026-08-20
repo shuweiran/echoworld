@@ -108,8 +108,9 @@ public class GroupStrategy implements ConversationStrategy {
 
     @Override
     public boolean shouldContinue(ConversationGroup group) {
-        if (group.getRoundCount() >= 10) return false;
-        if (group.idleMs() > 40_000) return false;
+        // 自然离场优先；上限只防止异常情况下的无限生成。
+        if (group.getRoundCount() >= 30) return false;
+        if (group.idleMs() > 90_000) return false;
         double avgEngagement = 0;
         for (AgentState s : group.getParticipantList()) {
             avgEngagement += group.getEngagement(s.getAgentName());

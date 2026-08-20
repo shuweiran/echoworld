@@ -1796,3 +1796,80 @@ oleplay-v4/frontend/src/phaser/simGroupFilter.ts——纯函数 shouldShowWorldM
 - **前端**：`npm run build` EXIT=0；TypeScript 通过，Vite **143 modules**，产物 `index-DFsBvT69.js` / `index-2RooXbjo.css`。
 - **变更范围**：新增 `/api/config/integrations`；运行时接入 LLM/地图 LLM/TTS/ComfyUI 图片设置；默认不调用保存接口时不改变 YAML/环境变量本地配置。
 - **仓库一致性**：`git diff --check` PASS；未启动 `spring-boot:run`，未操作 8000 端口，未 git commit。
+
+## Round 183 / v183（2026-08-20）（P-0820-A 一般模式 2D 社会状态层）
+- **后端编译**：`mvn compile -q` EXIT=0。
+- **定向测试**：`mvn -q '-Dtest=SocialStateTest,TrackDirectorServiceTest,TrackStrategyTest' test` EXIT=0；关系/记忆写入、冲突变化、动态移除清理均通过。
+- **变更范围**：新增关系、社会记忆、社会目标、事件状态；对话回写；动态 AI 增删和社会状态接口；未改 RouterService、ArbiterService、审批、狼人杀、SSE 主链路/static。
+- **纪律**：未启动 `spring-boot:run`，未部署/重启 8000，未 git commit。
+
+## Round 184 / v184（2026-08-20）（P-0820-B 一般模式 AI 自然离场）
+- **后端编译**：`mvn compile -q` EXIT=0。
+- **定向测试**：`mvn -q '-Dtest=SocialStateTest,ConversationJoinGroupTest,ConversationPlaybackDrivenTest,TrackStrategyTest' test` EXIT=0；本轮共 12 tests 通过。
+- **行为证据**：测试日志出现 `Natural departure`；AI 在第 2 轮后离场，群组按剩余人数继续或解散；玩家控制角色不自动离场。
+- **变更范围**：普通 `AI_AUTO` 组启用自然离场；剧本杀/狼人杀组不受影响；双人安全上限 20 轮、群聊 30 轮，空闲超时仅作兜底。
+- **纪律**：未启动 `spring-boot:run`，未部署/重启 8000，未 git commit。
+
+## Round 185 / v185（2026-08-20）（P-0820-B AI 行为检测复跑）
+- **源码行为检测**：`mvn -q '-Dtest=ConversationPlaybackDrivenTest,ConversationJoinGroupTest,TrackStrategyTest' test` EXIT=0；日志实证 `Natural departure`，`P+A` 组第 2 轮 AI `A` 自动离场，之后按剩余人数解散/继续逻辑收尾。
+- **8000 基线**：`GET /api/simulation/state` 返回 `running=false/tick=0/agentCount=0`；线上实例未重启，未将旧实例结果计入新行为验收。
+- **纪律**：未启动 `spring-boot:run`，未操作 8000 状态，未 git commit。
+
+## Round 186 / v186（2026-08-20）（P-0820-H 晨雾镇地图）
+- **后端编译**：`mvn compile -q` EXIT=0。
+- **地图定向测试**：`mvn -q '-Dtest=SocialExperimentMapTest,MapValidatorTest,MapContractTest' test` EXIT=0；晨雾镇地图契约、边界封口、水域 tileProps、出生点、社交区域与走廊校验通过，0 warning。
+- **接口变更**：新增 `GET /api/simulation/social-map`，返回可直接供前端加载的 48×32 地图数据；未重启 8000，旧线上实例未包含本轮接口。
+- **可运行性复跑**：单独执行 `mvn -q '-Dtest=SocialExperimentMapTest' test` EXIT=0；查询当前 8000 未发现本轮地图接口，符合未部署状态。
+- **纪律**：未启动 `spring-boot:run`，未 git commit。
+
+## Round 187 / v187（2026-08-20）（P-0820-M 普通地图/大型地图统一入口）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules，产物 `index-BYhEjWdY.js` / `index-2RooXbjo.css`。
+- **接线验证**：设置页的尺寸、结构类型、地图组织、风格、种子、视觉审核进入统一 `mapGen` 配置；角色选择页统一打开结构地图生成弹窗；GameBridge 无缓存时改走 `POST /api/structure/generate` 并按当前配置选取地图。
+- **兼容性**：保留既有 `/api/scenes/map` 与 `/api/structure/generate` 后端接口；晨雾镇专用入口和 P-0820-L 占用文件未改；未同步 8000 static。
+- **纪律**：未启动 `spring-boot:run`，未 git commit。
+
+## Round 187 / v187（2026-08-20）（P-0820-H 晨雾镇实跑）
+- **实跑方式**：通过现有 8000 的 `POST /api/simulation/load-characters` 注入晨雾镇 collision 地图与 8 个测试角色，再调用 `POST /api/simulation/start`。
+- **运行结果**：启动成功；运行约 30 秒时 `running=true`、`tick=296`、`agentCount=8`；出现 3 组自动对话、6 个社会接触事件、关系状态开始写入；之后保持 5 个角色在对话中，其他角色继续漫游/等待。
+- **说明**：当前 8000 是旧已运行实例，地图 JSON 的 collision 注入链路可用，但新增加的 `GET /api/simulation/social-map` 尚未部署；本局保持运行供后续观察，未重启服务。
+
+## Round 188 / v188（2026-08-20）（P-0820-I 晨雾镇 Demo）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 146 modules，产物 `index-ovGEfWyM.js` / `index-C6sNvfiL.css`。
+- **浏览器实测**：构建预览页进入一般模式 → “晨雾镇 · AI 社会实验” → 2D 探索；确认 96×64 大地图、河流、不规则林地、道路、7 个房屋节点、8 个角色、小地图视口和后端对话列表；点击“河畔咖啡馆”进入室内，显示双人桌/长桌/吧台/出口，点击返回晨雾镇通过。
+- **接入说明**：Demo 轮询既有 `/api/simulation/state`；当前后端实例仍是旧模拟状态，缺失的 Demo 角色在前端以演示位置补齐，避免页面退化成 3 人默认 park 地图。
+- **纪律**：未同步 8000 static，未重启服务，未 git commit。
+
+## Round 189 / v189（2026-08-20）（P-0820-I 大地图拖拽与 AI 漫游）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 146 modules。
+- **浏览器实测**：地图视野扩大至窗口高度的大画布；指针拖拽后主地图视野发生平移；8 个 AI 中除玩家外的演示角色在 0.9 秒前后坐标发生变化；小地图视口与角色列表正常。
+- **启动兜底**：晨雾镇不再要求必须选择“2D 探索模式”，默认一般模式也进入 Demo；旧后端返回 Forbidden 时仍保留本地地图和 AI 漫游演示。
+- **纪律**：未同步 8000 static，未重启服务，未 git commit。
+
+## Round 190 / v190（2026-08-20）（P-0820-J 三层瓦片、入屋与消息）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 147 modules。
+- **浏览器实测**：晨雾镇显示为 160×104 地图；辅助树可见“第一层：地表瓦片 / 第二层：建筑与物件瓦片 / 第三层：AI 与消息”；房屋有入屋人数标记；等待 7.5 秒出现“苏遥进入居民小屋 B”等实时地图事件。
+- **室内验证**：点击河畔咖啡馆进入室内，人物层显示当前停留的沈言；外部 AI 数量相应减少，说明入屋状态不是仅文字模拟。
+- **纪律**：未同步 8000 static，未重启服务，未 git commit。
+
+## Round 191 / v191（2026-08-20）（P-0820-K 晨雾镇真实一般模式 2D）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
+- **预览联调**：Vite preview 的 `/api` 代理已转发至 8000 并去除 Origin；原先的 `Invalid CORS request` 不再出现。
+- **浏览器/后端实测**：晨雾镇加载后渲染 `PhaserSimulationView`，页面状态为 `Loaded 8 characters into simulation`；`GET /api/simulation/state` 返回 `running=true`、`tick=107`、`agentCount=8`。移动、对话与聊天消息均改走一般模式真实链路。
+- **纪律**：未同步 8000 static，未重启服务，未 git commit。
+
+## Round 192 / v192（2026-08-20）（P-0820-L 晨雾镇地图布局修复）
+- **根因复现**：旧 `buildMap(..., 96, 64)` 仅放置坐标 2~21 的固定小房间，剩余地图保留 collision=1；Phaser 将其渲染为大面积灰蓝障碍，AI 的可行出生区域也被压缩到左上。
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
+- **Chrome 实测**：专用室外地图全图草地可走、主街/支路、河流与 7 建筑正确分布；角色不再挤在左上。自定义地图 collision 不再被 `drawObstacles` 二次覆盖，重复灰蓝块和地图名标签消失；真实对话气泡仍可见。
+- **纪律**：未同步 8000 static，未重启服务，未 git commit。
+
+## Round 193 / v193（2026-08-20）（P-0820-N 会话组独立入口）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
+- **交互约束核查**：角色点击回调仅提示聚焦，不调用自动问候、发送或打开 Gal 面板；加入会话组成功后才打开右侧对话/输入区，离开或退出后立即关闭；`SimulationScene` 气泡过滤设为不会命中的固定值，地图不渲染任何聊天气泡。
+- **导演旁听**：无用户角色时点击会话组切至经典列表，隐藏发言输入，不调用 join API 或伪造 `me`；AI 的既有会话仍按后端调度自动推进。
+- **纪律**：未同步 8000 static，未重启服务，未 git commit。
+
+## Round 194 / v194（2026-08-20）（P-0820 发布）
+- **构建/部署**：前端 `npm run build` 通过（Vite 144 modules）；静态入口更新为 `index-CcWLGV7W.js`；`mvn -DskipTests package` BUILD SUCCESS。
+- **在线验证**：8000 已切换至 PID 35252；`GET /` 200 且引用新 JS，`GET /assets/index-CcWLGV7W.js` 200（2,114,286 bytes）。
+- **备注**：本轮打包跳过测试；功能测试结果见 Round 193 的 TypeScript/Vite 构建及交互约束核查。
