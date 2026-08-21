@@ -1,4 +1,4 @@
-"""
+﻿"""
 Chat Profile Miner - 数据模型定义
 基于 Pydantic 的结构化 schema，所有中间结果和最终输出都通过这些模型约束。
 """
@@ -203,3 +203,4 @@ class GiftRecommendation(BaseModel):
     evidence_summary: List[str]
     risk_level: str  # low / medium / high
     risks: List[str] = Field(default_factory=list)
+

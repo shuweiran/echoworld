@@ -1,4 +1,4 @@
-"""
+﻿"""
 分析春杪的聊天记录
 """
 import sys
@@ -63,3 +63,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

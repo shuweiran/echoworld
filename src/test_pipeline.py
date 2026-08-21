@@ -1,4 +1,4 @@
-"""
+﻿"""
 Chat Profile Miner - 测试
 用模拟数据验证管道流程。
 """
@@ -146,3 +146,4 @@ def test_pipeline():
 
 if __name__ == "__main__":
     test_pipeline()
+

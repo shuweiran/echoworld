@@ -1,4 +1,4 @@
-"""
+﻿"""
 Chat Profile Miner - 显式规则提取器
 用正则/关键词快速提取高置信度偏好信号。
 """
@@ -229,3 +229,4 @@ class RuleExtractor:
             context_before=signal.get("context_before", [])[:3],
             context_after=signal.get("context_after", [])[:3],
         )
+

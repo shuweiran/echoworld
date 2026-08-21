@@ -1,4 +1,4 @@
-"""
+﻿"""
 小规模 LLM 测试 - 只分析几个会话
 """
 import sys
@@ -37,7 +37,7 @@ def main():
             llm = LLMExtractor(
                 model_name='deepseek-v4-flash',
                 api_base='https://api.deepseek.com',
-                api_key='sk-3c333b574cbc4504bd44820c9a37d027'
+                api_key='***'
             )
             result = llm.extract_from_session(session, '春杪')
             print(f'\nResult:')
@@ -46,3 +46,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

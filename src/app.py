@@ -1,4 +1,4 @@
-"""
+﻿"""
 Chat Profile Miner - Streamlit UI
 本地演示界面，上传聊天记录 → 查看偏好画像 → 礼物推荐。
 """
@@ -182,3 +182,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

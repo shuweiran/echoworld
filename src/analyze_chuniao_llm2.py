@@ -1,4 +1,4 @@
-"""
+﻿"""
 分析春杪的聊天记录 - 使用 LLM 模式（带进度显示）
 """
 import sys
@@ -16,7 +16,7 @@ def main():
     print("=" * 60)
 
     # API Key
-    api_key = "sk-3c333b574cbc4504bd44820c9a37d027"
+    api_key = "***"
 
     # 导入聊天记录
     data_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'chuniao.json')
@@ -80,3 +80,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

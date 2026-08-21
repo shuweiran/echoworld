@@ -1,4 +1,4 @@
-"""
+﻿"""
 Chat Profile Miner - 聊天记录导入器
 支持微信/QQ/抖音/Telegram/飞书等格式，统一转为 JSONL。
 """
@@ -303,3 +303,4 @@ def import_jsonl(input_path: str) -> List[Message]:
             if line.strip():
                 messages.append(Message.model_validate_json(line))
     return messages
+

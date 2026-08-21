@@ -1,4 +1,4 @@
-"""
+﻿"""
 Chat Profile Miner - 主流程
 串联 importer → extractor → aggregator → ranker 的完整管道。
 """
@@ -628,3 +628,4 @@ def load_profile(input_path: str) -> ProfileSnapshot:
     """加载画像"""
     with open(input_path, 'r', encoding='utf-8') as f:
         return ProfileSnapshot.model_validate_json(f.read())
+

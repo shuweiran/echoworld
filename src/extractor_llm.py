@@ -1,4 +1,4 @@
-"""
+﻿"""
 Chat Profile Miner - LLM 结构化抽取器
 对规则无法覆盖的隐含偏好，用 LLM + JSON Schema 抽取。
 LLM 做语义解析器，不做人格判断器。
@@ -221,3 +221,4 @@ class SessionSplitter:
             sessions.append(current_session)
 
         return sessions
+

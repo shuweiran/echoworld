@@ -1,4 +1,4 @@
-"""
+﻿"""
 Chat Profile Miner - WeFlow 微信聊天记录导入器
 支持 WeFlow 导出的 JSON 格式。
 """
@@ -105,3 +105,4 @@ def import_weflow(file_path: str, target_name: str = None, self_name: str = None
     """便捷函数"""
     importer = WeFlowImporter(target_name, self_name)
     return importer.import_file(file_path)
+

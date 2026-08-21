@@ -1,4 +1,4 @@
-"""
+﻿"""
 Chat Profile Miner - 礼物排序器
 基于偏好强度、证据数量、时效性等因子排序礼物候选。
 """
@@ -264,3 +264,4 @@ class GiftRanker:
                 parts.append("明确想要")
 
         return "，".join(parts) if parts else "综合偏好分析"
+
