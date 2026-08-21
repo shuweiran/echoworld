@@ -1,0 +1,300 @@
+{
+  "profile_version": "0.1.0",
+  "subject_id": "春杪",
+  "generated_at": "2026-08-21T12:23:34.179517",
+  "data_range": "2026-05 至 2026-08",
+  "total_messages": 10,
+  "total_sessions": 6,
+  "preferences": [
+    {
+      "preference_id": "pref_0001",
+      "category": "jewelry",
+      "object": "银色, 项链",
+      "polarity": "like",
+      "strength": 0.8,
+      "status": "active",
+      "inference_level": "behavioral_inference",
+      "evidence": [
+        {
+          "message_id": "t001",
+          "timestamp": "2026-05-13T22:16:00",
+          "evidence_type": "positive_reaction",
+          "quote": "这个银色的项链好好看",
+          "support": 0.8,
+          "context_before": [],
+          "context_after": [
+            "算了八百多有点舍不得",
+            "金色感觉有点显老",
+            "这个银色的好看诶"
+          ]
+        }
+      ],
+      "counter_evidence": [],
+      "confidence": {
+        "raw_score": 0.7,
+        "calibrated_probability": 0.75,
+        "evidence_count": 1,
+        "explicit_count": 0,
+        "contradiction_count": 0
+      },
+      "first_seen": "2026-05-13T22:16:00",
+      "last_seen": "2026-05-13T22:16:00",
+      "change_history": []
+    },
+    {
+      "preference_id": "pref_0002",
+      "category": "unknown",
+      "object": "银色",
+      "polarity": "like",
+      "strength": 0.8,
+      "status": "active",
+      "inference_level": "behavioral_inference",
+      "evidence": [
+        {
+          "message_id": "t005",
+          "timestamp": "2026-06-15T10:30:00",
+          "evidence_type": "positive_reaction",
+          "quote": "这个银色的好看诶",
+          "support": 0.8,
+          "context_before": [
+            "这个银色的项链好好看",
+            "算了八百多有点舍不得",
+            "金色感觉有点显老"
+          ],
+          "context_after": [
+            "给你看这个银色的锁骨链",
+            "这个香水好香 清新的那种",
+            "不喜欢太甜的 有点冲"
+          ]
+        }
+      ],
+      "counter_evidence": [],
+      "confidence": {
+        "raw_score": 0.7,
+        "calibrated_probability": 0.75,
+        "evidence_count": 1,
+        "explicit_count": 0,
+        "contradiction_count": 0
+      },
+      "first_seen": "2026-06-15T10:30:00",
+      "last_seen": "2026-06-15T10:30:00",
+      "change_history": []
+    },
+    {
+      "preference_id": "pref_0003",
+      "category": "fragrance",
+      "object": "清新, 香水",
+      "polarity": "like",
+      "strength": 0.75,
+      "status": "active",
+      "inference_level": "behavioral_inference",
+      "evidence": [
+        {
+          "message_id": "t007",
+          "timestamp": "2026-07-10T20:00:00",
+          "evidence_type": "positive_reaction",
+          "quote": "这个香水好香 清新的那种",
+          "support": 0.75,
+          "context_before": [
+            "这个银色的项链好好看",
+            "算了八百多有点舍不得",
+            "金色感觉有点显老"
+          ],
+          "context_after": [
+            "不喜欢太甜的 有点冲",
+            "这个小熊好可爱",
+            "但是太大了占地方"
+          ]
+        }
+      ],
+      "counter_evidence": [],
+      "confidence": {
+        "raw_score": 0.7,
+        "calibrated_probability": 0.75,
+        "evidence_count": 1,
+        "explicit_count": 0,
+        "contradiction_count": 0
+      },
+      "first_seen": "2026-07-10T20:00:00",
+      "last_seen": "2026-07-10T20:00:00",
+      "change_history": []
+    },
+    {
+      "preference_id": "pref_0004",
+      "category": "unknown",
+      "object": "可爱",
+      "polarity": "like",
+      "strength": 0.8,
+      "status": "active",
+      "inference_level": "behavioral_inference",
+      "evidence": [
+        {
+          "message_id": "t009",
+          "timestamp": "2026-08-01T15:00:00",
+          "evidence_type": "positive_reaction",
+          "quote": "这个小熊好可爱",
+          "support": 0.8,
+          "context_before": [
+            "这个银色的项链好好看",
+            "算了八百多有点舍不得",
+            "金色感觉有点显老"
+          ],
+          "context_after": [
+            "但是太大了占地方"
+          ]
+        }
+      ],
+      "counter_evidence": [],
+      "confidence": {
+        "raw_score": 0.7,
+        "calibrated_probability": 0.75,
+        "evidence_count": 1,
+        "explicit_count": 0,
+        "contradiction_count": 0
+      },
+      "first_seen": "2026-08-01T15:00:00",
+      "last_seen": "2026-08-01T15:00:00",
+      "change_history": []
+    }
+  ],
+  "gift_signals": [
+    {
+      "object": "银色项链",
+      "category": "jewelry",
+      "brand": null,
+      "desire": "high",
+      "price_barrier": true,
+      "already_owned": false,
+      "gift_score": 0.9,
+      "evidence_ids": [
+        "t003"
+      ],
+      "confidence": {
+        "raw_score": 0.85,
+        "calibrated_probability": 0.8,
+        "evidence_count": 1,
+        "explicit_count": 0,
+        "contradiction_count": 0
+      }
+    },
+    {
+      "object": "银色项链",
+      "category": "jewelry",
+      "brand": null,
+      "desire": "high",
+      "price_barrier": true,
+      "already_owned": false,
+      "gift_score": 0.9,
+      "evidence_ids": [
+        "t003"
+      ],
+      "confidence": {
+        "raw_score": 0.85,
+        "calibrated_probability": 0.8,
+        "evidence_count": 1,
+        "explicit_count": 0,
+        "contradiction_count": 0
+      }
+    }
+  ],
+  "avoid": [
+    {
+      "preference_id": "avoid_0001",
+      "category": "unknown",
+      "object": "金色",
+      "polarity": "dislike",
+      "strength": 0.85,
+      "status": "active",
+      "inference_level": "behavioral_inference",
+      "evidence": [
+        {
+          "message_id": "t004",
+          "timestamp": "2026-06-07T17:52:00",
+          "evidence_type": "negative_reaction",
+          "quote": "金色感觉有点显老",
+          "support": 0.85,
+          "context_before": [
+            "这个银色的项链好好看",
+            "算了八百多有点舍不得"
+          ],
+          "context_after": [
+            "这个银色的好看诶",
+            "给你看这个银色的锁骨链",
+            "这个香水好香 清新的那种"
+          ]
+        }
+      ],
+      "counter_evidence": [],
+      "confidence": {
+        "raw_score": 0.7,
+        "calibrated_probability": 0.65,
+        "evidence_count": 1,
+        "explicit_count": 0,
+        "contradiction_count": 0
+      },
+      "first_seen": null,
+      "last_seen": null,
+      "change_history": []
+    },
+    {
+      "preference_id": "avoid_0002",
+      "category": "fragrance",
+      "object": "浓郁, 香水",
+      "polarity": "dislike",
+      "strength": 1.0,
+      "status": "active",
+      "inference_level": "behavioral_inference",
+      "evidence": [
+        {
+          "message_id": "t008",
+          "timestamp": "2026-07-10T20:05:00",
+          "evidence_type": "negative_reaction",
+          "quote": "不喜欢太甜的 有点冲",
+          "support": 1.0,
+          "context_before": [
+            "这个银色的项链好好看",
+            "算了八百多有点舍不得",
+            "金色感觉有点显老"
+          ],
+          "context_after": [
+            "这个小熊好可爱",
+            "但是太大了占地方"
+          ]
+        },
+        {
+          "message_id": "t008",
+          "timestamp": "2026-07-10T20:05:00",
+          "evidence_type": "negative_reaction",
+          "quote": "不喜欢太甜的 有点冲",
+          "support": 0.8,
+          "context_before": [
+            "这个银色的项链好好看",
+            "算了八百多有点舍不得",
+            "金色感觉有点显老"
+          ],
+          "context_after": [
+            "这个小熊好可爱",
+            "但是太大了占地方"
+          ]
+        }
+      ],
+      "counter_evidence": [],
+      "confidence": {
+        "raw_score": 0.7,
+        "calibrated_probability": 0.65,
+        "evidence_count": 2,
+        "explicit_count": 0,
+        "contradiction_count": 0
+      },
+      "first_seen": null,
+      "last_seen": null,
+      "change_history": []
+    }
+  ],
+  "behavior_patterns": [],
+  "unknowns": [],
+  "facts_extracted": 4,
+  "preference_categories": 3,
+  "highest_confidence": null,
+  "lowest_confidence": null
+}
