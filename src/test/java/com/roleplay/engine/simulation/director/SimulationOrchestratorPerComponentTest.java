@@ -28,6 +28,8 @@ class SimulationOrchestratorPerComponentTest {
 
     private SimulationWorld worldWithAgents(double[][] coords, String... names) {
         SimulationWorld world = new SimulationWorld();
+        // 本类仅验证听力距离形成的分量；障碍遮挡在独立声学回归中验证。
+        world.setCustomObstacles(List.of(), "per-component-test");
         for (int i = 0; i < names.length; i++) {
             Persona persona = new Persona(names[i], "测试人格" + names[i]);
             Agent agent = new Agent(persona, "test", null);

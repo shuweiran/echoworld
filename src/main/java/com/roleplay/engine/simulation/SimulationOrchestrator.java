@@ -21,8 +21,9 @@ import java.util.Set;
  * 游戏模式），而是新增外层编排器，先 Router → Orchestrator → Track/World，稳定后再拆。
  *
  * <p>每 tick 流程（需求文档第十五条）：收集 AgentState → World Director 更新角色目标 →
- * Interaction Detector 计算 TrackScore → Track Director（SpatialTrackResolver）生成
- * Track 关系 → 写入 ConversationGroup（Phase 2 {@code TrackStrategy} 自动消费）→
+ * HearingSystem 先划分可听连通分量，Interaction Detector 计算 TrackScore → Track Director
+ * （SpatialTrackResolver）在分量内生成 Track 关系 → 写入 ConversationGroup
+ * （Phase 2 {@code TrackStrategy} 自动消费）→
  * MovementSystem 照常（由 {@link SimulationWorld#tick} 运行，本类不干预）。
  *
  * <p>设计约束：不改变 ConversationManager 现有 tick 流程，只补充"轨道分配"输入；
@@ -135,15 +136,20 @@ public class SimulationOrchestrator {
     /**
      * 听力连通分量（调研报告 2.4 #4）：对输入角色跑 HearingSystem 声学判定，
      * canHear 边建无向图后求连通分量（与 ModeClassifier 同款传递闭包语义，
-     * 但输入=组外 agent；链式可听成组由分量直径/组分配语义自然约束）。
+     * 但输入可以是组内或组外 agent；链式可听成组由分量直径/组分配语义自然约束）。
      */
     private List<List<AgentState>> hearingComponents(List<AgentState> agents) {
         List<List<AgentState>> components = new ArrayList<>();
         if (agents == null || agents.isEmpty()) return components;
 
         Map<String, List<String>> adjacency = new java.util.LinkedHashMap<>();
+        java.util.Set<String> memberNames = new java.util.HashSet<>();
+        for (AgentState agent : agents) memberNames.add(agent.getAgentName());
         for (HearingSystem.HearingResult h : world.getHearingSystem().computeAudibility(agents)) {
-            if (!h.canHear()) continue;
+            // HearingSystem 通过空间网格查近邻；网格中可能有本次分配范围之外的角色。
+            // 分量只允许由本次输入成员组成，不能借组外角色把两个成员错误连通。
+            if (!h.canHear() || !memberNames.contains(h.speakerName())
+                    || !memberNames.contains(h.listenerName())) continue;
             adjacency.computeIfAbsent(h.speakerName(), k -> new ArrayList<>()).add(h.listenerName());
             adjacency.computeIfAbsent(h.listenerName(), k -> new ArrayList<>()).add(h.speakerName());
         }
@@ -170,8 +176,9 @@ public class SimulationOrchestrator {
     }
 
     /**
-     * 对单个群组执行 TrackDirector 分配并写入其 trackAssignments。
-     * 群组成员自动拥有当前全部目标 / 秘密任务视角（谁知道什么）。
+     * 对单个群组执行声学分量切分后的 TrackDirector 分配并写入其 trackAssignments。
+     * 墙体、建筑等阻断声学路径时，断开的成员不会因仍属于同一 ConversationGroup
+     * 而获得跨墙的 MERGED 上下文；单人成分直接标记为 ISOLATED。
      *
      * <p>D1: 若某成员轨道模式发生变化（如新增秘密任务 → MERGED 变 ISOLATED），
      * 发布 {@link TrackChangeEvent}，事件驱动取消其基于旧轨道的进行中生成任务
@@ -187,8 +194,19 @@ public class SimulationOrchestrator {
         for (AgentState m : group.getParticipantList()) {
             if (!m.isPlayerControlled()) aiMembers.add(m);
         }
-        Map<String, TrackAssignment> assignments =
-                trackDirector.assign(aiMembers, worldDirector.getAllGoals());
+        // applyToGroup 也会被测试和局部调用直接使用；重建全世界网格保证 HearingSystem
+        // 不依赖外部 tick 调用顺序。hearingComponents 会按输入成员过滤组外近邻。
+        world.getSpatialGrid().rebuild(world.getAllStates().values());
+        Map<String, TrackAssignment> assignments = new java.util.LinkedHashMap<>();
+        for (List<AgentState> component : hearingComponents(aiMembers)) {
+            if (component.size() == 1) {
+                AgentState lone = component.get(0);
+                assignments.put(lone.getAgentName(), TrackAssignment.isolated(
+                        lone.getAgentName(), "完全隔离（声学路径被阻断）"));
+            } else {
+                assignments.putAll(trackDirector.assign(component, worldDirector.getAllGoals()));
+            }
+        }
         group.setTrackAssignments(assignments);
         if (eventBus != null) {
             publishTrackChangeIfNeeded(group, oldAssignments, assignments);

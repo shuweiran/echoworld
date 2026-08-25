@@ -17,22 +17,23 @@ import com.roleplay.engine.simulation.track.SpatialTrackResolver;
 import com.roleplay.engine.simulation.track.TrackAssignment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Component;
 
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-@Component
 public class ConversationManager {
 
     private static final Logger log = LoggerFactory.getLogger(ConversationManager.class);
 
     private static final long GROUP_IDLE_TIMEOUT_MS = 30_000;
     private static final long CONVERSATION_COOLDOWN_MS = 5_000;
-    /** Phase 1 Track fusion: 两两距离 < 70px → 可对话（P-0815-A：由原「5 格」注释修正为 px 语义，
-     *  与 SpatialTrackResolver.DEFAULT_CONVERSATION_DISTANCE 同值；legacy 路径（trackDirector==null）使用）。 */
-    private static final double CONVERSATION_DISTANCE_THRESHOLD = 48.0;
+    /**
+     * Runtime-owned fallback for the legacy spatial-only path. The default and
+     * validation rule are shared with {@link SpatialTrackResolver};
+     * {@code SimulationService} applies the configured value to every runtime.
+     */
+    private volatile double conversationDistance = SpatialTrackResolver.DEFAULT_CONVERSATION_DISTANCE;
 
     /** 调研报告 2.4 #3：玩家 joinGroup 距组最近成员的最大距离（px，对齐前端 findApproachableGroups
      *  成员 100px / 群中心 120px 语义，取宽松端 120）。超距拒绝（防“人在千里外也能入组”）。 */
@@ -278,6 +279,22 @@ public class ConversationManager {
     }
 
     public ConversationManager() {}
+
+    /**
+     * Configures the direct-conversation distance used only when no
+     * {@link TrackDirectorService} has been attached. Keeping this value here
+     * makes test/runtime fallback behavior match the configured Track resolver.
+     */
+    public void setConversationDistance(double conversationDistance) {
+        this.conversationDistance = conversationDistance > 0
+                ? conversationDistance
+                : SpatialTrackResolver.DEFAULT_CONVERSATION_DISTANCE;
+    }
+
+    /** Exposes the effective fallback distance for diagnostics and tests. */
+    public double getConversationDistance() {
+        return conversationDistance;
+    }
 
     /**
      * Phase 3 wiring: inject the Track Director. When set, group track assignments
@@ -550,7 +567,7 @@ public class ConversationManager {
                 assignments = trackDirector.assign(group.getParticipantList(), goals);
             } else {
                 // Legacy Phase 1/2 path: pure spatial resolution (unchanged behavior).
-                SpatialTrackResolver trackResolver = new SpatialTrackResolver(CONVERSATION_DISTANCE_THRESHOLD);
+                SpatialTrackResolver trackResolver = new SpatialTrackResolver(conversationDistance);
                 assignments = trackResolver.resolve(group.getParticipantList());
             }
             group.setTrackAssignments(assignments);

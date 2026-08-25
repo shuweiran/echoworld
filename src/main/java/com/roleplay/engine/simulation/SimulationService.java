@@ -65,7 +65,8 @@ public class SimulationService {
     private final AgentTaskManager agentTaskManager;
     /** D1: 世界事件总线 —— 轨道变化事件（TrackDirector → 取消旧轨道生成）。 */
     private final WorldEventBus eventBus;
-    private final ConversationManager conversationManager = new ConversationManager();
+    /** One stateful conversation runtime per SimulationService/world instance. */
+    private final ConversationManager conversationManager;
     /** Phase 3 dual-director architecture: World Director (角色想做什么). */
     private final WorldDirectorService worldDirector;
     /** Phase 3 dual-director architecture: Track Director (谁知道什么). */
@@ -132,6 +133,7 @@ public class SimulationService {
         this.announcementService = announcementService;
         this.identityService = playerIdentityService;
         this.schedulerService = schedulerService;
+        this.conversationManager = new ConversationManager();
         com.roleplay.engine.config.AppConfig cfg = appConfig != null ? appConfig : new com.roleplay.engine.config.AppConfig();
         com.roleplay.engine.config.AppConfig.PacingConfig pacingCfg = cfg.getPacing();
         this.directorIntervalMs = pacingCfg.getDirectorIntervalMs();
@@ -176,6 +178,7 @@ public class SimulationService {
         // P-0815-A：轨道空间会话距离配置接线（roleplay.track.conversation-distance，px）——
         // 重建 TrackDirectorService 内部 SpatialTrackResolver（默认 70px，修正原 5.0「格」错位）。
         trackDirector.setConversationDistance(cfg.getTrack().getConversationDistance());
+        conversationManager.setConversationDistance(cfg.getTrack().getConversationDistance());
         this.orchestrator = new SimulationOrchestrator(world, worldDirector, trackDirector, conversationManager, eventBus);
         // Phase 4: 移动 tick 前应用轨道运动约束（使用上一 tick 的轨道分配，延迟一拍）。
         world.addPreTickHook(this::applyMovementConstraints);

@@ -5,6 +5,7 @@ import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.core.Track;
 import com.roleplay.engine.simulation.AgentState;
 import com.roleplay.engine.simulation.Emotion;
+import com.roleplay.engine.simulation.Obstacle;
 import com.roleplay.engine.simulation.SimulationOrchestrator;
 import com.roleplay.engine.simulation.SimulationWorld;
 import com.roleplay.engine.simulation.conversation.ConversationGroup;
@@ -35,6 +36,8 @@ class SimulationOrchestratorTest {
 
     private SimulationWorld worldWithAgents(String... names) {
         SimulationWorld world = new SimulationWorld();
+        // 本类验证编排/轨道语义；墙体影响另由声学回归用例显式覆盖。
+        world.setCustomObstacles(List.of(), "orchestrator-test");
         // P-0815-A：C 原 50px 在会话距离修正为 70px（px 语义）后落入 MERGED 带，
         // WEAK 旁观用例移到 100px（∈ [70, 200) 听觉带中部）。
         double[][] coords = {{0, 0}, {3, 0}, {100, 0}, {500, 0}};
@@ -125,6 +128,33 @@ class SimulationOrchestratorTest {
     }
 
     @Test
+    @DisplayName("活动对话组遇到隔音墙后，下一 tick 按声学分量隔离上下文")
+    void activeGroupUsesHearingComponentsAfterWallIsAdded() {
+        SimulationWorld world = new SimulationWorld();
+        world.setCustomObstacles(List.of(), "no-wall");
+        register(world, "A", 470, 300);
+        register(world, "B", 530, 300);
+        ConversationManager manager = conversationManager(world);
+        ConversationGroup group = manager.createScriptDiscussionGroup("acoustic", List.of(
+                world.getState("A"), world.getState("B")), Map.of());
+        SimulationOrchestrator orchestrator = new SimulationOrchestrator(
+                world, new WorldDirectorService(), new TrackDirectorService(), manager);
+
+        Map<String, TrackAssignment> beforeWall = orchestrator.tick(NOW);
+        assertEquals(Track.Mode.MERGED, beforeWall.get("A").type());
+        assertEquals(Track.Mode.MERGED, beforeWall.get("B").type());
+
+        world.setCustomObstacles(List.of(new Obstacle(
+                Obstacle.Type.WALL, 495, 240, 10, 120, true, "acoustic-test-wall")), "acoustic-wall");
+
+        Map<String, TrackAssignment> afterWall = orchestrator.tick(NOW + 1);
+        assertEquals(Track.Mode.ISOLATED, afterWall.get("A").type());
+        assertEquals(Track.Mode.ISOLATED, afterWall.get("B").type());
+        assertEquals(Track.Mode.ISOLATED, group.getTrackAssignment("A").type());
+        assertEquals(Track.Mode.ISOLATED, group.getTrackAssignment("B").type());
+    }
+
+    @Test
     @DisplayName("tick 无角色（空世界）→ 空分配不抛异常")
     void tickEmptyWorldIsSafe() {
         SimulationWorld world = new SimulationWorld();
@@ -133,5 +163,10 @@ class SimulationOrchestratorTest {
                 conversationManager(world));
 
         assertTrue(orchestrator.tick(NOW).isEmpty());
+    }
+
+    private void register(SimulationWorld world, String name, double x, double y) {
+        world.registerAgent(new Agent(new Persona(name, "测试人格" + name), "test", null),
+                x, y, 200.0, 50.0);
     }
 }
