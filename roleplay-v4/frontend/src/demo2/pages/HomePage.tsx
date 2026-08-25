@@ -1,56 +1,55 @@
 /**
- * HomePage.tsx — 模式选择（主页面 1）
- *
- * 四个入口：剧本选择 / 剧本生成 / 狼人杀 / 设置。
- * 四感氛围：世界感（星夜背景）· 游戏感（卡片卡片动效）· 创造感（生成入口）· 沉浸感（无杂散 UI）。
+ * EchoWorld landing page. The spatial simulation is the product; roleplay and
+ * hidden-information games are scenarios built on top of it.
  */
 import { useDemoStore } from '../store';
+import { Icon, type IconName } from '../../components/ui/Icon';
 
 const ENTRIES = [
   {
     id: 'scripts' as const,
-    icon: '📜',
-    title: '剧本选择',
-    desc: '从剧本库挑选剧本杀或一般模式剧本，进入角色选择准备开局。',
-    tags: ['剧本杀', '一般模式'],
-    go: '进入选剧 →',
-    feel: '世界感',
+    icon: 'book' as IconName,
+    title: '启动空间世界',
+    desc: '选择一个二维世界和 3 个 Agent，观察移动、听觉、会话与上下文轨道。',
+    tags: ['Spatial World', 'Agent', 'Context Track'],
+    go: '创建 / 选择世界 →',
+    feel: '空间仿真',
   },
   {
     id: 'roles-lib' as const,
-    icon: '🎭',
-    title: '角色库',
-    desc: '统一管理所有角色卡（剧本杀/一般互通），手动或 AI 创建你的专属角色。',
-    tags: ['手动创建', 'AI 生成', '单独 TTS'],
-    go: '管理角色 →',
-    feel: '创造感',
+    icon: 'users' as IconName,
+    title: 'Agent 库',
+    desc: '管理参与空间仿真的 Agent 身份、行为倾向、背景与可选语音配置。',
+    tags: ['Persona', '行为目标', 'LLM Adapter'],
+    go: '管理 Agent →',
+    feel: 'Agent 建模',
   },
   {
     id: 'gen' as const,
-    icon: '🪄',
-    title: '剧本生成',
-    desc: 'AI 生成全新剧本与世界，或导入已有剧本，让灵感成为可玩的冒险。',
-    tags: ['AI 生成', '导入解析', '同步角色', '2D 地图'],
-    go: '开始创造 →',
-    feel: '创造感',
+    icon: 'sparkles' as IconName,
+    title: '生成世界',
+    desc: '生成或导入场景、角色与地图；几何结构由规则校验，LLM 只提供语义内容。',
+    tags: ['地图契约', '碰撞层', '确定性降级'],
+    go: '生成空间场景 →',
+    feel: '世界建模',
   },
   {
     id: 'werewolf' as const,
-    icon: '🐺',
-    title: '狼人杀',
-    desc: '狼影在暗处游走。选择你的角色，加入这场信任与谎言的游戏。',
-    tags: ['联机房', '快速开局', '昼夜循环'],
-    go: '直接进入角色选择 →',
-    feel: '游戏感',
+    icon: 'moon' as IconName,
+    title: '隐藏信息验证场景',
+    desc: '通过狼人杀与剧本杀验证身份、私密线索和多会话上下文不会越界泄漏。',
+    tags: ['Werewolf', 'Murder Mystery', 'Isolation'],
+    go: '进入验证场景 →',
+    feel: '规则验证',
   },
   {
     id: 'settings' as const,
-    icon: '⚙️',
-    title: '设置',
-    desc: 'AI 模型、语音、地图生成、素材与体验偏好，一切由你掌控。',
-    tags: ['LLM', 'TTS', '地图生成', '素材', '其他'],
-    go: '打开设置 →',
-    feel: '沉浸感',
+    icon: 'settings' as IconName,
+    title: '运行配置',
+    desc: '配置 LLM Provider、地图生成、语音与开发选项；核心空间规则无需真实模型即可测试。',
+    tags: ['Provider', 'Mock LLM', 'Developer Tools'],
+    go: '打开运行配置 →',
+    feel: '工程配置',
   },
 ];
 
@@ -61,13 +60,15 @@ export function HomePage() {
   return (
     <div className="home-page">
       <div className="home-hero">
-        <div className="home-title">幻境之书</div>
-        <div className="home-sub">每个角色都有自己的声音 —— 角色扮演 · 世界生成 · 狼人杀 / 剧本杀</div>
+        <img className="home-brand-mark" src="/brand/open-script-mark.svg" alt="EchoWorld" />
+        <div className="home-kicker"><Icon name="sparkles" size={15} /> Spatial Multi-Agent Simulation Engine</div>
+        <div className="home-title">EchoWorld</div>
+        <div className="home-sub">位置、听觉与障碍决定每个 Agent 能感知什么、知道什么、何时发言</div>
         <div className="home-feel">
-          <div className="feel-item">🌍 <b>世界感</b> · 每个剧本都是一方天地</div>
-          <div className="feel-item">🎮 <b>游戏感</b> · 从选角到对局的完整旅程</div>
-          <div className="feel-item">✨ <b>创造感</b> · 你的想象即世界</div>
-          <div className="feel-item">🔥 <b>沉浸感</b> · 心流不受打扰</div>
+          <div className="feel-item"><Icon name="map" size={16} /> <b>Spatial World</b> · 二维坐标、碰撞与移动</div>
+          <div className="feel-item"><Icon name="goal" size={16} /> <b>Hearing</b> · 距离衰减与墙体遮挡</div>
+          <div className="feel-item"><Icon name="sparkles" size={16} /> <b>Context Track</b> · MERGED / WEAK / ISOLATED</div>
+          <div className="feel-item"><Icon name="moon" size={16} /> <b>Rule-bound AI</b> · 确定性规则约束 LLM</div>
         </div>
       </div>
 
@@ -85,13 +86,13 @@ export function HomePage() {
               }
             }}
           >
-            <div className="hc-icon">{e.icon}</div>
+            <div className="hc-icon"><Icon name={e.icon} size={28} /></div>
             <div className="hc-title">{e.title}</div>
             <div className="hc-desc">{e.desc}</div>
             <div className="hc-tags">
               {e.tags.map(t => <span key={t} className="tag2">{t}</span>)}
             </div>
-            <div className="hc-go">{e.go}</div>
+            <div className="hc-go">{e.go} <Icon name="arrow-right" size={15} /></div>
           </button>
         ))}
       </div>

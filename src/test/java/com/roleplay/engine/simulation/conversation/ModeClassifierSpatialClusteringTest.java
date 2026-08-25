@@ -112,4 +112,27 @@ class ModeClassifierSpatialClusteringTest {
                 .map(AgentState::getAgentName).sorted().toList();
         assertEquals(List.of("A", "B"), names);
     }
+
+    @Test
+    @DisplayName("⑥ 单向声学扩散可达 PUBLIC_SPEAKING：一个 NPC 被两名听众听见")
+    void oneWaySpeaker_publicSpeakingFormed() {
+        AgentState speaker = agent("演讲者", 0, 0);
+        AgentState listenerA = agent("听众A", 100, 0);
+        AgentState listenerB = agent("听众B", 0, 100);
+        Map<String, AgentState> all = new LinkedHashMap<>();
+        all.put(speaker.getAgentName(), speaker);
+        all.put(listenerA.getAgentName(), listenerA);
+        all.put(listenerB.getAgentName(), listenerB);
+
+        List<HearingSystem.HearingResult> hearing = List.of(
+                hear("演讲者", "听众A", 100, 200),
+                hear("演讲者", "听众B", 100, 200));
+
+        List<ModeClassifier.GroupCandidate> groups = new ModeClassifier().classify(hearing, all);
+
+        assertEquals(1, groups.size());
+        assertEquals(ConversationMode.PUBLIC_SPEAKING, groups.get(0).mode());
+        assertEquals(List.of("演讲者"), groups.get(0).members().stream()
+                .map(AgentState::getAgentName).toList());
+    }
 }

@@ -22,6 +22,7 @@ import com.roleplay.engine.service.SessionRegistry;
 import com.roleplay.engine.service.TrackRequestService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.server.ResponseStatusException;
 import org.springframework.http.ResponseEntity;
 
 import java.util.ArrayList;
@@ -33,6 +34,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -143,7 +145,7 @@ class HistorySessionTest {
     // ── ① history session_id 定向 ──────────────────────────────
 
     @Test
-    @DisplayName("① GET /api/history?session_id= 返回该会话真实消息（含 round_logs）；无/未知 session_id 回退默认单例")
+    @DisplayName("① GET /api/history?session_id= 返回该会话真实消息；空 id 走默认会话，未知非空 id 返回 404")
     void history_withSessionId_returnsSessionMessages() {
         Harness h = new Harness();
         RouterService s1 = h.newSession("s1", "小铃");
@@ -162,10 +164,10 @@ class HistorySessionTest {
         assertTrue(((List<?>) resDefault.get("messages")).isEmpty(),
                 "无 session_id 走默认单例，应保持 0 条（向后兼容）");
 
-        // 未知 session_id → 回退默认单例 → 空消息（不 500 不串会话）
-        Map<String, Object> resUnknown = ctrl.getHistory(100, 0, "", 0, "", "no-such-session").getBody();
-        assertTrue(((List<?>) resUnknown.get("messages")).isEmpty(),
-                "未知 session_id 回退默认单例，应 0 条且不报错");
+        // 未知非空 session_id 必须明确 404，不能静默读取默认会话造成串线。
+        ResponseStatusException unknown = assertThrows(ResponseStatusException.class,
+                () -> ctrl.getHistory(100, 0, "", 0, "", "no-such-session"));
+        assertEquals(404, unknown.getStatusCode().value());
     }
 
     // ── ② 多会话消息隔离 ──────────────────────────────────────
@@ -284,5 +286,23 @@ class HistorySessionTest {
         // 未触发 initSession / 自动首轮（400 短路）
         verify(sessionRouter, org.mockito.Mockito.never()).initSession(anyString(), anyList(), anyString(), anyString(), anyString(), anyString());
         verify(sessionRouter, org.mockito.Mockito.never()).triggerAutoFirstRound();
+    }
+
+    @Test
+    @DisplayName("⑥ POST /api/session/close 显式释放会话；缺 id=400、未知 id=404")
+    void closeSession_hasExplicitLifecycleSemantics() {
+        SessionRegistry sessions = mock(SessionRegistry.class);
+        when(sessions.remove("live-session")).thenReturn(true);
+        SessionController ctrl = new SessionController(mock(RouterService.class),
+                mock(ScriptService.class), mock(PrivateChatService.class),
+                mock(CharacterController.class), mock(SceneController.class),
+                mock(InterruptManager.class), sessions);
+
+        assertEquals(400, ctrl.closeSession(Map.of()).getStatusCode().value());
+        assertEquals(404, ctrl.closeSession(Map.of("session_id", "missing")).getStatusCode().value());
+        ResponseEntity<Map<String, Object>> closed = ctrl.closeSession(Map.of("session_id", "live-session"));
+        assertEquals(200, closed.getStatusCode().value());
+        assertEquals("closed", closed.getBody().get("status"));
+        verify(sessions).remove("live-session");
     }
 }

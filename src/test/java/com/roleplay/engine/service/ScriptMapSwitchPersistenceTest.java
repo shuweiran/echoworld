@@ -74,7 +74,7 @@ class ScriptMapSwitchPersistenceTest {
         svc.generateMap(sid, "地下室", 0, true, 64, 64, "map_2");
         svc.search(sid, "Bob", "花园");
         // 切回 map_1（当前图足迹 = 客厅）
-        assertEquals(Boolean.TRUE, svc.switchMap(sid, "Alice", "", null, null, null, "map_1").get("switched"));
+        assertEquals(Boolean.TRUE, svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), null, null, null, "map_1").get("switched"));
         String key = svc.getGame(sid).playerKeys.values().iterator().next();
 
         // 重启模拟：新实例不经过 initGame，从快照重建

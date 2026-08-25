@@ -39,14 +39,23 @@ class WerewolfGameFixTest {
     /** 录制式 SSE 广播器：捕获 (event, data) 供断言。 */
     static class RecordingSse implements SseBroadcaster {
         final List<Map.Entry<String, Map<?, ?>>> events = new CopyOnWriteArrayList<>();
+        final List<Map.Entry<String, List<String>>> privateTargets = new CopyOnWriteArrayList<>();
         @Override
         public void broadcast(String eventType, Object data) {
             events.add(Map.entry(eventType, data instanceof Map<?, ?> m ? m : Map.of()));
+        }
+        @Override
+        public void broadcastToPlayers(String sessionId, String eventType, Object data, String... players) {
+            broadcast(eventType, data);
+            privateTargets.add(Map.entry(eventType, players == null ? List.of() : List.of(players)));
         }
         List<Map<?, ?>> of(String type) {
             return events.stream().filter(e -> e.getKey().equals(type)).map(Map.Entry::getValue).toList();
         }
         boolean has(String type) { return events.stream().anyMatch(e -> e.getKey().equals(type)); }
+        boolean targets(String type, String player) {
+            return privateTargets.stream().anyMatch(e -> e.getKey().equals(type) && e.getValue().contains(player));
+        }
     }
 
     private static final String SAMPLE_LINE = "我认为狼人就藏在我们中间。情绪：平静。";
@@ -158,7 +167,7 @@ class WerewolfGameFixTest {
         assertEquals(12, sid.length(), "12 位 session_id");
         verify(routerMock).setWerewolfGame(any());
         // status 响应同样带 session_id
-        var status = ctl.getStatus("", "F");
+        var status = ctl.getStatus("", "F", sid, svc.getRoleKey(sid, "F"));
         assertEquals(sid, status.getBody().get("session_id"), "status 返回同一 session_id");
     }
 
@@ -185,6 +194,7 @@ class WerewolfGameFixTest {
         // init 事件：玩家列表 + 人类角色（villager）
         assertTrue(sse.has("werewolf_player_update"), "init 推送玩家列表");
         assertTrue(sse.of("werewolf_my_role").stream().anyMatch(m -> "villager".equals(m.get("role"))), "人类角色推送");
+        assertTrue(sse.targets("werewolf_my_role", "F"), "人类角色只走 F 的玩家级私密订阅");
 
         // 夜间结算（AI 全员行动完毕 → 自动 resolveNight）
         await("夜间结算推送", 10_000, () -> sse.has("werewolf_night_result"));

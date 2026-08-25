@@ -72,22 +72,38 @@ public class SceneGoalService {
      * 恒返回非 null 的完整目标集。
      */
     public Map<String, Object> generateAndLoad(String sceneId, String sceneDesc,
-                                               List<String> roleNames, String customPlayerGoal) {
-        // ① DB 场景已有目标集 → 直接装载（旧数据兼容：缺字段归一化补全）
+                                                List<String> roleNames, String customPlayerGoal) {
+        Optional<Map<String, Object>> stored = loadStoredGoals(sceneId, roleNames);
+        return stored.orElseGet(() -> generateAndPersist(sceneId, sceneDesc, roleNames, customPlayerGoal));
+    }
+
+    /** 只读取已缓存的目标；不触发 LLM，适合起局的快速路径。 */
+    public Optional<Map<String, Object>> loadStoredGoals(String sceneId, List<String> roleNames) {
+        if (sceneId == null || sceneId.isBlank() || databaseService == null) return Optional.empty();
+        Optional<Map<String, Object>> sceneOpt = databaseService.getScene(sceneId);
+        if (sceneOpt.isEmpty()) return Optional.empty();
+        Object stored = sceneOpt.get().get("goals");
+        if (!(stored instanceof Map<?, ?> m) || m.isEmpty()) return Optional.empty();
+        return Optional.of(normalizeGoals(coerceMap(m), roleNames));
+    }
+
+    /** 生成 LLM 目标并在场景存在时回写缓存；供后台任务调用。 */
+    public Map<String, Object> generateAndPersist(String sceneId, String sceneDesc,
+                                                   List<String> roleNames, String customPlayerGoal) {
+        Map<String, Object> goals = generateGoals(sceneDesc, roleNames, customPlayerGoal);
         if (sceneId != null && !sceneId.isBlank() && databaseService != null) {
-            Optional<Map<String, Object>> sceneOpt = databaseService.getScene(sceneId);
-            if (sceneOpt.isPresent()) {
-                Object stored = sceneOpt.get().get("goals");
-                if (stored instanceof Map<?, ?> m && !m.isEmpty()) {
-                    return normalizeGoals(coerceMap(m), roleNames);
-                }
-                // ② 生成后回写该场景（下次 init 免 LLM）
-                Map<String, Object> goals = generateGoals(sceneDesc, roleNames, customPlayerGoal);
-                persistToScene(sceneOpt.get(), goals);
-                return goals;
-            }
+            databaseService.getScene(sceneId).ifPresent(scene -> persistToScene(scene, goals));
         }
-        return generateGoals(sceneDesc, roleNames, customPlayerGoal);
+        return goals;
+    }
+
+    /** 规则即时目标：不访问 LLM，保证起局请求可立即返回。 */
+    public Map<String, Object> fallbackGoals(List<String> roleNames, String customPlayerGoal) {
+        Map<String, Object> goals = normalizeGoals(Map.of(), roleNames != null ? roleNames : List.of());
+        if (customPlayerGoal != null && !customPlayerGoal.isBlank()) {
+            goals.put(KEY_PLAYER, goalEntry(customPlayerGoal.trim(), NOT_STARTED));
+        }
+        return goals;
     }
 
     /**

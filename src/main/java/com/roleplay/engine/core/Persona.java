@@ -37,6 +37,9 @@ public class Persona {
     /** P-0810-10：背景一句话摘要（表层字段，可对外暴露）。 */
     private String summary = "";
 
+    /** P-0817-A：TTS 音色描述（表层字段，MiMo TTS tone 参数，由 AI 根据角色卡自动生成）。 */
+    private String ttsTone = "";
+
     public Persona() {}
 
     public Persona(String name) {
@@ -116,7 +119,7 @@ public class Persona {
             int idx = 1;
             for (Object r : rules) {
                 if (r == null || String.valueOf(r).isBlank()) continue;
-                sb.append(idx++).append(". ").append(r).append("\n");
+                sb.append(idx++).append(". ").append(variableGuideline(r)).append("\n");
             }
             sb.append("\n");
         }
@@ -138,23 +141,12 @@ public class Persona {
         Object layer2 = layers.get("layer2");
         if (layer2 instanceof Map<?, ?> s2 && !s2.isEmpty()) {
             sb.append("【Layer 2 表达风格】\n");
-            Object samples = s2.get("sampleLines");
             for (Map.Entry<?, ?> e : s2.entrySet()) {
-                if (e.getKey() == null || "sampleLines".equals(e.getKey())) continue;
-                appendLabeledValue(sb, e.getKey(), e.getValue(), "  - ");
+                if (e.getKey() == null || "sampleLines".equals(e.getKey()) || "catchphrases".equals(e.getKey())) continue;
+                appendGuidelineValue(sb, e.getKey(), e.getValue(), "  - ");
             }
-            if (samples instanceof List<?> lines && !lines.isEmpty()) {
-                // P-0813-B：示例降级为「语气样本」—— 渲染前加防复读指令行，且最多输出 3 条
-                // （存量数据不动，仅渲染截断；示例越少越灵活，防逐字复述）
-                sb.append("  - 使用提示：以下示例仅提示语气节奏与说话习惯，禁止逐字复述，对话中应结合当下情境即兴发挥。\n");
-                sb.append("  - 原话示例：\n");
-                int shown = 0;
-                for (Object line : lines) {
-                    if (line == null || String.valueOf(line).isBlank()) continue;
-                    sb.append("      • ").append(line).append("\n");
-                    if (++shown >= 3) break; // P-0813-B：示例最多输出 3 条
-                }
-            }
+            sb.append("  - 可变表达倾向：口头禅和示例只是风格线索，不是待复述的台词；仅在符合当前情境时偶尔采用，"
+                    + "连续发言不得重复同一句口头禅、动作或句式。\n");
             sb.append("\n");
         }
 
@@ -165,7 +157,7 @@ public class Persona {
             for (Map.Entry<?, ?> e : m3.entrySet()) {
                 if (e.getKey() == null) continue;
                 if ("allowEmotionalWobble".equals(e.getKey()) || "humanDetails".equals(e.getKey())) continue;
-                appendLabeledValue(sb, e.getKey(), e.getValue(), "  - ");
+                appendGuidelineValue(sb, e.getKey(), e.getValue(), "  - ");
             }
             appendHumanDetails(sb, "  - ");
             sb.append("  - 允许情绪波动：偶尔抱怨、闹别扭、嘴硬心软、不完美的回应都是人设的一部分，"
@@ -180,7 +172,7 @@ public class Persona {
             sb.append("【Layer 4 冲突链与雷区】\n");
             for (Map.Entry<?, ?> e : m4.entrySet()) {
                 if (e.getKey() == null) continue;
-                appendLabeledValue(sb, e.getKey(), e.getValue(), "  - ");
+                appendGuidelineValue(sb, e.getKey(), e.getValue(), "  - ");
             }
             sb.append("\n");
         }
@@ -188,7 +180,7 @@ public class Persona {
         // 行为总原则
         sb.append("【行为总原则】\n");
         sb.append("1. Layer 0 优先级最高，任何情况下不得违背。\n");
-        sb.append("2. 用 Layer 2 的风格说话——口头禅、emoji、句长都要对。\n");
+        sb.append("2. 用 Layer 2 的风格说话——保持语气和节奏，但不要复述口头禅或示例。\n");
         sb.append("3. 用 Layer 3 的模式表达情感——不要直接说感受，用行为和话术。\n");
         sb.append("4. 用 Layer 4 处理冲突——按冲突链走，不要跳步骤。\n");
         sb.append("5. 记住：你是 ").append(name).append("，不是 AI。不要「跳出角色」解释自己。\n");
@@ -217,11 +209,10 @@ public class Persona {
         if (layer2 instanceof Map<?, ?> s2 && !s2.isEmpty()) {
             sb.append("【说话风格】\n");
             for (Map.Entry<?, ?> e : s2.entrySet()) {
-                if (e.getKey() == null || "sampleLines".equals(e.getKey())) continue;
-                appendLabeledValue(sb, e.getKey(), e.getValue(), "  - ");
+                if (e.getKey() == null || "sampleLines".equals(e.getKey()) || "catchphrases".equals(e.getKey())) continue;
+                appendGuidelineValue(sb, e.getKey(), e.getValue(), "  - ");
             }
-            // P-0813-B：轻量版不再输出 sampleLines 原句（原句是全量 prompt 的复读燃料，
-            // 轻量版只保留其他表达风格字段：口头禅/句式/emoji 习惯）
+            sb.append("  - 口头禅与示例只作可变风格线索；符合触发情境时才偶尔使用，禁止连续复用。\n");
             sb.append("\n");
         }
 
@@ -231,7 +222,7 @@ public class Persona {
             int idx = 1;
             for (Object r : rules) {
                 if (r == null || String.valueOf(r).isBlank()) continue;
-                sb.append(idx++).append(". ").append(r).append("\n");
+                sb.append(idx++).append(". ").append(variableGuideline(r)).append("\n");
                 if (idx > 3) break; // 轻量：只带前 3 条铁律
             }
             sb.append("\n");
@@ -290,7 +281,7 @@ public class Persona {
             sb.append(prefix).append("人味细节（小缺点/小习惯/情绪化表达）：\n");
             for (Object d : list) {
                 if (d == null || String.valueOf(d).isBlank()) continue;
-                sb.append("      • ").append(d).append("\n");
+                sb.append("      • ").append(variableGuideline(d)).append("\n");
             }
         }
     }
@@ -322,6 +313,29 @@ public class Persona {
             sb.append("\n");
         } else if (value != null && !String.valueOf(value).isBlank()) {
             sb.append(prefix).append(label).append("：").append(value).append("\n");
+        }
+    }
+
+    /** 人设卡中的引号台词只保留为行为方向，避免被模型当成逐轮复述模板。 */
+    private static String variableGuideline(Object value) {
+        return String.valueOf(value)
+                .replaceAll("「[^」]*」", "（按情境自然措辞）")
+                .replaceAll("“[^”]*”", "（按情境自然措辞）");
+    }
+
+    private static void appendGuidelineValue(StringBuilder sb, Object key, Object value, String prefix) {
+        if (value instanceof List<?> list) {
+            List<String> parts = new ArrayList<>();
+            for (Object item : list) {
+                if (item != null && !String.valueOf(item).isBlank()) parts.add(variableGuideline(item));
+            }
+            if (!parts.isEmpty()) {
+                sb.append(prefix).append(friendlyLabel(String.valueOf(key)))
+                        .append("：").append(String.join("；", parts)).append("\n");
+            }
+        } else if (value != null && !String.valueOf(value).isBlank()) {
+            sb.append(prefix).append(friendlyLabel(String.valueOf(key))).append("：")
+                    .append(variableGuideline(value)).append("\n");
         }
     }
 
@@ -399,6 +413,9 @@ public class Persona {
         if (!summary.isEmpty()) {
             m.put("summary", summary);
         }
+        if (!ttsTone.isEmpty()) {
+            m.put("ttsTone", ttsTone);
+        }
         return m;
     }
 
@@ -423,6 +440,7 @@ public class Persona {
         }
         p.appearance = (String) data.getOrDefault("appearance", "");
         p.summary = (String) data.getOrDefault("summary", "");
+        p.ttsTone = (String) data.getOrDefault("ttsTone", "");
         return p;
     }
 
@@ -455,6 +473,10 @@ public class Persona {
     /** P-0810-10：背景一句话摘要（表层）。 */
     public String getSummary() { return summary; }
     public void setSummary(String summary) { this.summary = summary; }
+
+    /** P-0817-A：TTS 音色描述。 */
+    public String getTtsTone() { return ttsTone; }
+    public void setTtsTone(String ttsTone) { this.ttsTone = ttsTone; }
 
     @Override
     public String toString() {

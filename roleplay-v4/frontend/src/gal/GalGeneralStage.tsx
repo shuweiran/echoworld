@@ -28,6 +28,7 @@ import { GalChoiceBar } from './GalChoiceBar';
 import { portraitUrlFor } from './GalStage';
 import { fetchSceneBackground, type BgState } from './galBackground';
 import { GalChatStage, allocateSlots } from './GalChatStage';
+import { sceneBackgroundArt } from './sceneArt';
 
 export { allocateSlots };
 
@@ -79,13 +80,14 @@ export function GalGeneralStage({ scene = '', layout = 'layered' }: GalGeneralSt
 
   // P-0811-G（A-6）：取消「NPC≥4 自动回落 side」——显式 layout='side' 才启用左立绘列
   const isSide = layout === 'side';
+  const sceneArt = sceneBackgroundArt(scene);
 
   if (!isSide) {
     /* ══ 默认：Galgame 分层布局（P-0815-F 批3 方向5：抽公共核心 GalChatStage） ══ */
     return (
       <GalChatStage
         scene={scene}
-        backgroundImage={bgUrl ?? undefined}
+        backgroundImage={sceneArt ?? bgUrl ?? undefined}
         hasPlayer={hasPlayer}
         showClickCatcher
         bgTag={bgState === 'loading' ? <div className="galg-bg-tag" aria-hidden>🎨 背景生成中…</div> : null}

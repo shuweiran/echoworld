@@ -209,6 +209,10 @@ export function PhaserScriptMapView({
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ player: playerName, location }),
               });
+              if (!r.ok) {
+                const err = await r.json().catch(() => null);
+                throw new Error(err?.error || err?.detail || `HTTP ${r.status}`);
+              }
               return await r.json();
             })();
         const found = Array.isArray(d.clues) ? d.clues : [];

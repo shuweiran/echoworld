@@ -139,7 +139,7 @@ export function RoleSelectPage() {
 
   // P-0811-G：一般模式 LLM 地图生成 + 预览（POST /api/scenes/map，theme=场景描述；
   // 成功缓存到 store（进入 2D 探索复用同一张地图），失败显示错误不中断）
-  const generalMaps = useDemoStore(s => s.generalMaps);
+  const getGeneralMap = useDemoStore(s => s.getGeneralMap);
   const setGeneralMap = useDemoStore(s => s.setGeneralMap);
   // P-0811-A：只展示当前剧本（kind+scriptId）的历史，不再串别的剧本/场景的记录
   const scopedHistory = useMemo(
@@ -270,7 +270,7 @@ export function RoleSelectPage() {
               <button className={`chip2 ${runMode === 'explore' ? 'active' : ''}`} onClick={() => setRunMode('explore')}>🗺️ 2D 探索模式</button>
               {/* P-0820-M：普通地图与大型地图统一入口；尺寸/结构/模式等均从设置页读取 */}
               <button className="chip2" onClick={() => setLargeMapOpen(true)} title="按设置页的尺寸、结构和地图模式生成，并作为本场景 2D 探索地图">
-                🗺️ 生成地图{general && ctx.scriptId && generalMaps[ctx.scriptId] ? '（已有地图）' : ''}
+                🗺️ 生成地图{ctx.scriptId && getGeneralMap(ctx.scriptId) ? '（已有地图）' : ''}
               </button>
             </div>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 13, color: 'var(--color-text-dim)', cursor: 'pointer' }}>
@@ -374,7 +374,7 @@ export function RoleSelectPage() {
             if (ctx.scriptId) setGeneralMap(ctx.scriptId, map);
           }}
           onUse={(map) => {
-            // 缓存为本场景地图：进入 2D 探索时 GameBridge 直接复用（generalMaps[scriptId]）
+            // 缓存为本场景地图：进入 2D 探索时 GameBridge 按当前 scriptId 复用
             if (ctx.scriptId) setGeneralMap(ctx.scriptId, map);
             setLargeMapOpen(false);
             setMapPreview({ open: true, busy: false, map, error: '' });

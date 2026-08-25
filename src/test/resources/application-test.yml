@@ -4,7 +4,8 @@ server:
 
 spring:
   datasource:
-    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
+    # 每个 Spring ApplicationContext 使用独立数据库，避免不同上下文/测试配置互相污染。
+    url: jdbc:h2:mem:roleplay-${random.uuid};DB_CLOSE_DELAY=-1
     driver-class-name: org.h2.Driver
     username: sa
     password:
@@ -29,6 +30,10 @@ roleplay:
     seed: null
     # P-0810-23-D2：与主 yml 同步（RouterService @Value 默认 150，测试经 setRemindThreshold 覆盖）
     remind-threshold: 150
+  arbiter-llm:
+    api-key: ""
+    api-base: "http://localhost:9997/arbiter-llm-mock"
+    model: "test-arbiter-mock"
   map-llm:
     # P-0818-B（地图生成专用 LLM）：与主 yml 同步键；测试走 mock LLM（MapLlmClient 由测试 mock，不真实调用）
     api-key: ""
@@ -195,7 +200,7 @@ roleplay:
     timeout-seconds: 10
     poll-interval-ms: 50
     lora-name: "pixel_art_sakuemonq_pony.safetensors"
-    rmbg-model: "D:\\roleplay-java\\models\\rmbg\\rmbg-1.4.onnx"
+    rmbg-model: ""
     rmbg-enabled: true
     img2img-denoise: 0.5
     characters: []
@@ -209,3 +214,35 @@ roleplay:
     max-single-map-width: 128
     max-single-map-height: 128
     template-dir: classpath:/structure
+  world:
+    input-mailbox:
+      session-capacity: 16
+      max-sessions: 32
+      idempotency-window: 64
+      overflow-policy: EVICT_LOWEST_PRIORITY_OLDEST
+      dispatch-ms: 1000
+      max-retries: 3
+    command:
+      dispatch-ms: 1000
+    lifecycle:
+      scan-ms: 60000
+      ambient-ttl-ms: 300000
+      passive-after-ms: 600000
+      dormant-after-ms: 1800000
+      archive-after-ms: 7200000
+      ambient-promotion-interactions: 2
+      temporary-promotion-interactions: 6
+    planner:
+      enabled: false
+      min-interval-ms: 60000
+      max-commands: 2
+    # Spring 测试默认不自动补群演；专门用例显式调用运行时服务。
+    ambient:
+      enabled: false
+      target-count: 0
+      max-count: 16
+      adjust-step: 4
+    map-job:
+      capacity: 8
+      workers: 1
+      ready-ttl-ms: 60000

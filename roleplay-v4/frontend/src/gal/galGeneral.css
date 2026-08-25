@@ -219,6 +219,126 @@
   text-align: center;
 }
 
+.galg-ambient {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 7px 12px;
+  border-top: 1px solid rgba(139, 123, 255, 0.22);
+  background: rgba(10, 15, 30, 0.78);
+  font-size: 12px;
+}
+.galg-ambient-label { color: var(--text3, #9ca8bd); margin-right: 2px; }
+.galg-ambient-chip {
+  border: 1px solid rgba(139, 123, 255, 0.35);
+  border-radius: 999px;
+  padding: 3px 9px;
+  color: var(--text2, #cbd5e1);
+  background: rgba(139, 123, 255, 0.08);
+  cursor: pointer;
+}
+.galg-ambient-chip.active {
+  color: #fff;
+  border-color: #8b7bff;
+  background: rgba(139, 123, 255, 0.32);
+}
+.galg-ambient-hint { color: var(--text3, #8f9bb2); }
+
+.galg-active-chat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-top: 1px solid rgba(77, 225, 255, 0.28);
+  background: rgba(8, 20, 35, 0.88);
+  font-size: 12px;
+}
+.galg-active-chat strong { color: var(--gal-accent2, #4de1ff); }
+.galg-active-chat span { color: var(--text2, #cbd5e1); }
+.galg-active-chat em { color: #f3c969; font-style: normal; }
+.galg-active-chat button { margin-left: auto; }
+
+.galg-role-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(2, 6, 15, 0.62);
+  display: flex;
+  justify-content: flex-end;
+}
+.galg-role-drawer {
+  width: min(440px, 94vw);
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #10192a;
+  border-left: 1px solid rgba(139, 123, 255, 0.42);
+  box-shadow: -14px 0 38px rgba(0, 0, 0, 0.42);
+}
+.galg-role-head, .galg-role-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+.galg-role-head > div { display: flex; flex-direction: column; gap: 3px; }
+.galg-role-head small, .galg-role-footer span { color: #93a0b7; font-size: 11px; }
+.galg-role-head > button { margin-left: auto; }
+.galg-role-list { flex: 1; overflow: auto; padding: 10px; }
+.galg-role-card {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 8px 10px;
+  padding: 10px;
+  margin-bottom: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.10);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.035);
+}
+.galg-role-card.chatting { border-color: rgba(77, 225, 255, 0.55); }
+.galg-role-avatar {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: white;
+  font-weight: 700;
+}
+.galg-role-info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.galg-role-info small { color: #8f9bb2; font-size: 11px; }
+.galg-role-options { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+.galg-role-options button.active { border-color: #8b7bff; background: rgba(139, 123, 255, 0.28); color: white; }
+.galg-role-footer { border-top: 1px solid rgba(255, 255, 255, 0.09); border-bottom: 0; }
+.galg-role-footer button { margin-left: auto; }
+.galg-role-empty { padding: 30px 12px; text-align: center; color: #8f9bb2; }
+
+.galg-story-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 125;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(2, 6, 15, 0.66);
+}
+.galg-story-panel {
+  width: min(560px, 96vw);
+  max-height: min(720px, 90vh);
+  overflow: auto;
+  border: 1px solid rgba(232, 193, 90, 0.42);
+  border-radius: 14px;
+  background: linear-gradient(145deg, #182136, #101726);
+  box-shadow: 0 18px 55px rgba(0, 0, 0, 0.52);
+}
+.galg-story-panel section { padding: 11px 14px; border-top: 1px solid rgba(255,255,255,.08); }
+.galg-story-panel small { color: #e8c15a; font-size: 11px; }
+.galg-story-panel p { margin: 5px 0 0; color: #dbe5f5; line-height: 1.6; font-size: 13px; }
+.galg-story-next { color: #83ddff !important; }
+.galg-story-panel ul { margin: 6px 0 0; padding-left: 18px; color: #aab8cc; font-size: 12px; line-height: 1.65; }
+
 /* ---------- 历史记录抽屉 ---------- */
 .galg-drawer-mask {
   position: fixed;
@@ -792,9 +912,15 @@
   -webkit-mask-image: linear-gradient(180deg, #000 78%, transparent 100%);
   mask-image: linear-gradient(180deg, #000 78%, transparent 100%);
 }
+/* 当前“沉没的圣·奥古斯丁教堂”美术包的立绘为深色舞台合成，黑底以滤色融入场景。 */
+.galg-sprite-slot .gal-char-img[src*="/art/sunken-st-augustine/"] {
+  mix-blend-mode: screen;
+  filter: saturate(1.06) contrast(1.04) drop-shadow(0 10px 18px rgba(0, 0, 0, .5));
+}
 /* 去除槽位内立绘的渐变卡片底/扫描线/名字行（经典 Gal：名字在对话框名签，立绘下无文字） */
 .galg-sprite-slot .gal-char .gal-char-sprite {
   background: transparent !important; /* 覆盖 GalCharacter 内联渐变卡（inline style 压不过 !important） */
+  box-shadow: none !important;
 }
 .galg-sprite-slot .gal-char-scan { display: none; }
 .galg-sprite-slot .gal-char-name,

@@ -5,9 +5,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * 发言门控（SpeechGate）—— 每轮先判"是否发言"，再决定"说什么"（批次 D，P0-1）。
+ * 发言门控（SpeechGate）——每轮先判断“是否发言”，再决定“说什么”。
  *
- * <p>设计依据（tmp/AI动机与静默机制调研.md P0-1 + tmp/speech-demo/对比报告.md，demo 实测参数直接采用）：
+ * <p>门控使用事件触发与确定性阈值，避免把每个候选角色都直接送入 LLM：
  * <ul>
  *   <li><b>规则触发 → 必发言</b>：被点名（@/被提问）、轮次首句（开局自我介绍）、新线索公开、
  *       人类 @/点名质疑、情绪超阈值（ANGRY/SAD/CONFUSED/SURPRISED）、冷场破冰——事件驱动是防冷场第一道闸；</li>

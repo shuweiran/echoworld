@@ -2,6 +2,7 @@ package com.roleplay.engine.service;
 
 import com.roleplay.engine.approval.ApprovalService;
 import com.roleplay.engine.db.service.DatabaseService;
+import com.roleplay.engine.db.repository.CharacterRepository;
 import com.roleplay.engine.llm.LLMClient;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -50,6 +51,9 @@ class ScriptRenameResumeTest {
 
     @Autowired
     private DatabaseService databaseService;
+
+    @Autowired
+    private CharacterRepository characterRepository;
 
     @MockBean
     private LLMClient llmClient;
@@ -147,7 +151,13 @@ class ScriptRenameResumeTest {
         // 注：此处不调 renamePlayer（模拟“改名后未同步/服务端在改名与重连之间重启”），
         // 角色库直接落新名绑定 —— restoreFromSnapshot 经 identityService.resolveCharacterName(pid)
         // 解析到新名 → 按绑定把快照内旧名重映射到新名
+        // 改名的持久化语义是删旧建新；直接新增同一 player_id 会制造不合法的重复绑定，
+        // 既不符合 unique 契约，也不能代表 PlayerIdentityService 的真实改名流程。
+        characterRepository.findByPlayerId(pid).ifPresent(characterRepository::delete);
+        characterRepository.flush();
         databaseService.saveCharacter("r3大明", "开朗", "正常", "背景", pid);
+        assertEquals("r3大明", identityService.resolveCharacterName(pid).orElseThrow(),
+                "测试前置必须已把 player_id 唯一绑定迁移到新名");
 
         // 模拟重启：新实例 resume → restoreFromSnapshot 读旧快照（players 旧名 + 绑定）
         ScriptGameService fresh = freshInstance();

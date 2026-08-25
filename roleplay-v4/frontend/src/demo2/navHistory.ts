@@ -8,7 +8,7 @@
 
 /** 导航视图白名单（与 demo2/store.ts View 对齐；werewolf 由 roles 变体承载） */
 export const NAV_VIEWS = [
-  'home', 'scripts', 'roles', 'gen', 'settings',
+  'home', 'scripts', 'roles', 'gen', 'manual', 'settings',
   'roles-lib', 'free-chars', 'role-detail', 'game',
 ] as const;
 

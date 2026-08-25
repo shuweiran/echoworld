@@ -1,4 +1,4 @@
-# 🚀 QUICKSTART.md — Roleplay-Java 5 分钟上手（AI 接手速查）
+# 🚀 QUICKSTART.md — EchoWorld 5 分钟上手（AI 接手速查）
 
 > 定位：给新接手的 AI agent / 开发者的**最快上手路径**（≤10KB，5 分钟读完）。
 > 动态事实（8000 端口/PID/测试基线/代码规模/文件清单等）一律**见 `PROJECT_CONTEXT.md`**（单一事实源，不在此复制数字，避免漂移）；文档索引见 `AGENTS.md`（不重复造表）。

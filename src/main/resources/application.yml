@@ -1,5 +1,7 @@
 server:
   port: 8000
+  # 桌面/本机应用默认只接受本机连接；对外部署必须经过显式受控反向代理。
+  address: 127.0.0.1
 
 spring:
   mvc:
@@ -12,7 +14,8 @@ spring:
     password:
   h2:
     console:
-      enabled: true
+      # 生产默认关闭；需要排障时仅在独立 dev profile 临时开启。
+      enabled: false
       path: /h2-console
   jpa:
     hibernate:
@@ -36,9 +39,9 @@ spring:
 
 roleplay:
   llm:
-    api-base: "https://api.deepseek.com"
+    api-base: "https://openrouter.ai/api/v1"
     api-key: "${ROLEPLAY_LLM_API_KEY:}"
-    model: "deepseek-v4-flash"
+    model: "stealth/ox-alpha"
     # P-0810-19：max-tokens / temperature 为「默认值」语义（旧值 4096/0.9 全源码无消费点=死配置）：
     #   - max-tokens：callJson 未显式传 maxTokens（null）时使用；全部既有调用点显式传值优先
     #     （概略 1200 / 完整剧本 4000 / 地图 8000）
@@ -56,9 +59,14 @@ roleplay:
     # 该角色系统提示「你上一轮发言超过 N 字，本轮请精简输出」（仅下一轮生效，之后清除；不广播、无前端 UI）；
     # <=0 关闭检测。
     remind-threshold: 150
+  # 主控与角色对话分离：仲裁/逻辑整合、地图、角色与场景生成均走此配置。
+  # 默认与角色 LLM 同端点同模型；可在设置页单独改为上下文与推理能力更强的模型。
+  arbiter-llm:
+    api-base: "https://openrouter.ai/api/v1"
+    api-key: "${ROLEPLAY_ARBITER_LLM_API_KEY:${ROLEPLAY_LLM_API_KEY:}}"
+    model: "stealth/ox-alpha"
   map-llm:
-    # P-0818-B（地图生成专用 LLM，小米 MiMo）：只用于地图/结构生成路径
-    # （ScriptMapService LLM 地图、StructureLlmBlueprint custom 结构蓝图）——对话/剧本等主链路仍走 roleplay.llm.*（DeepSeek）
+    # 仅用于可选的地图视觉审核（多模态图像输入）；地图/结构的生成本身改走 arbiter-llm。
     #   api-key 从环境变量 ROLEPLAY_MAP_LLM_API_KEY 注入（部署脚本读 openclaw.json models.providers.xiaomimimo-map.apiKey），不落源码
     #   model 实测平台可用（token-plan-cn /v1/models）：mimo-v2.5 / mimo-v2.5-pro / mimo-v2.5-asr / mimo-v2.5-tts*
     api-key: "${ROLEPLAY_MAP_LLM_API_KEY:}"
@@ -85,11 +93,9 @@ roleplay:
     # （导演模式 AI 自主推进），玩家发言打断 pending 任务；狼人杀/剧本杀走各自状态机不误触发
     # P-0814-A: playback-driven=true（默认）时本键被忽略——不再定时自续，改为等「播出完毕」信号
     auto-continue-ms: 3000
-    # P-0814-A: 点击驱动对话模式总开关（默认 true=主人拍板新语义）——一轮生成完即停，
-    # 收到前端「播出完毕」信号（POST /api/simulation/playback_done）后才生成下一轮；
-    # 无玩家（导演模式）播完即停等导演点击；2D 对话组同步生效（不再拉入轨道即自动连跑）。
-    # false=回退旧行为（auto-continue-ms 定时自续 + 2D pacing 间隔自动连跑）
-    playback-driven: true
+    # 无玩家的 2D 社会实验按节奏自主续聊，旁听只负责呈现，不能成为 AI 对话的生命线。
+    # 玩家实际加入会话时仍可随时打断、离场；false=按 pacing 间隔自动进入下一轮。
+    playback-driven: false
     # P-0814-B: 2D 对话组「等待播出完毕」超时（毫秒；默认 30000）——无玩家成员组（AI-AI/单 AI）
     # 等待超时自动解散（防 awaitPlayback 永久阻塞角色冻结）；有玩家成员组不自动解散（玩家输入/点击唤醒）
     group-await-timeout-ms: 30000
@@ -254,6 +260,8 @@ roleplay:
     provider-key: ""
     model: ""
   ai-image:
+    # provider=comfyui 保持当前本地默认；openai-compatible 改用外部 /images/generations
+    provider: "comfyui"
     # P-0810-01（本地 ComfyUI + Pony V6 XL 角色表情集预生成）：
     #   comfyui-base-url=本地 ComfyUI API 地址（POST /prompt + GET /history/{id} + GET /view）
     #   output-dir=生成图片落盘目录（默认 src/main/resources/static/ai-images，URL 直接 /ai-images/...，
@@ -268,12 +276,16 @@ roleplay:
     #   characters=初始角色注册表（id/name/appearance 外貌描述/style 风格描述——风格必须固定，
     #     同角色固定外貌模板+固定风格词+固定 seed（角色 ID hash）保证同一角色风格一致）
     comfyui-base-url: "http://127.0.0.1:8188"
+    external-base-url: ""
+    external-api-key: "${ROLEPLAY_IMAGE_API_KEY:}"
+    external-model: "gpt-image-1"
+    external-endpoint: "/images/generations"
     output-dir: "src/main/resources/static/ai-images"
     pool-size: 2
     timeout-seconds: 300
     poll-interval-ms: 1000
     lora-name: "pixel_art_sakuemonq_pony.safetensors"
-    rmbg-model: "D:\\roleplay-java\\models\\rmbg\\rmbg-1.4.onnx"
+    rmbg-model: "${ROLEPLAY_RMBG_MODEL:}"
     rmbg-enabled: true
     img2img-denoise: 0.5
     characters:
@@ -311,6 +323,8 @@ roleplay:
     #   builtin-voices=GET /api/tts/mimo/voices 返回的内置音色清单（逗号分隔）
     #   timeout-seconds=单次合成 HTTP 超时
     mimo:
+      # xiaomimimo 保持当前配置；openai-compatible 使用 OpenAI 风格 /audio/speech
+      provider: "xiaomimimo"
       enabled: true
       api-key: "${ROLEPLAY_MIMO_TTS_KEY:}"
       base-url: "https://token-plan-cn.xiaomimimo.com/v1"
@@ -321,7 +335,8 @@ roleplay:
       default-tone: "自然温柔的语气"
       builtin-voices: "mimo_default"
       timeout-seconds: 60
-      openclaw-config: "C:\\Users\\shuweiran\\.openclaw\\openclaw.json"
+      speech-endpoint: "/audio/speech"
+      openclaw-config: "${ROLEPLAY_OPENCLAW_CONFIG:}"
   debug:
     # 阶段② API 逻辑链可视化（调研报告 docs/ui-api-survey.md §5 方案 C，P-0809-B）：
     #   trace-enabled=总开关（默认 false=零打点零影响；true=TraceFilter 打点 /api/** +
@@ -345,3 +360,38 @@ roleplay:
     max-single-map-height: 128
     # 模板库位置（classpath 相对路径；每 kind 一个 JSON，缺失/损坏回退内置同构模板）
     template-dir: classpath:/structure
+  world:
+    # P-0824-L：一般模式自治世界。输入邮箱只接收/排队，主控后台逐会话消费；所有容量均有界。
+    input-mailbox:
+      session-capacity: 128
+      max-sessions: 1024
+      idempotency-window: 512
+      overflow-policy: EVICT_LOWEST_PRIORITY_OLDEST
+      dispatch-ms: 100
+      max-retries: 3
+    command:
+      dispatch-ms: 250
+    lifecycle:
+      scan-ms: 5000
+      ambient-ttl-ms: 300000
+      passive-after-ms: 600000
+      dormant-after-ms: 1800000
+      archive-after-ms: 7200000
+      # 这里是“有效互动分”而非点击次数：attention=0，dialogue=2，plot/relationship=3。
+      ambient-promotion-interactions: 2
+      temporary-promotion-interactions: 6
+    planner:
+      enabled: true
+      min-interval-ms: 15000
+      max-commands: 3
+    # 群演只作为前端可见投影，不创建完整 Agent；被互动后才经命令总线晋升。
+    ambient:
+      enabled: true
+      target-count: 24
+      max-count: 80
+      # 场景人口变化每次扫描最多增减人数，避免 LLM 判断变化造成瞬时刷入/清空。
+      adjust-step: 6
+    map-job:
+      capacity: 32
+      workers: 2
+      ready-ttl-ms: 1800000

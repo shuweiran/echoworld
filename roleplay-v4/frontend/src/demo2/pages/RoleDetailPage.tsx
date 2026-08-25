@@ -82,6 +82,7 @@ const IMG_POLL_MAX = 360;
 
 /** P-0817-K：声线状态标签（详情页头部展示当前配置） */
 function voiceStatusText(r: RoleCard): string {
+  if (!r.voice_mode && r.ttsTone) return `AI 音色：${r.ttsTone}`;
   if (!r.voice_mode) return '未配置（使用默认音色）';
   if (r.voice_mode === 'basic') return 'basic · 内置音色';
   if (r.voice_mode === 'clone') return 'clone · 克隆参考音频';
@@ -111,11 +112,9 @@ export function RoleDetailPage() {
   const [vd, setVd] = useState('');
   const [voiceMsg, setVoiceMsg] = useState('');
   const [savingVoice, setSavingVoice] = useState(false);
-  // P-0818-C：角色卡「TTS 与设置」隐藏栏 —— barOpen=隐藏栏展开/收起；
-  // ttsOn=语音朗读开关（草稿态，保存后落卡）；panelOpen=角色卡右侧 TTS 详细设置面板
-  // （打开 TTS 即展开，关闭 TTS 自动收起）
+  // 角色卡「TTS 与设置」隐藏栏：AI 始终按角色卡声线（未配置则系统默认）合成；
+  // 隐藏栏只保留玩家修改声线的入口，不再提供独立的启动开关。
   const [barOpen, setBarOpen] = useState(false);
-  const [ttsOn, setTtsOn] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
 
   const generatedMurder = useDemoStore(s => s.generatedMurder);
@@ -139,15 +138,29 @@ export function RoleDetailPage() {
   useEffect(() => {
     setVm(role?.voice_mode || '');
     setVd(role?.voice_data || '');
-  }, [role?.voice_mode, role?.voice_data]);
+    // P-0817-A：预设角色可能没有 voice_mode（demo store 不含后端声线）→ 从后端查询补充
+    if (role && !role.voice_mode && role.name) {
+      (async () => {
+        try {
+          const r = await fetch('/api/characters');
+          const data = await r.json();
+          const chars = data.value || data;
+          const backend = chars.find((c: any) => c.name === role.name);
+          if (backend?.voice_mode) {
+            setVm(backend.voice_mode);
+            setVd(backend.voice_data || '');
+            // 同步更新 form（修改声线面板的下拉框）
+            setForm(f => f ? { ...f, mimoTtsEnabled: true, voiceMode: backend.voice_mode, voiceData: backend.voice_data || '' } : f);
+          }
+        } catch { /* 静默失败 */ }
+      })();
+    }
+  }, [role?.voice_mode, role?.voice_data, role?.name]);
 
-  // P-0818-C：进入详情页跟随角色已保存配置 —— 已配置声线：TTS 开关开 + 右侧详细设置自动展开；
-  // 未配置：隐藏栏收起、TTS 关、面板不展开
+  // 进入详情页不主动展开隐藏设置；已保存配置仍由消息播放链路自动带入。
   useEffect(() => {
-    const configured = !!(role?.voice_mode || role?.voice_data);
-    setTtsOn(configured);
-    setPanelOpen(configured);
     setBarOpen(false);
+    setPanelOpen(false);
   }, [role?.voice_mode, role?.voice_data]);
 
   // ── P-0818-F：AI 形象生成 ────────────────────────────────────────────
@@ -271,7 +284,10 @@ export function RoleDetailPage() {
   const editable = !readonly;
 
   const startEdit = () => {
-    setForm(roleToForm(role));
+    const f = roleToForm(role);
+    // P-0817-A：用后端查询到的声线覆盖（预设角色 demo store 无 voice_mode）
+    if (vm) { f.mimoTtsEnabled = true; f.voiceMode = vm; f.voiceData = vd; }
+    setForm(f);
     setEditing(true);
   };
 
@@ -310,19 +326,12 @@ export function RoleDetailPage() {
     back();
   };
 
-  // P-0818-C：TTS 开关 —— 打开 TTS → 角色卡右侧展开详细设置；关闭 → 自动收起
-  const handleTtsToggle = (on: boolean) => {
-    setTtsOn(on);
-    setPanelOpen(on);
-  };
-
   // P-0817-B：保存声线 —— ①本地角色卡（demo2 store，TTS 播放的本地解析数据源）②同步后端角色库
   // P-0817-K：后端无此角色（404）时自动 POST 创建（任务书「先 POST 创建再 PUT 更新」）；
   // 未配置（''）= 清除本地声线 + 后端清除（PUT 空串，nvl 归一为 null）；清除不创建空角色
-  // P-0818-C：语音朗读开关关闭时保存 = 清除该角色声线配置（对齐 RoleForm「勾选取消→清除」语义）
   const saveVoice = async () => {
     if (!role) return;
-    const mode = ttsOn ? (vm || '') : '';
+    const mode = vm || '';
     const trimmed = vd.trim();
     const updated = {
       ...role,
@@ -393,8 +402,7 @@ export function RoleDetailPage() {
           <div className="rd-secret">🔒 该角色身怀秘密（内容在对局中向你揭晓，此处保密）</div>
         )}
 
-        {/* P-0818-C：「TTS 与设置」隐藏栏 —— 角色卡底部收起为细条；展开后含语音朗读开关 + 详细设置入口。
-            打开 TTS（或点「详细设置」）→ 角色卡右侧展开 TTS 详细设置面板；关闭 TTS 面板自动收起 */}
+        {/* 角色卡底部隐藏栏：AI 默认自动使用本卡声线；玩家按需打开修改。 */}
         <div className="rd-tts-bar" data-open={barOpen ? 'true' : 'false'}>
           <button
             type="button"
@@ -404,25 +412,16 @@ export function RoleDetailPage() {
             onClick={() => setBarOpen(o => !o)}
           >
             <span className="rd-tts-handle-title">🎙️ TTS 与设置</span>
-            <span className="rd-tts-status">{ttsOn ? '语音朗读已开启' : '语音朗读未开启'}</span>
+            <span className="rd-tts-status">{role.voice_mode ? '已配置角色声线' : 'AI 自动使用默认音色'}</span>
             <span className="rd-tts-chevron" aria-hidden="true">{barOpen ? '▲' : '▼'}</span>
           </button>
           <div className="rd-tts-content" id="rd-tts-content">
             <div className="rd-tts-content-inner">
               <div className="rd-tts-row">
-                <label className="tts-switch-row">
-                  <span>语音朗读（TTS）</span>
-                  <input
-                    type="checkbox"
-                    className="tts-switch"
-                    checked={ttsOn}
-                    onChange={e => handleTtsToggle(e.target.checked)}
-                    aria-label="语音朗读（TTS）"
-                  />
-                </label>
-                <button type="button" className="btn2 btn2-sm" onClick={() => setPanelOpen(true)}>⚙️ 详细设置</button>
+                <span>AI 对话会自动带入本角色卡的声线设置。</span>
+                <button type="button" className="btn2 btn2-sm" onClick={() => setPanelOpen(true)}>⚙️ 修改声线</button>
               </div>
-              <div className="rd-tts-hint">已保存配置：{voiceStatusText(role)}</div>
+              <div className="rd-tts-hint">当前配置：{voiceStatusText(role)}；未配置时使用系统默认音色。</div>
             </div>
           </div>
         </div>
@@ -452,7 +451,7 @@ export function RoleDetailPage() {
         </div>
       </div>
 
-      {/* P-0818-C：角色卡右侧 TTS 详细设置面板（打开 TTS / 点「详细设置」时展开，关闭 TTS 自动收起） */}
+      {/* 角色卡右侧隐藏的 TTS 设置面板，仅供玩家修改默认自动应用的声线。 */}
       <aside className="rd-tts-panel" data-open={panelOpen ? 'true' : 'false'} aria-hidden={!panelOpen} aria-label="TTS 详细设置">
         <div className="rd-tts-panel-head">
           <div className="rd-tts-panel-title">🎙️ TTS 详细设置</div>
@@ -460,18 +459,8 @@ export function RoleDetailPage() {
         </div>
         <div className="tts-settings-scroll">
           <div className="settings-grid">
-            <div className="rd-tts-row">
-              <span>启用语音朗读</span>
-              <input
-                type="checkbox"
-                className="tts-switch"
-                checked={ttsOn}
-                onChange={e => handleTtsToggle(e.target.checked)}
-                aria-label="启用语音朗读"
-              />
-            </div>
-            {ttsOn ? (
-              <>
+            <div className="rd-tts-hint">AI 对话默认使用此角色卡声线；不配置时自动回退系统默认音色。</div>
+            <>
                 <div className="field">
                   <label>声线模式</label>
                   <select value={vm} onChange={e => setVm(e.target.value)}>
@@ -515,12 +504,7 @@ export function RoleDetailPage() {
                     {voiceMsg && <span className="hint" style={{ color: '#8ef0d8' }}>{voiceMsg}</span>}
                   </div>
                 </div>
-              </>
-            ) : (
-              <div className="hint" style={{ gridColumn: '1 / -1' }}>
-                打开「语音朗读」后，可在此配置该角色的声线；关闭状态的角色使用默认音色。
-              </div>
-            )}
+            </>
           </div>
         </div>
       </aside>

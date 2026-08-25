@@ -6,13 +6,16 @@ import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 
 import java.lang.reflect.Field;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * P-0802-I：SSEController 会话定向推送测试 —— stream(?session_id=) 注册过滤，
- * broadcastToSession 只送达匹配会话的连接，全局 broadcast 仍全量送达（向后兼容）。
+ * broadcastToSession 只送达匹配会话的连接；载荷含 session_id 的普通 broadcast 也强制定向；
+ * 剧本私聊仅送达 roleKey 认证过的双方连接。
  *
  * <p>验证手段：SseEmitter.send 在未绑定响应前把事件缓冲到父类 ResponseBodyEmitter 私有字段
  * earlySendAttempts（Spring 6.2 为 LinkedHashSet），测试经反射读取计数并用增量断言
@@ -141,5 +144,104 @@ class SSEControllerSessionTest {
         sessA.complete();
         sessB.complete();
         noSession.complete();
+    }
+
+    @Test
+    @DisplayName("P4: 带 session_id 的普通/typed 事件由服务端强制定向，不再广播后靠前端过滤")
+    void payloadSessionForcesServerSideTargeting() throws Exception {
+        SSEController ctl = new SSEController();
+        SseEmitter sessA = ctl.stream("sessA");
+        SseEmitter sessB = ctl.stream("sessB");
+        SseEmitter noSession = ctl.stream(null);
+
+        ctl.broadcast("custom_event", Map.of("session_id", "sessA", "value", 1));
+        assertTrue(attemptCount(sessA) > 0, "载荷 session_id 命中的连接收到普通事件");
+        assertEquals(0, attemptCount(sessB), "其他会话不收到普通事件");
+        assertEquals(0, attemptCount(noSession), "无会话连接不收到带 session_id 的事件");
+
+        int aBefore = attemptCount(sessA);
+        int bBefore = attemptCount(sessB);
+        ctl.broadcastAgentOutput("sessB", "npc", "hello", "main", "主轨", "merged", List.of("all"));
+        ctl.broadcastAgentToken("sessB", "npc", "h", "main", "主轨", "merged");
+        ctl.broadcastRoundComplete("sessB", 2);
+        ctl.broadcastUserInput("sessB", "input", "normal", "me", 2);
+        assertEquals(aBefore, attemptCount(sessA), "A 不收到 B 的 agent_output/token/round/user 事件");
+        assertTrue(attemptCount(sessB) > bBefore, "B 收到自己的全部 typed 事件");
+        assertEquals(0, attemptCount(noSession), "无会话连接不旁听 typed 会话事件");
+
+        sessA.complete();
+        sessB.complete();
+        noSession.complete();
+    }
+
+    @Test
+    @DisplayName("P5: script_private 仅送达 roleKey 认证的发送方/接收方，旁观者和公开订阅均不可见")
+    void scriptPrivateOnlyReachesAuthenticatedParticipants() throws Exception {
+        Map<String, String> validKeys = new ConcurrentHashMap<>(Map.of(
+            "Alice", "key-a", "Bob", "key-b", "Mallory", "key-m"));
+        SSEController ctl = new SSEController((sessionId, player, playerKey, eventType) ->
+            "scriptA".equals(sessionId) && playerKey.equals(validKeys.get(player)));
+
+        SseEmitter alice = ctl.stream("scriptA", "Alice", "key-a");
+        SseEmitter bob = ctl.stream("scriptA", "Bob", "key-b");
+        SseEmitter mallory = ctl.stream("scriptA", "Mallory", "key-m");
+        SseEmitter publicSession = ctl.stream("scriptA");
+        SseEmitter otherSession = ctl.stream("scriptB");
+
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,
+            () -> ctl.stream("scriptA", "Alice", "wrong"), "错误 roleKey 必须拒绝建立身份订阅");
+        assertThrows(org.springframework.web.server.ResponseStatusException.class,
+            () -> ctl.stream("scriptA", "Alice", null), "身份参数不完整必须拒绝，不能降级成公开连接");
+
+        ctl.broadcastScriptPrivate("scriptA", Map.of(
+            "from", "Alice", "to", "Bob", "message", "secret", "reply", "ok"));
+        assertTrue(attemptCount(alice) > 0, "发送方收到私聊事件");
+        assertTrue(attemptCount(bob) > 0, "接收方收到私聊事件");
+        assertEquals(0, attemptCount(mallory), "同局第三人收不到私聊");
+        assertEquals(0, attemptCount(publicSession), "仅 session 公开订阅收不到私聊");
+        assertEquals(0, attemptCount(otherSession), "其他会话收不到私聊");
+
+        int aliceBefore = attemptCount(alice);
+        int bobBefore = attemptCount(bob);
+        validKeys.remove("Alice"); // 模拟同 session 重开后旧 roleKey 失效
+        ctl.broadcastScriptPrivate("scriptA", Map.of(
+            "from", "Alice", "to", "Bob", "message", "new-secret", "reply", "ok"));
+        assertEquals(aliceBefore, attemptCount(alice), "旧令牌连接在投递时复验失败，不再收到私聊");
+        assertTrue(attemptCount(bob) > bobBefore, "仍有效的接收方继续收到私聊");
+
+        alice.complete();
+        bob.complete();
+        mallory.complete();
+        publicSession.complete();
+        otherSession.complete();
+    }
+
+    @Test
+    @DisplayName("P6: 狼人杀私密角色/女巫事件复用玩家订阅，只送达指定身份")
+    void werewolfPrivateEventsOnlyReachTargetPlayer() throws Exception {
+        SSEController ctl = new SSEController((sessionId, player, playerKey, eventType) ->
+            "wolfA".equals(sessionId) && (("Alice".equals(player) && "key-a".equals(playerKey))
+                || ("Witch".equals(player) && "key-w".equals(playerKey))));
+        SseEmitter alice = ctl.stream("wolfA", "Alice", "key-a");
+        SseEmitter witch = ctl.stream("wolfA", "Witch", "key-w");
+        SseEmitter publicSession = ctl.stream("wolfA");
+
+        ctl.broadcastToPlayers("wolfA", "werewolf_my_role",
+            Map.of("session_id", "wolfA", "role", "villager"), "Alice");
+        assertTrue(attemptCount(alice) > 0, "本人收到自己的角色");
+        assertEquals(0, attemptCount(witch), "其他玩家收不到角色");
+        assertEquals(0, attemptCount(publicSession), "公开会话订阅收不到角色");
+
+        int aliceBefore = attemptCount(alice);
+        int witchBefore = attemptCount(witch);
+        ctl.broadcastToPlayers("wolfA", "werewolf_witch_info",
+            Map.of("session_id", "wolfA", "victim", "Bob"), "Witch");
+        assertEquals(aliceBefore, attemptCount(alice), "非女巫收不到女巫信息");
+        assertTrue(attemptCount(witch) > witchBefore, "女巫本人收到夜间信息");
+        assertEquals(0, attemptCount(publicSession), "公开会话订阅仍收不到女巫信息");
+
+        alice.complete();
+        witch.complete();
+        publicSession.complete();
     }
 }

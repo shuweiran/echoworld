@@ -222,6 +222,7 @@ export function GalInputArea() {
   const liveMode = useGalStore(s => s.liveMode);
   const liveSessionId = useGalStore(s => s.liveSessionId);
   const liveSending = useGalStore(s => s.liveSending);
+  const livePendingInputId = useGalStore(s => s.livePendingInputId);
   const liveSendError = useGalStore(s => s.liveSendError);
   // P-0810-21：最近成功发送时间戳 → 「✅ 已发送」反馈（不依赖 hidePlayerBubbles 回显）
   const liveLastSent = useGalStore(s => s.liveLastSent);
@@ -292,6 +293,8 @@ export function GalInputArea() {
               ? <span className="gal-live-error">✕ 发言失败：{liveSendError}</span>
               : liveSending
                 ? <span className="gal-live-sending">⏳ 发送中…（AI 正在生成回复，约 10-40 秒）</span>
+                : livePendingInputId
+                  ? <span className="gal-live-sending">⏳ 已入世界邮箱，主控正在安排回应…</span>
                 : sentFlash
                   ? <span className="gal-live-sent">✅ 已发送（AI 正听见你说话…）</span>
                   : (liveSessionId ? '发言按对局类型路由（讨论阶段入讨论流 / 其他走一般对话）' : '连接真实对局后可发言'))

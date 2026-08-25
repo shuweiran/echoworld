@@ -410,7 +410,7 @@ SETUP ──(generate_full)──▶ INVESTIGATION ──(search 扣 AP / intera
 **API-13 `GET /api/script/goal` — 当前目标 HUD**（N10）
 - 方法/路径：GET `/api/script/goal`；query: `player`、`player_key?`
 - 用途：顶栏 🎯 目标徽章（原型三阶段目标：集齐 6 处地点线索 / 找出矛盾发言 / 指认真凶）
-- 数据来源 [需确认]：剧本杀**无目标模型**（一般模式有 SceneGoalService，D-047；剧本杀只有 outline.killer_hint/storyline + 讨论目标 getDiscussionGoal）。建议 MVP **规则模板**（按 phase 返回 + 进度统计）：
+- 数据来源 [需确认]：剧本杀**无目标模型**（一般模式有 SceneGoalService，D-047A；剧本杀只有 outline.killer_hint/storyline + 讨论目标 getDiscussionGoal）。建议 MVP **规则模板**（按 phase 返回 + 进度统计）：
   - INVESTIGATION：`{title:"集齐线索", progress:{searched:2,total:6}, detail:"已搜证 2/6 处地点"}`
   - DISCUSSION：`{title:"找出矛盾发言", detail:"质询可疑发言，指出矛盾"}`（质询数可作 progress）
   - VOTE：`{title:"指认真凶", progress:{voted:2,total:4}}`

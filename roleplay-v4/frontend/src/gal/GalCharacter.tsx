@@ -49,7 +49,7 @@ export function GalSprite({ speaker, size = 4 }: SpriteProps) {
 
 /**
  * P-0810-06：未知对局角色占位立绘（SVG 姓名首字）。
- * 真实 SSE 流的角色名无法预知像素模板 → 深色底 + 首字大号像素风文字 + 角色色相点缀。
+ * 真实 SSE 流的角色名无法预知像素模板 → 仅显示首字，不额外绘制半透明底框。
  */
 export function GalNamePlate({ speaker, size = 4 }: SpriteProps) {
   const w = Math.max(...speaker.sprite.map(r => r.length));
@@ -66,8 +66,6 @@ export function GalNamePlate({ speaker, size = 4 }: SpriteProps) {
       role="img"
       aria-label={`${speaker.name}（占位）`}
     >
-      <rect x={0} y={0} width={w} height={h} fill={`hsl(${speaker.hue} 45% 16%)`} />
-      <rect x={1} y={1} width={w - 2} height={h - 2} fill="none" stroke={`hsl(${speaker.hue} 80% 60%)`} strokeWidth={0.4} strokeDasharray="1 1" />
       <text
         x={w / 2}
         y={h / 2 + 4.5}

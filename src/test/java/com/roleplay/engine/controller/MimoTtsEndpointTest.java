@@ -17,6 +17,7 @@ import org.springframework.test.web.servlet.MvcResult;
 import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.ArrayList;
 import java.util.concurrent.CompletableFuture;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -228,6 +229,36 @@ class MimoTtsEndpointTest {
 
         mockMvc.perform(get("/api/tts/mimo/result/no-such-job"))
                 .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @DisplayName("async 实际执行任务达到 100 个后返回 429，不再继续调用上游")
+    void asyncBackpressureRejectsWorkBeyondLimit() throws Exception {
+        when(tts.isEnabled()).thenReturn(true);
+        java.util.List<CompletableFuture<MimoTtsService.TtsResult>> pending = new ArrayList<>();
+        when(tts.synthesizeAsync(anyString(), any())).thenAnswer(invocation -> {
+            CompletableFuture<MimoTtsService.TtsResult> future = new CompletableFuture<>();
+            pending.add(future);
+            return future;
+        });
+        try {
+            for (int i = 0; i < 100; i++) {
+                mockMvc.perform(post("/api/tts/mimo/synthesize/async")
+                                .contentType(MediaType.APPLICATION_JSON)
+                                .content("{\"text\":\"任务" + i + "\"}"))
+                        .andExpect(status().isOk());
+            }
+            mockMvc.perform(post("/api/tts/mimo/synthesize/async")
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content("{\"text\":\"超限任务\"}"))
+                    .andExpect(status().isTooManyRequests())
+                    .andExpect(jsonPath("$.error").exists());
+            org.mockito.Mockito.verify(tts, org.mockito.Mockito.times(100))
+                    .synthesizeAsync(anyString(), any());
+        } finally {
+            pending.forEach(future -> future.completeExceptionally(
+                    new java.util.concurrent.CancellationException("test cleanup")));
+        }
     }
 
     // ── 查询端点 ──────────────────────────────────────────────

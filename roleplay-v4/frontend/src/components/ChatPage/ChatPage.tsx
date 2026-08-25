@@ -178,12 +178,12 @@ export function ChatPage() {
 
   /* ── 狼人杀 3s 轮询（SSE 兜底） ── */
   useEffect(() => {
-    if (store.mode !== 'werewolf') return;
+    if (store.mode !== 'werewolf' || !store.currentPlayer || !store.werewolfSessionId || !store.werewolfRoleKey) return;
     let aliveFlag = true;
     const wwRoleCn: Record<string, string> = { werewolf: '狼人', wolf: '狼人', seer: '预言家', witch: '女巫', hunter: '猎人', villager: '平民' };
     const poll = async () => {
       try {
-        const st = await api.werewolfStatus(store.currentPlayer, store.werewolfSessionId || undefined);
+        const st = await api.werewolfStatus(store.werewolfSessionId, store.currentPlayer, store.werewolfRoleKey);
         if (!aliveFlag || !st || typeof st !== 'object') return;
         if (st.session_id) store.setWerewolfSessionId(st.session_id);
         if (st.phase) store.setWerewolfPhase(normalizePhase(st.phase) as WerewolfPhase, st.round);
@@ -209,7 +209,7 @@ export function ChatPage() {
     poll();
     const t = setInterval(poll, 3000);
     return () => { aliveFlag = false; clearInterval(t); };
-  }, [store.mode, store.currentPlayer]);
+  }, [store.mode, store.currentPlayer, store.werewolfSessionId, store.werewolfRoleKey]);
 
   /* ── 剧本杀动作处理器（面板按钮 → REST → 立即刷新，不等轮询） ── */
   const doScriptSearch = async (location: string) => {
@@ -368,7 +368,7 @@ export function ChatPage() {
   const doScriptRestart = async () => {
     setScriptBusy(true);
     try {
-      const res = await api.scriptRestart();
+      const res = await api.scriptRestart(store.currentPlayer, store.scriptRoleKey);
       store.setScriptReveal(null);
       setScriptClues([]);
       setScriptPublicClues([]);
@@ -379,9 +379,12 @@ export function ChatPage() {
       store.setScriptTrust(5);
       store.setScriptMyVote('');
       if (res?.session_id) store.setScriptSessionId(res.session_id);
+      if (res?.role_key) store.setScriptRoleKey(String(res.role_key));
       store.setScriptState(res);
       await refreshScript();
-    } catch { /* ignore */ }
+    } catch (e: any) {
+      setScriptActionMsg(`⚠️ 重新开局失败：${e?.message || '身份凭据无效或网络错误'}。请重新进入对局后再试。`);
+    }
     setScriptBusy(false);
   };
   const doScriptLeave = async () => {

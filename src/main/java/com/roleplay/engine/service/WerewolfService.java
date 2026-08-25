@@ -1,5 +1,6 @@
 package com.roleplay.engine.service;
 
+import jakarta.annotation.PreDestroy;
 import com.roleplay.engine.agent.Agent;
 import com.roleplay.engine.approval.ApprovalService;
 import com.roleplay.engine.broadcast.SseBroadcaster;
@@ -209,6 +210,16 @@ public class WerewolfService {
     });
     /** 讨论轮次驱动（虚拟线程，LLM 大量 IO 等待）。 */
     private final ExecutorService discussionExecutor = Executors.newVirtualThreadPerTaskExecutor();
+
+    @PreDestroy
+    public void shutdown() {
+        discussionConversations.values().forEach(ConversationManager::shutdown);
+        discussionConversations.clear();
+        discussionWorlds.clear();
+        discussionDirectors.clear();
+        gameExecutor.shutdownNow();
+        discussionExecutor.shutdownNow();
+    }
 
     public WerewolfService(ApprovalService approvalService) {
         this(approvalService, null, null, null);
@@ -483,15 +494,15 @@ public class WerewolfService {
      */
     private void notifyWitchVictim(String sessionId, GameState g) {
         if (g == null || !g.witchInformed || g.witchInfoSent) return;
-        boolean witchAlive = g.alive.stream().anyMatch(p -> g.roles.get(p) == Role.WITCH);
-        if (!witchAlive) return;
+        String witch = g.alive.stream().filter(p -> g.roles.get(p) == Role.WITCH).findFirst().orElse("");
+        if (witch.isBlank()) return;
         g.witchInfoSent = true;
-        sse(sessionId, "werewolf_witch_info", Map.of(
+        ssePlayers(sessionId, "werewolf_witch_info", Map.of(
                 "session_id", sessionId,
                 "victim", g.wolfTarget,
                 "phase", "night",
                 "round", g.round,
-                "hint", "🌙 女巫获知：昨夜被刀者是 " + g.wolfTarget + "（请决定是否使用解药）"));
+                "hint", "🌙 女巫获知：昨夜被刀者是 " + g.wolfTarget + "（请决定是否使用解药）"), witch);
     }
 
     /** 当夜全员行动是否完毕（AI 已决策 + 人类已提交；无对应角色/药水已用完视为完成）。 */
@@ -1130,7 +1141,11 @@ public class WerewolfService {
         if (!g.lastNightVictim.isEmpty() && !g.lastNightVictim.equals(player)) {
             desc.append("昨夜死者：").append(g.lastNightVictim).append("。");
         }
-        desc.append("白天讨论时请基于己方信息发言、试探他人、隐藏身份。");
+        desc.append("当前存活玩家：").append(String.join("、", g.alive)).append("。");
+        desc.append("【狼人杀主控讨论规则】将公开发言、昨夜已公布结果和你私下掌握的信息严格分开；"
+                + "他人的指控只是主张，不是事实。发言须围绕可核验的时间线、动机或矛盾展开，"
+                + "不凭空宣称查验、死亡或胜负，不泄露不该公开的身份信息。"
+                + "白天讨论时请基于己方信息发言、试探他人、隐藏身份。");
         Persona p = new Persona(player);
         p.setPersonaDesc(desc.toString());
         p.setVoice("贴合狼人杀玩家身份，发言谨慎，避免暴露身份");
@@ -1299,6 +1314,17 @@ public class WerewolfService {
         }
     }
 
+    /** 私密事件只投递给同局指定玩家的已认证 SSE 连接。 */
+    private void ssePlayers(String sessionId, String event, Map<String, Object> payload, String... players) {
+        if (sse != null) {
+            try {
+                sse.broadcastToPlayers(sessionId, event, payload, players);
+            } catch (Exception e) {
+                log.warn("Werewolf private SSE {} failed: {}", event, e.getMessage());
+            }
+        }
+    }
+
     /** 初始化通知：玩家列表 + 人类角色 + 阶段（controller init 后调用）。 */
     public void notifyGameInit(String sessionId, String humanPlayer) {
         GameState g = games.get(sessionId);
@@ -1307,7 +1333,8 @@ public class WerewolfService {
         if (humanPlayer != null && !humanPlayer.isEmpty()) {
             Role r = g.roles.get(humanPlayer);
             if (r != null) {
-                sse(sessionId, "werewolf_my_role", Map.of("session_id", sessionId, "role", r.name().toLowerCase()));
+                ssePlayers(sessionId, "werewolf_my_role",
+                    Map.of("session_id", sessionId, "role", r.name().toLowerCase()), humanPlayer);
             }
         }
         sse(sessionId, "werewolf_phase", Map.of("session_id", sessionId, "phase", g.phase.name().toLowerCase(), "round", g.round));
@@ -1345,9 +1372,14 @@ public class WerewolfService {
         }
         if (!died.isEmpty()) {
             String victimText = String.join("、", died);
-            sse(sessionId, "werewolf_witch_info", Map.of(
-                    "session_id", sessionId, "victim", victimText,
-                    "hint", "昨夜死亡：" + victimText));
+            String witch = g.roles.entrySet().stream()
+                .filter(e -> e.getValue() == Role.WITCH && g.alive.contains(e.getKey()))
+                .map(Map.Entry::getKey).findFirst().orElse("");
+            if (!witch.isBlank()) {
+                ssePlayers(sessionId, "werewolf_witch_info", Map.of(
+                        "session_id", sessionId, "victim", victimText,
+                        "hint", "昨夜死亡：" + victimText), witch);
+            }
         }
         broadcastPlayers(sessionId);
     }

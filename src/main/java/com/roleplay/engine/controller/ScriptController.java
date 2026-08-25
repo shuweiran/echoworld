@@ -760,20 +760,41 @@ public class ScriptController {
     }
 
     /**
-     * P1（任务 2b）：ENDED 后重开一局 —— 同剧本主题同玩家重开（复用 sessionId，前端轮询/SSE 定位不变）；
-     * 新对局生成全新剧本/角色分配/roleKey/票型，托管与降级标记重置。
-     * 前端 ChatPage 结束面板「再来一局（同剧本）」按钮调用；「回到剧本选择」为纯前端导航。
+     * P1（任务 2b）/D-078：ENDED 后重开一局 —— 同剧本主题同玩家重开（复用 sessionId，
+     * 前端轮询/SSE 定位不变）；新对局生成全新剧本/角色分配/roleKey/票型，托管与降级标记重置。
+     * 重置会令旧 roleKey 失效，因此必须先用旧局 player + player_key 或 X-DM-Key 鉴权；
+     * 玩家成功后仅返回本人新视图，DM 成功后仅返回公共视图，禁止透传 initGame 默认首位玩家视图。
      */
     @PostMapping("/restart")
-    public ResponseEntity<Map<String, Object>> restart(@RequestBody Map<String, String> body) {
+    public ResponseEntity<Map<String, Object>> restart(
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-DM-Key", defaultValue = "") String dmKeyHeader) {
         String sessionId = body.getOrDefault("session_id", currentSessionId);
         if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
-        return ResponseEntity.ok(scriptGameService.restartGame(sessionId));
+
+        boolean dmAuthorized = dmKeyOk(dmKeyHeader);
+        String player = body.getOrDefault("player", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        if (!dmAuthorized) {
+            if (player.isBlank()) {
+                return ResponseEntity.status(403).body(Map.of("error", "身份校验失败：缺少 player"));
+            }
+            Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+            if (denied != null) return ResponseEntity.status(403).body(denied);
+        }
+
+        Map<String, Object> result = scriptGameService.restartGame(sessionId);
+        if (result.containsKey("error")) return ResponseEntity.ok(result);
+        ScriptGameService.ScriptGame restarted = scriptGameService.getGame(sessionId);
+        if (restarted == null) {
+            return ResponseEntity.ok(Map.of("error", "重开后对局状态不可用"));
+        }
+        return ResponseEntity.ok(restarted.toMap(dmAuthorized ? "" : player));
     }
 
     /**
-     * C3: 状态查询 —— 支持 player_key 认证（有 key 校验匹配，无 key 向后兼容）；
-     * 仅传 player_key 时可由 key 反查玩家（重连场景）。
+     * C3/D-078: 状态查询 —— 空 player + 空 player_key 返回不含本人秘密/令牌的公共视图；
+     * 请求指定玩家的本人视图必须通过 player_key 认证。仅传 player_key 时可由 key 反查玩家（重连场景）。
      * P-0810-17（B3）：sessionId 解析优先 findSessionByPlayerKey(player_key)（有 key 时）——
      * 修复 role_key 错位：playerSessions 回退 currentSessionId 在并发对局下会拿到全局最后对局，
      * 玩家 1..N 误用玩家 0 的 key → 403；key 与对局一一对应，反查是唯一可靠归属。
@@ -800,10 +821,14 @@ public class ScriptController {
         if (sessionId.isEmpty()) {
             return ResponseEntity.ok(Map.of("phase", "idle"));
         }
-        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, resolvedPlayer, player_key);
-        if (denied != null) return ResponseEntity.status(403).body(denied);
+        boolean publicView = resolvedPlayer.isBlank() && (player_key == null || player_key.isBlank());
         ScriptGameService.ScriptGame game = scriptGameService.getGame(sessionId);
         if (game == null) return ResponseEntity.ok(Map.of("phase", "not_found"));
+        if (publicView) {
+            return ResponseEntity.ok(game.toMap(""));
+        }
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, resolvedPlayer, player_key);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
         return ResponseEntity.ok(game.toMap(resolvedPlayer));
     }
 }

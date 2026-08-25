@@ -367,7 +367,7 @@ mbg-enabled 总开关默认 true）；④**URL 暴露**——imagesOf 磁盘扫�
 
 ## 2026-08-10（一般模式「场景与场景目标」机制批次 P-0810-09）
 
-### D-047 一般模式「场景与场景目标」：LLM 目标集生成 + 隐藏目标驱动注入 + 每轮异步判定 + scene_target_update SSE（用户已确认设计）
+### D-047A 一般模式「场景与场景目标」：LLM 目标集生成 + 隐藏目标驱动注入 + 每轮异步判定 + scene_target_update SSE（用户已确认设计）
 - **决策**：① **场景目标集**——Scene 加 goals 字段（结构化 JSON：`global_goal` 全局隐藏主线 1 条 / `role_goals{roleName:{desc,status}}` 每 AI 角色 1 条隐藏目标 / `player_goal` 玩家目标可选），落库 SceneEntity.goals JSON 列（ddl-auto=update 自动加列，旧场景无 goals 零迁移）；状态机 NOT_STARTED/IN_PROGRESS/COMPLETED/FAILED（机器值英文，前端映射中文）。② **生成（init 时）**——一般模式 init（含 scene）且场景无目标集 → 新 SceneGoalService LLM 生成（prompt 全英文，风格同 GeneratorService/ScriptService；init body 可选 scene_id 命中 DB 场景 → 装载已有 goals / 生成后回写持久化，下次 init 免 LLM；可选 player_goal 自定义玩家目标，缺省 LLM 生成）；LLM 失败/缺角色/空输出 → 规则兜底 + 归一化补全，恒返回结构完整目标集零崩溃。③ **目标驱动**——Agent +hiddenGoal，RouterService.setSceneGoals 时按角色注入，buildContext / generateWithContext(Stream) 系统提示追加「你的目标：xxx（不要主动暴露给玩家，用行为引导）」（并行 AgentExecutor 路径经 generateSync→buildContext、串行路径经 generateWithContextStream 全覆盖）。④ **进展判定（每轮 send 后）**——runRound 末尾异步（CompletableFuture，不阻塞主流程）轻量 LLM 判定最近 3 轮对话对各目标状态；失败静默降级（log.warn 不广播）；状态有变化 → `sse.broadcastToSession(sessionId, "scene_target_update", payload)` 会话定向广播；完成/失败目标揭示全文且仅揭示一次（goalRevealed 集合防重复广播），进行中保持隐藏。⑤ **init 响应**——新增 goals 键：玩家目标明文、全局/角色目标仅「??」占位 + ai_goal_count 数量（隐藏不泄露）。⑥ **SSE 契约**——event=scene_target_update，data={session_id, role_goal_status:{roleName:status}, global_goal_status, player_goal_status, revealed:[完成/失败时揭示的目标全文]}；无变化不广播。判定频率先做每轮一次（任务注明性能优化留后续：可 N 轮一次或仅发言涉目标时判定）。
 - **原因**：① 用户确认的设计要求——一般模式场景需要「隐藏事件/氛围主线 + 角色隐藏目标 + 玩家可见目标」三层的目标驱动结构，此前 Scene 无目标字段、Agent 无目标注入、无进展判定链路；② 目标对玩家隐藏是戏剧张力来源（AI 目标用行为引导而非明示），玩家目标明文可展示；③ 判定每轮同步会拖慢对话主流程（额外 LLM 调用），异步 + 失败静默对齐「轻量、不阻塞、可降级」要求；④ 生成/判定都走既有 LLMClient.callJson 统一路径（含 fuzzy JSON 提取与三连重试），零新基础设施；⑤ 落库复用 SceneEntity（对齐 D-013/D-014「不扩表优先」纪律——本次是加列而非新表，goals 为业务字段随场景走）。
 - **放弃**：① 目标集做成独立表/独立实体（goals 随场景单点归属，JSON 列已够；快照/结果不消费该结构）；② 判定结果经 LLM 回传 desc（揭示文本以目标集内存原文为准，防 LLM 编造）；③ 判定同步阻塞主流程（性能与可用性双输）；④ 全局主线也注入所有 Agent（任务只要求角色目标注入，全局主线仅判定/广播消费，避免过度泄露隐藏主线）；⑤ 每轮必判的节流优化本轮不做（任务明确「先做每轮判定+轻量 prompt，性能问题后续优化」）。
@@ -375,7 +375,7 @@ mbg-enabled 总开关默认 true）；④**URL 暴露**——imagesOf 磁盘扫�
 
 ## 2026-08-10（persona 五层模板接入后端，批次 P-0810-10，主人拍板）
 
-### D-047 persona 五层模板：Persona 扩展五层结构，LLM 上下文完整可见、对外 API 只回表层
+### D-047B persona 五层模板：Persona 扩展五层结构，LLM 上下文完整可见、对外 API 只回表层
 - **决策**：①**Persona.java 五层扩展**——新增 `layers` 内部字段（layer0 行为规则 / layer1 身份 / layer2 表达风格 / layer3 情感模式 / layer4 冲突链与雷区 + contrast 反差设定 + humanDetails 人味细节），`buildSystemPrompt()` 有五层数据时输出五层模板（【反差设定】→【Layer 0 行为规则】→【Layer 1 身份】→【Layer 2 表达风格】→【Layer 3 情感模式（含人味细节 + 允许情绪波动·不完美回应）】→【Layer 4 冲突链与雷区】→【行为总原则】，身份锁定/表演规则原样保留），LLM 上下文完整可见；无 layer 数据完全回退旧 4 字段（personaDesc/voice/background）零破坏；②**对外 API 不透出五层（硬性）**——层数据存独立内存库（CharacterController.personaCards，不入角色表/H2）+ `Persona.toMap()` 不序列化 layers，GET /api/characters、GET /api/state characters、init 响应只回表层 name/appearance/voice/background/summary，绝无 layer0/layer3/layer4/contrast/humanDetails 键；③**反差 + 人味（硬性，写进模板结构）**——contrast（表面 X ↔ 实际 Y，例：小铃 温柔体贴↔胜负欲强泡茶执念 / 凯尔 爽朗热心↔怕被看轻爱面子）+ humanDetails（小缺点/小习惯/口头禅/情绪化表达），Layer 3 明确「允许情绪波动，不完美回应」；④**默认卡**——resources/persona/ 三张五层卡（xiaoling 小铃 / kyle 凯尔 / luna 露娜），PersonaCardLoader 静态懒加载（name/id 双索引），四处 Persona 构建点（SessionController.init / SceneController.startScene / SimulationController.loadCharacters / HistoryController.buildAgents）经 `attachPersonaCard` 一行挂载（导入卡优先→默认卡→无卡 no-op）；⑤**导入 API**——POST /api/characters/{name}/persona（body 含 layer0~4/contrast/humanDetails 至少一键否则 400；响应只回表层 + 层键名列表）；⑥**轻量提示**——buildLightweightPrompt 五层版只带 Layer2 风格 + Layer0 前 3 条摘要 + 反差（不含完整冲突链，省 token）
 - **原因**：① 主人拍板三条硬性需求（五层进上下文 / 对外不透出 / 反差+人味进模板）；② 旧 4 字段模型（personaDesc/voice/background）是压缩摘要，LLM 拿到的是「标签」而非「可执行行为规则」——五层模板把形容词翻译成「当 [场景] 时你 [行为]」的表演指令，Layer 0 放最前利用 LLM 长上下文前部权重防人设漂移；③ 五层是内部表演指令，透出给前端等于公开「雷区/情感模式」底牌，破坏角色扮演沉浸感与对局博弈（剧本杀秘密机制同理）；④ 向后兼容：旧数据（无 layer 字段）不炸、旧格式逐字节不变
 - **放弃**：① 把五层卡并入角色表/H2 存储（characters 表无 layer 列，加列需 H2 file 库迁移——沿用 D-013/D-014「不扩展表结构」纪律；导入卡为内存态，重启重导或用默认卡，已文档化）；② 改 Agent.java（P-0810-09 并行在改，五层输出完全封装在 Persona 内，Agent.buildContext 调用点零改动）；③ 让 buildSystemPrompt 每次 IO 读卡（纯 POJO 保持确定性，卡挂载在 Persona 构建时一次性完成）；④ 把五层卡写进 /api/characters 角色 map（list() 会整体序列化 → 必须独立存储才能保证不透出）
@@ -430,7 +430,7 @@ mbg-enabled 总开关默认 true）；④**URL 暴露**——imagesOf 磁盘扫�
 
 ### D-053 五层卡外部目录持久化（data/persona/*.json）+ 生成角色自动落库 + 旧角色批量升级端点
 - **决策**：①**生成角色自动落库**——POST /api/characters/generate 生成成功后自动保存到 H2（复用 databaseService.saveCharacter 四参重载，对齐 create 端点逻辑）+ 同步内存列表（getAll 立即可见）；撞名（库内已有同 name）→ 409 复用 conflict()，不落库不挂卡；响应补 saved=true（已有返回结构上增量不破坏既存消费）。②**五层卡外部目录持久化**——卡写入 data/persona/{角色名}.json（UTF-8 无 BOM，目录自动创建；文件名经 sanitizeFileName 安全化防 LLM 生成非法字符）；三个挂载点（generate 自动落库 / POST /{name}/persona 导入 / 批量升级）均写盘；加载侧 PersonaCardLoader 新增 EXTERNAL_DIR 静态字段 + setExternalCardsDir + ensureLoaded 合并 classpath 默认卡 资源 + 外部目录（同名外部优先覆盖），目录不存在/不可读静默跳过零破坏；角色改名/删除跟随文件操作（renameFile/deleteFile best-effort）。③**路径可配**——yml 双份 
-oleplay.game.persona-cards-dir（主 yml 默认 ./data/persona，test yml 指向 target/persona-test-cards），CharacterController @Value 注入 + setPersonaCardsDir 测试钩子，对齐 D-004「阈值勿 hardcode」纪律。④**旧角色批量升级**——新端点 POST /api/characters/upgrade（body 可选 max_roles 限制缺省全部）：异步虚拟线程遍历所有无五层卡角色 → 对每个调 GeneratorService.generateCharacterForUpgrade（以角色现有 persona/voice/background 拼接为上下文，不做 100 字截断保持身份一致；scene 上下文不传）→ 生成成功：五层卡写盘 + personaCards 挂载 + 表层替换（persona/voice/background 用生成结果覆盖，显式「替换」动作仅升级路径，与 D-047/P-0810-10「不覆盖用户显式内容」的常规挂载规则区分）+ H2 更新表层 4 字段；有卡跳过（幂等）；单角色失败跳过继续 log.warn；汇总 {upgraded, skipped, failed, names[]} 经 GET /api/characters/upgrade/status 查询。响应立即返回 {started:true}。⑤**前端适配**——SettingsPage.generateCharacter 从「回填表单手动保存（create）」改为「生成后打开表单为编辑态」（editTarget=新角色名，保存走 PUT updateCharacter），避免再次 create 撞名 409；表单展示生成的角色名/persona/voice（从 refreshData 列表取）；ScenePage/MaterialPage 仅加流程验证注释（loadState 后新角色自动出现无需手动 create）。
+oleplay.game.persona-cards-dir（主 yml 默认 ./data/persona，test yml 指向 target/persona-test-cards），CharacterController @Value 注入 + setPersonaCardsDir 测试钩子，对齐 D-004「阈值勿 hardcode」纪律。④**旧角色批量升级**——新端点 POST /api/characters/upgrade（body 可选 max_roles 限制缺省全部）：异步虚拟线程遍历所有无五层卡角色 → 对每个调 GeneratorService.generateCharacterForUpgrade（以角色现有 persona/voice/background 拼接为上下文，不做 100 字截断保持身份一致；scene 上下文不传）→ 生成成功：五层卡写盘 + personaCards 挂载 + 表层替换（persona/voice/background 用生成结果覆盖，显式「替换」动作仅升级路径，与 D-047B/P-0810-10「不覆盖用户显式内容」的常规挂载规则区分）+ H2 更新表层 4 字段；有卡跳过（幂等）；单角色失败跳过继续 log.warn；汇总 {upgraded, skipped, failed, names[]} 经 GET /api/characters/upgrade/status 查询。响应立即返回 {started:true}。⑤**前端适配**——SettingsPage.generateCharacter 从「回填表单手动保存（create）」改为「生成后打开表单为编辑态」（editTarget=新角色名，保存走 PUT updateCharacter），避免再次 create 撞名 409；表单展示生成的角色名/persona/voice（从 refreshData 列表取）；ScenePage/MaterialPage 仅加流程验证注释（loadState 后新角色自动出现无需手动 create）。
 - **原因**：①主人反馈生成角色不自动写角色表（已实证：generate 只调 LLM 生成不落库；ScenePage/MaterialPage 生成后直接 loadState+closeModal 结果丢弃；SettingsPage 是生成后回填表单手动保存）→ 生成即落库消除空窗。②实证角色表 13 角色全部旧式（appearance/summary 空、无五层卡）；personaCards 纯内存（ConcurrentHashMap）重启即失，五层卡无持久化→ 外部目录持久化是五层卡「重启不丢」的最小方案（与 H2 ./data/roleplay 同 data/ 目录族，零新依赖）。③外部目录合并 classpath 默认卡且外部优先，既保持已有 resources/persona/ 三张默认卡逻辑不动（向后兼容），又允许生成/导入/升级的卡在重启后自动恢复（attachPersonaCard 回退外部目录卡）。④旧角色表所有角色无五层卡，需一次性批量升级为五层 persona 格式，异步+幂等+失败单跳进保证可反复执行
 - **放弃**：①把五层卡并入 H2 角色表（characters 表无 layer 列，加列需迁移 characters 表，与 D-013/D-014「不扩展表结构」纪律冲突——外部目录/json 零表结构变更）；②静态加载器改 Spring bean 注入（保持静态工具类设计，CharacterController @PostConstruct 调用 setExternalCardsDir 注册配置值即可，测试经 resetForTests 隔离零风险）；③generateCharacterForUpgrade 走公共的 100 字截断（角色 persona 最多 2000 字，截断到 100 字不可能保持身份一致——升级专用重载取消截断用 1000 字上限）；④前端新增升级 UI（部署后由主会话调端点触发 13 角色真实 LLM 批量，status 端点可查进度）
 - **影响**：①全量 mvn test **623/97/0**（596 基线 + 本批 14 用例 + 并行批次新增零破坏；LongTextStabilityTest PASS）；②新增 1 配置键（persona-cards-dir，yml 双份）+ 2 新端点（POST /api/characters/upgrade + GET /api/characters/upgrade/status）+ 3 新测试类（CharacterGeneratePersistTest 7 / CharacterUpgradeTest 5 / PersonaCardsDirConfigTest 2）+ GeneratorCharacterFiveLayerTest 适配 auto-persist 行为变更；③前端 SettingsPage 改编辑态流程 + ScenePage/MaterialPage 流程注释，npm build 产物 index-Db5LNOEs.js（SHA256 40040FD0...，dist 未同步 static）；④行为变化——generate 成功后角色已入库（getAll/列表可见 + H2 持久化），不再需要前端手动 create；SettingsPage 生成后走 PUT 更新而非 POST create；五层卡重启后自动恢复（外部目录）；⑤兼容性——无 @Value 绑定时落盘关闭零破坏（测试直构 / 旧 jar）；旧角色表无卡不影响正常 CRUD；rollback 操作不牵涉五层卡（只动内存 personaCards）；⑥禁动文件（RouterService/ArbiterService/审批/狼人杀/剧本杀 Service/SSE 主链路/static）零改动；⑦部署后主会话调 POST /api/characters/upgrade 触发 13 角色真实 LLM 批量升级（轮询 GET /api/characters/upgrade/status 等待完成）；⑧未 git commit（统一 gate 待授权）
@@ -634,16 +634,21 @@ oleplay.tts.mimo.* yml 双份 + AppConfig.TtsConfig.MimoConfig（enabled/api-key
 - **放弃**：本轮不绑定具体 Phaser tileset、不生成最终 PNG/SVG 瓦片、不把地图硬编码进 RouterService 或 SSE 主链路。
 - **影响**：地图已具备道路、桥梁、河流阻挡、建筑、林地、社交热点、互动装饰和出生点；后续可直接把同一 JSON 喂给前端渲染和 `load-characters`，再替换 tileset 资源。
 
-### D-086 一般模式普通地图与大型地图统一使用结构地图配置（P-0820-M）
+### D-086A 一般模式普通地图与大型地图统一使用结构地图配置（P-0820-M）
 - **决策**：前端不再区分“普通地图生成”和“大型地图生成”两个入口；统一由设置页配置尺寸、结构模板、地图组织、风格、种子和视觉审核，统一调用结构地图生成 API。
 - **原因**：两套入口此前分别调用 `/api/scenes/map` 与 `/api/structure/generate`，导致用户设置无法完整作用于大型地图，也容易产生缓存和行为差异。
 - **放弃**：不删除既有后端接口，避免剧本杀和旧场景编辑链路回归；不在本轮把多图结果强行压成单图。
 - **影响**：普通模式进入 2D 探索时也会使用统一结构配置；多图/外部-内部可以生成和预览，当前一般模式运行时优先选取当前地图，后续再完善跨图运行时切换。
 
-### D-087 一般模式地图生成结果必须显式保存并按场景复用（P-0820-M）
+### D-087A 一般模式地图生成结果必须显式保存并按场景复用（P-0820-M）
 - **决策**：统一地图弹窗提供“保存地图”和“保存并进入 2D 探索”；保存结果按 `scriptId` 写入现有 `generalMaps` 本地持久化缓存，进入 2D 时优先命中缓存。
 - **原因**：仅生成并预览不等于保存；用户关闭预览后再次进入场景会重复调用地图生成接口，浪费时间和 LLM 成本。
 - **影响**：同一一般模式场景保存一张当前地图后，刷新页面、返回角色选择再进入 2D，均可复用该地图；多图结果当前保存选中的活动地图。
+
+### D-088A 地图缓存必须携带所属剧本并拒绝空 ID 全局缓存（P-0820-S）
+- **决策**：保存地图时写入内部 `__saved_for_scene_id` 标记；加载和读取时按当前一般模式 `scriptId` 校验；历史缓存的空 key 地图直接忽略。
+- **原因**：旧缓存允许空场景 ID，导致不同一般模式场景可能读取同一张地图；地图契约本身不携带前端场景归属，必须在缓存层补充隔离信息。
+- **影响**：每个一般模式剧本独立保存和复用地图；首次进入带空 key 旧缓存的剧本会重新生成一次，之后按正确场景保存。
 
 ### D-083 晨雾镇演示采用独立的大地图/室内视图壳（P-0820-I）
 - **决策**：一般模式新增“晨雾镇 · AI 社会实验”演示入口；外部使用 96×64 不规则 SVG 地图与小地图视口，房屋节点点击后切换独立室内 SVG 地图；角色、情绪、对话和运行状态继续轮询后端 `/api/simulation/state`。
@@ -658,23 +663,23 @@ oleplay.tts.mimo.* yml 双份 + AppConfig.TtsConfig.MimoConfig（enabled/api-key
 - **影响**：用户可以拖拽观察大地图、从房屋人数发现入屋、进入室内确认人物，并从地图气泡和事件流理解行为；后续接入后端 `warps`/多图位置后只需替换信息层状态源。
 
 ### D-085 晨雾镇入口回归一般模式 Phaser 2D 主链路（P-0820-K）
-- **决策**：晨雾镇不再默认渲染 `SocialExperimentDemo` 本地状态壳，直接挂载 `PhaserSimulationView`；角色加载、地图 collision 注入、运行、位置、移动和对话统一由一般模式 `SimulationService` 驱动。Vite preview 同样代理 `/api` 到 8000，并移除转发的 Origin。
+- **决策**：晨雾镇不再渲染 `SocialExperimentDemo` 本地状态壳（P-0824-H 已删除该死组件），直接挂载 `PhaserSimulationView`；角色加载、地图 collision 注入、运行、位置、移动和对话统一由一般模式 `SimulationService` 驱动。Vite preview 同样代理 `/api` 到 8000，并移除转发的 Origin。
 - **原因**：本地随机游走、入屋事件和系统气泡无法代表真实 AI 行为，且 preview 未代理 API 时 POST 被拒绝，用户看到的只是断开的视觉演示；复用已验证的 2D 主链路才能让画面、消息和行为对应同一后端事实源。
 - **放弃**：不在本轮继续修补 SVG 壳的本地 AI；也不把尚未实现的多地图 warps 强塞进 SimulationService。房屋跨图进入留给后端多图位置协议后再接入。
 - **影响**：晨雾镇进入时会实际重置并加载 8 名角色；Phaser 地图内移动/接近/对话/聊天使用真实一般模式能力。预览和生产静态站均可指向同一 API；当前预览验证 `running=true/agentCount=8`。
 
-### D-086 晨雾镇 Phaser 使用专用室外地图，collision 只渲染一次（P-0820-L）
+### D-086B 晨雾镇 Phaser 使用专用室外地图，collision 只渲染一次（P-0820-L）
 - **决策**：晨雾镇不再调用固定房间坐标的 `buildMap(96,64)`，改用专用室外地图：默认草地可通行，河流/建筑边界才是 collision，主街、支路、7 栋建筑和出生点覆盖全图。`SimulationScene` 在存在 `tileMap` 时不再额外绘制后端同源 obstacles。
 - **原因**：旧 BSP 生成器只适合 24×16 室内，扩大尺寸却未等比例扩展房间，造成 80% 以上格子是墙、AI 挤在左上；同时 collision 已由瓦片层渲染，二次障碍层会遮住地图并重复显示地图名。
 - **放弃**：不改变后端世界 1000×600 物理坐标及 collision 投影算法；不把普通 `buildMap` 改成室外生成器，避免影响其他一般模式预设。
 - **影响**：晨雾镇在真实 2D 主链路中拥有完整可走户外区域，角色会分散移动；地图视觉和后端碰撞仍共享同一契约数据，且不会再出现灰蓝空区或重复障碍标签。
 
-### D-087 一般模式对话只能由会话组进入（P-0820-N）
+### D-087B 一般模式对话只能由会话组进入（P-0820-N）
 - **决策**：地图点选角色是观察/聚焦操作，不能自动发言或开新轨道；右侧对话与发言区只在玩家点击并加入既有会话组后出现，世界内聊天气泡默认关闭。
 - **原因**：点击一个人触发自动问候会把观察动作变成主控介入，容易误将无关角色纳入同一对话轨道；地图上的多气泡也会掩盖群组边界。
 - **影响**：AI 的轨道继续由后端自主调度，用户只通过明确的“加入会话组”动作参与某一组；右侧内容有明确归属，不再显示全世界混杂消息。
 
-### D-088 导演模式的会话组采用经典旁听（P-0820-N）
+### D-088B 导演模式的会话组采用经典旁听（P-0820-N）
 - **决策**：没有用户角色时，点击会话组只打开一般模式经典消息列表，并关闭输入；不调用加入接口、不会生成虚拟 `me`。
 - **原因**：导演是观察者，不应改变角色关系或对话成员。Gal 交互框会暗示用户参与，和旁听语义相冲突。
 - **影响**：点击组仍能立即看到自动进行的 AI 会话，但轨道、成员和发言全部保持后端的自然状态。
@@ -683,3 +688,115 @@ oleplay.tts.mimo.* yml 双份 + AppConfig.TtsConfig.MimoConfig（enabled/api-key
 - **决策**：没有用户角色时，活跃会话组仍渲染“旁听对话”按钮；点击后右侧仅显示该 group id 的消息，不显示世界全量消息。
 - **原因**：原实现只在玩家角色在场时绘制加入按钮，导演看到的群组框不能点击；经典视图又未消费消息的 group 字段，导致即使面板打开也无法辨认组内内容。
 - **影响**：旁听是可见、无副作用的操作；没有新消息时也会显示当前成员和自动调度状态，避免被误判为无响应。
+
+### D-090 一般模式对话以声学连通性作为空间门槛（P-0820-O）
+- **决策**：普通对话的创建、玩家加入和持续均必须通过 `HearingSystem.canHearEachOther`；带 `blocksSound=true` 的建筑/墙体会阻断直线声路，已失去声学连通性的组自然散场。
+- **原因**：单纯距离阈值会让室内外或隔墙角色继续交谈，破坏 2D 地图作为社会行为空间的可信度。
+- **放弃**：不以“视觉距离”或前端遮罩做假隔离；判定只在后端权威世界中完成。
+- **影响**：AI 需要在同一可听空间靠近才会触发或保持会话；前端地图、旁听和消息只呈现该后端事实。
+
+### D-091 图片生成与 TTS 采用可选外部 Provider（P-0820-Q）
+- **决策**：本地运行默认继续使用现有 ComfyUI 与 MiMo 配置；运行时可切换 `openai-compatible` 图片 Provider（`/images/generations`，支持 URL/base64）和 TTS Provider（`/audio/speech` 二进制响应）。
+- **原因**：不同用户已有不同图片/TTS 模型和网关，不应把应用锁定在单一厂商；同时不能破坏当前本地配置和角色声线链路。
+- **影响**：设置页和 `/api/config/integrations` 支持 Provider、Base URL、模型与密钥覆盖；密钥不在 GET 中明文返回，未切换时旧路径行为保持不变。
+### D-092 一般模式 2D 刷新与玩家方向输入采用确定性链路（P-0820-R）
+- **决策**：世界快照 SSE 从每 2 tick 广播调整为每 tick（200ms）；WASD/方向键指令按浏览器产生顺序串行发送，服务端保存归一化方向并以玩家速度直接推进，点击目标仍保留原目标力/寻路链路。
+- **原因**：400ms 快照造成位置显示滞后；方向键复用目标点后会叠加惯性、障碍斥力和碰撞推挤，靠墙或换向时出现偏航、反向和原地打转。
+- **放弃**：不改变 AI 的 flocking/随机漫游/绕障策略；不把点击移动改成硬方向；不改 RouterService、SSE 主链路之外的会话协议。
+- **影响**：玩家方向控制只会沿输入方向移动，碰撞时停下或被边界约束，不再被物理力反向；2D 位置刷新频率提升到 5Hz，前端仍以 SSE 快照为权威。
+
+### D-093 2D 特殊对话入口与公开演讲触发修复（P-0820-U）
+- **决策**：`PUBLIC_SPEAKING` 仅由“单向声学扩散：一个声源被至少两名角色听见、声源听不回听众”生成单成员演讲组；点击 NPC 只打开真实对话面板并提示玩家输入，不自动伪造玩家消息。多人组继续使用明确“加入发言”语义。
+- **原因**：旧分类器先要求候选组至少两人，后续却只在单人时返回 `PUBLIC_SPEAKING`，自动路径不可达；前端点击 NPC 仅聚焦地图，无法进入输入面板。
+- **放弃**：暂不把导演只读旁听或未脱敏的完整消息流称为玩家 `WEAK` 旁听；真正 WEAK 旁听需后续补服务端按观看者身份脱敏。
+- **影响**：演讲策略/广播链路无需另建入口，已有 announcement SSE 可继续消费；普通三人对话不因新规则误判为演讲。
+
+### D-094 桌面版采用“候选构建先行”的维护与更新门禁（P-0823-A）
+- **决策**：正式发行前统一走 staging：只接收本次构建的可执行 Spring Boot jar、含 `java.instrument` 的 jlink runtime 与 HTTPS 更新地址；`0.0.0`、普通 jar、HTTP 地址和陈旧 staging 一律拒绝。GitHub 只提供手动候选构建，不自动创建公开 Release。
+- **原因**：桌面试包曾因普通 jar、精简 JRE 缺模块与安装目录写入假设而启动失败；更新功能若没有版本、`latest.yml` 和可回滚的静态文件契约，不能视作可维护能力。
+- **影响**：桌面包从 `desktop/staged/` 读取经校验的 engine 与更新地址；维护脚本生成 `latest.yml` 与 blockmap 发布契约；公开发布、更新地址和代码签名仍需主人在候选验证通过后单独授权。
+
+### D-095 自动 DYAD 使用显式会话距离上限（P-0823-C）
+- **决策**：玩家主动发言自动建立 DYAD 继续使用 200px 会话上限，并保留障碍物隔音判断；普通持续交流仍使用 HearingSystem 的音量衰减规则。
+- **原因**：普通声学衰减在 150px 已低于有效听距，但自动建组契约明确要求 200px 内最近 AI 可被拉入 DYAD；两者入口语义不同。
+- **影响**：修复 `ConversationJoinDistanceTest` 的稳定失败，不放宽既有组内持续交流和隔墙规则。
+
+### D-096 角色人设采用“首轮/校准完整、其余轻量”的提示节奏（P-0823-N）
+- **决策**：角色首次生成及带 `【校准提醒】` 的定期校准轮使用完整五层人设；普通轮次使用轻量人设。口头禅、示例和带引号的应答不再作为可复述文本注入，而改为仅在对应触发情境下偶尔采用的可变表达倾向。
+- **原因**：完整五层卡逐轮注入会反复强化固定台词、动作与口头禅，造成同一角色复读；轻量提示仍保留身份、反差、句式和行为要点，足以维持角色稳定性。
+- **影响**：一般模式串行/并行、2D 对话策略均使用轻量上下文维持日常对话；校准提醒仍每 10 个 AI 自主轮恢复完整卡以纠正漂移。旧四字段人设兼容路径不变。
+
+### D-097 主控 LLM 与角色对话 LLM 分离（P-0823-O）
+- **决策**：新增 `roleplay.arbiter-llm.*` 与专用客户端。仲裁调度、叙事整合、地图/结构蓝图、角色及场景生成默认使用主控 LLM；角色逐轮台词继续使用 `roleplay.llm.*`。地图视觉审核保留 `map-llm` 多模态通道。
+- **原因**：主控任务需要较长上下文、事实核对和跨角色逻辑判断，而角色台词更看重人设与表达风格；将两类职责绑定到同一模型会限制独立选型和预算控制。
+- **放弃**：不强制写死某一家“最强模型”，避免替用户选择可能不可用的模型；默认主控仍与既有 DeepSeek 配置兼容，用户可在设置页换成具备更强上下文与推理能力的模型。
+- **影响**：设置页和 integrations API 新增 `arbiter_llm`；运行时保存立即作用于后续请求、重启后回到 YAML/环境变量。旧 `map_llm` 不再决定地图生成模型，仅在启用视觉审核时使用。
+
+### D-098 三种游戏模式统一采用“事实—主张—推测”主控推理框架（P-0823-P）
+- **决策**：一般模式、剧本杀、狼人杀的主控/讨论上下文均显式区分已证实事实、角色公开主张和待验证推测；狼人杀额外严格约束公开与私密信息，剧本杀额外约束证据归属与线索来源。
+- **原因**：长上下文与强推理模型仍会在角色对话中把猜测、指控或私密信息误写成既定事实；只提升模型规格不能解决信息边界和规则一致性问题。
+- **影响**：一般模式主控优先调度能验证目标的角色；剧本杀讨论不会凭空补造线索/时间线；狼人杀调度与旁白不会泄露夜间私密信息，且结果字段须与规则状态一致。
+
+### D-099 一般模式自治世界采用“LLM 提议、Java 校验执行”与轻量群演分层（P-0824-I/J/K/L）
+- **决策**：①玩家一般模式输入先进入按 session 隔离的有界异步邮箱（inputId 幂等、优先级、背压与指标），后台逐会话消费，输出继续走既有定向 SSE；②主控 LLM 只产生白名单 `WorldCommand` 候选，命令经有界幂等总线、前置条件、容量和核心角色保护校验后执行，禁止 LLM 直接修改世界；③角色分为 AMBIENT/TEMPORARY/SUPPORTING/CORE，状态分为 ACTIVE/PASSIVE/DORMANT/ARCHIVED/EXITED；群演仅为可见投影，零独立 LLM/轨道/长期记忆，互动后才晋升真实 Agent；核心角色永不被闲置规则永久退出；④地图使用 QUEUED→GENERATING→VALIDATING→READY→PUBLISHED/FAILED/EXPIRED 生命周期，无效结果不可发布，READY 仍需显式发布；⑤一般模式 2D 默认维持 24 个轻量群演、上限 80，前端将投影与权威世界快照合并。
+- **原因**：完整 Agent 数量直接决定 LLM、轨道、记忆和存档成本；“看起来人多”不等于每个路人都需持续思考。结构化提议/校验分层可让主控扩展世界，同时防幻觉命令、重复提交、容量失控和误删核心角色。异步邮箱将输入接收与长耗时生成解耦，避免前端被单轮 LLM 延迟阻塞。
+- **放弃**：①所有 NPC 都创建完整 Agent；②主控输出自然语言后由执行器猜测意图；③LLM 直接热切当前地图；④长期未触发即物理删除。一般模式多图运行时仍不安全，PUBLISHED 仅表示校验通过并进入可用注册表，不自动替换当前权威地图。
+- **影响**：新增 `/api/world/input|commands|extras|maps|state`；角色退场前先取消生成任务、脱离活动对话组再从世界移除；主控规划默认每 session 最短 15 秒一次、最多 3 条命令；全部容量/周期可配置。前端源码已接异步输入和群演投影，未同步 Spring static、未启动或重启 8000。
+- **安全补充（未衡终审后）**：单例 2D 世界的角色/轨道写命令只接受 `session_id=simulation`；角色命令必须携带当前 tier/status 前置条件且只允许逐级晋升和合法状态迁移；真实 Agent 同名投影禁止创建，核心角色禁止归档/退出；输入消费失败以同一 inputId 有界重试（默认 3 次）；SessionRegistry 的关闭/TTL/容量淘汰会通知自治子系统清理；地图禁用自动发布，READY 只允许显式 publish。
+- **生命周期语义补充**：既有 2D AI 自动登记为受保护 CORE，玩家控制角色明确排除；PASSIVE 在 ConversationManager 设硬门（保留渲染/移动，但脱离现有组且不再自动入组/触发对话 LLM）；DORMANT/ARCHIVED 保存并恢复原 Agent 与原 AgentState 对象，保留位置、目标、记忆和社会关系，不以空壳重建冒充恢复；世界 reset/load 会先清旧生命周期所有权再登记新世界。
+
+### D-100 场景人口采用“LLM 语义判断 + Java 人口预算”，晋升采用有效互动与异步补卡（P-0825-A）
+- **决策**：一般模式不再把群演数量绑定 2D 地图。主控按公开叙事判断 `OUTDOOR_BUSY/OUTDOOR_QUIET/PUBLIC_INDOOR/PRIVATE_INDOOR/TRANSIT/ISOLATED/UNKNOWN`，给出轻量背景群演目标与置信度；Java 按类别区间、全局上限和每扫描最多 6 人限幅并渐进增减。普通点击只记 `ATTENTION=0`，只有已成功处理且带幂等事件 ID 的实际消息/剧情行为才积累有效互动分；AMBIENT 达 2 分、TEMPORARY 达 6 分。
+- **原因**：文本一般模式同样有街道、酒馆、卧室和荒野，是否有坐标不是人口密度依据；同时点击误触不应创建完整 Agent。LLM 适合识别场景语义，但不应拥有容量或直接写世界的权限。
+- **安全边界**：低置信判断保留上一预算；旧规划晚到不得覆盖新场景；人口下调只回收零互动、无 pending 的最久未互动群演；TTL 按闲置时间而非创建时间。角色补卡在全局生命周期锁外异步生成，pending 和 enrichment-ready 双门禁止旁路晋升；补卡失败使用不含外部 persona 的安全模板。非 2D 角色使用 Router 专用无全局 SSE 的 WorldAgent 入口，PASSIVE/DORMANT/ARCHIVED 移入原 Agent 休眠槽，EXITED 才永久移除。
+- **放弃**：①让 LLM 直接决定本轮新增人数；②把真实角色与群演混成同一个预算；③点击一次立即晋升；④休眠时用新 Persona 重建角色；⑤把外部 persona 直接作为补卡失败兜底。
+- **影响**：一般模式主输入统一进入 `/api/world/input`；`/api/world/state` 暴露脱敏后场景人口摘要。室外闹市场景可维持 18-36 个轻量群演，公共室内 5-18，私人室内 0-5，隔离场景 0-3；具体目标仍受 `max-count` 和 `adjust-step` 控制。
+
+## 2026-08-25（P-0825-C：角色卡 TTS 默认声线）
+
+### D-099 角色卡声线默认自动应用，隐藏栏仅保留修改入口
+- **决策**：移除角色详情页两处“启用语音朗读”开关。AI 消息合成默认按角色卡 `voice_mode` / `voice_data` 应用；没有配置时回退系统默认音色。角色卡底部的隐藏栏与右侧设置面板保留，供玩家修改、试听和保存声线。
+- **原因**：声线属于角色卡属性，而非每局需要再次启动的玩法选项；双开关既重复又会让已保存配置看似失效。
+- **放弃**：不增加新的开局 TTS 设置项，也不改变消息旁按需播放或 SSE 音频传输链路。
+- **影响**：纯前端角色详情 UI 收敛；本地角色卡与后端角色库的现有声线同步契约保持不变。
+
+### D-101 非 2D 玩家会话采用“前端选组 + Router 硬过滤”，角色栏默认隐藏（P-0825-B）
+- **决策**：一般模式存在玩家时，角色卡隐藏在独立抽屉；每张卡提供“单独聊天”和“加入群聊”两个选项，群聊至少选择两名 AI 角色。前端随输入提交 `conversation_members` 与 `focused_role_ids`；WorldRuntime 只把成功回合计为有效互动，Router 在执行层只允许所选成员生成回复。
+- **原因**：仅用提示词要求“某人回答”无法保证其他 AI 不抢话；同时常驻角色栏会挤压 Gal 舞台。会话选择属于 UI 意图，回复成员过滤与互动计分必须由后端权威执行。
+- **安全边界**：最多接受 12 名去重成员；成员名必须命中当前 Router 的活跃 Agent 才能生成。轻量路人第一次点击只打开会话、不晋升；首次成功发言后才补卡晋升。群聊中每个 roleId 使用独立幂等事件键，重复输入不会重复计分。
+- **影响**：完整角色可立即参与单聊/群聊；轻量路人首次有效发言后由角色卡状态从“轻量路人”更新为“完整角色”。无玩家导演模式不显示角色交互抽屉，原全体自主调度保持不变。
+
+### D-102 生产默认 LLM 切换为 Tokenra Ox Alpha，凭据仅走环境变量（P-0825-D）
+- **决策**：角色对话与主控通道继续保持独立配置键，但生产默认端点统一切换为 Tokenra OpenAI 兼容接口、模型 `stealth/ox-alpha`；启动脚本同时注入 `ROLEPLAY_LLM_API_KEY` 与 `ROLEPLAY_ARBITER_LLM_API_KEY`。
+- **原因**：本次部署需让角色与主控使用已配置的同一可用提供方，同时保留 D-097 的职责分离能力，后续仍可分别覆盖模型或密钥。
+- **安全边界**：YAML 不保存任何密钥回退值，仓库只保留环境变量占位；本机配置仅在启动时读入进程环境，不写日志、不进入 Git。
+- **影响**：默认部署不再直连 DeepSeek；设置页和 integrations API 的运行时独立覆盖契约不变，地图多模态专用通道不受影响。
+
+### D-103 动态剧本采用“总目标/事实 Java 权威 + LLM 受限后续补丁”（P-0825-H）
+- **决策**：一般模式每会话持有版本化动态剧本。Java 固定总目标并追加已发生变化；每个成功玩家步骤必推进版本。主控与世界命令同次返回 `story_update`，仅可填写阶段标题/目标、后续剧本、下一拍和张力，且总目标、历史和玩家选择均不可改写。阶段目标同步进入 Router 既有 goals。
+- **原因**：纯静态大纲会无视玩家行动，纯 LLM 状态又容易篡改事实或替玩家作决定。把不可逆叙事事实与可变未来编排分离，可同时得到连续性、戏剧性和选择权。
+- **安全边界**：补丁不是可执行世界命令；张力限 0-100；提示明确禁止强制行动、凭空既成事实和提示注入。会话清理/重置同步清理剧本状态；对外只暴露公共剧本摘要。
+- **影响**：`/api/world/state` 新增 `story_script`，非 2D Gal 增“动态剧本”面板；主控可将线索、阻碍、关系变化与选择空间编排为下一拍，而角色/地图生命周期仍由原命令总线校验执行。
+
+### D-104 非 2D 场景美术采用“运行时生图优先、当前对局审核资源回退”（P-0825-I）
+- **决策**：场景与角色的运行时生成提示统一改为非像素二次元视觉小说风；对于当前“沉没的圣·奥古斯丁教堂”对局，提交已审核的教堂背景及五名实际登场角色立绘，按场景/角色精确命中。若未来已生成角色图，仍优先使用该角色图。
+- **原因**：纯渐变或像素占位无法承载该教堂的哥特悬疑氛围；运行时生图又可能不可用或首帧迟到。当前局资源回退保证立即可见，同时不把一套教堂美术错误套用到其他场景。
+- **影响**：新增前端场景美术映射与 `public/art/sunken-st-augustine/` 资源包；对话姓名框也改为按长度缩放与可换行，避免长英文名挤压头像或被截断。
+
+### D-105 一般模式场景目标采用“规则先行、LLM 后台替换”（P-0825-L）
+- **决策**：一般模式起局优先读取已缓存的场景目标；没有缓存时立即注入规则目标并返回，随后后台生成 LLM 目标、持久化并以会话定向 `scene_goals_ready` 事件替换前端场景卡。后台结果仅在会话仍是原会话且仍使用该规则目标时生效，并保留生成期间已经推进的目标状态。
+- **原因**：原 `startScene` 和 `/api/init` 同步等待目标生成，单次 LLM 可重试三次，导致玩家在进入对局界面长时间等待。
+- **放弃**：不取消场景目标，也不让前端自行生成或轮询覆盖目标；规则目标是可玩的即时降级，而非空占位。
+- **影响**：首次进入不再由目标 LLM 决定响应时长；缓存命中仍零 LLM；正式目标就绪后玩家目标和隐藏角色目标自动更新，旧会话或重开局不会被迟到任务串写。
+
+### D-106 WEAK 旁听摘要采用封闭主题类别，禁止回传源文本关键词（P-0825-N）
+- **决策**：`EavesdropSummarizer` 不再从原对话提取高频词或直接使用 LLM 自然语言摘要。规则路径只映射到设施/地点/线索/安排/人物/其他六类；LLM 路径也只能返回同一封闭枚举代码，最终观察句由 Java 生成。
+- **原因**：新增信息泄漏测试证明，旧规则摘要虽未复述完整句子，仍会把“闸门密钥”等高频名词带给 `WEAK` 监听者。摘要变短不等于秘密不泄漏，信息边界必须由确定性白名单保证。
+- **放弃**：不依赖提示词要求模型“说模糊一点”，也不维护无限增长的敏感词黑名单；两者都无法提供可验证的零原文关键词边界。
+- **影响**：`WEAK` 仍知道说话者、粗粒度主题和情绪，但不会收到位置、密钥、数字或设施细节；`MERGED` 完整上下文语义不变。新增“闸门密钥在北侧控制柜”回归断言，全量 1093 tests 通过。
+
+### D-107 公开仓库以可验证主线优先，未归属瓦片不再分发（P-0825-O）
+- **决策**：对外 README 收敛到 Spatial World、Hearing、SpeechGate 与 Context Isolation 四个核心机制；增加前端目录职责页和 ArchUnit 依赖边界测试。审计确认且未在仓库内完成来源/许可说明的两张第三方瓦片直接移除，同时移除其前端加载逻辑。
+- **原因**：公开仓库应让首次阅读者在短时间内理解、定位并验证核心主张；历史批次、素材风险和产品原型不应掩盖空间仿真主线。对许可证不明的分发素材，删除比暗示其受 MIT 覆盖更诚实。
+- **放弃**：不做包名、API 路径、数据路径和前端目录的机械改名；这些稳定兼容标识将在有迁移计划和回归覆盖时再处理。也不把尚未录制的三角色视频包装成已完成 Demo。
+- **影响**：`simulation.track`、`simulation.movement`、`simulation.map` 与 `core`/`agent` 不能依赖 Web controller；CI 同时执行前端 build 与 lint。素材准入改为“来源和许可证可追溯后才能分发”。

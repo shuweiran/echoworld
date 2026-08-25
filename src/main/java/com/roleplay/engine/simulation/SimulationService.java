@@ -1,5 +1,6 @@
 package com.roleplay.engine.simulation;
 
+import jakarta.annotation.PreDestroy;
 import com.roleplay.engine.agent.Agent;
 import com.roleplay.engine.broadcast.AnnouncementService;
 import com.roleplay.engine.broadcast.BroadcastMessage;
@@ -83,6 +84,8 @@ public class SimulationService {
     private final ExecutorService taskExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private volatile long lastDirectorTime = 0;
     private final Set<String> pendingUserMessages = ConcurrentHashMap.newKeySet();
+    /** 生命周期休眠槽：保留原 Agent/AgentState 引用，不丢记忆、位置、目标或社会关系。 */
+    private final ConcurrentHashMap<String, SuspendedAgent> suspendedAgents = new ConcurrentHashMap<>();
     private volatile int lastSaveTick = 0;
     private static final int SNAPSHOT_INTERVAL = 50; // save snapshot every 50 ticks
 
@@ -383,15 +386,19 @@ public class SimulationService {
     public void clearAll() {
         // D1: 清场时同时停止所有群组生成任务
         conversationManager.stopAll();
+        conversationManager.clearPassiveAgents();
         if (schedulerService != null) schedulerService.clear();
         world.clearAgents();
+        suspendedAgents.clear();
         socialState.clear();
     }
 
     /** 动态加入一般模式 2D 世界的 AI。 */
     public synchronized Map<String, Object> addSocialAgent(String name, String personaDesc) {
         if (name == null || name.isBlank()) return Map.of("status", "error", "message", "name required");
-        if (world.getAgent(name) != null) return Map.of("status", "error", "message", "Agent already exists");
+        if (world.getAgent(name) != null || suspendedAgents.containsKey(name)) {
+            return Map.of("status", "error", "message", "Agent already exists or is suspended");
+        }
         Persona persona = new Persona(name);
         persona.setPersonaDesc(personaDesc == null ? "" : personaDesc);
         Agent agent = new Agent(persona, "npc", llmClient);
@@ -405,11 +412,55 @@ public class SimulationService {
 
     /** 动态移除一般模式 2D 世界的 AI，并清理其社会状态。 */
     public synchronized Map<String, Object> removeSocialAgent(String name) {
+        SuspendedAgent suspended = name == null ? null : suspendedAgents.remove(name);
+        if (suspended != null) {
+            socialState.removeAgent(name);
+            return Map.of("status", "ok", "agent", name, "detached_groups", 0);
+        }
         if (name == null || world.getAgent(name) == null) return Map.of("status", "error", "message", "Agent not found");
+        int detachedGroups = conversationManager.detachAgent(name);
         world.removeAgent(name);
         socialState.removeAgent(name);
+        return Map.of("status", "ok", "agent", name, "detached_groups", detachedGroups);
+    }
+
+    /** 从调度世界摘除但保留对象、状态、记忆和社会关系，供生命周期 DORMANT/ARCHIVED 使用。 */
+    public synchronized Map<String, Object> suspendSocialAgent(String name) {
+        if (name == null || name.isBlank()) return Map.of("status", "error", "message", "name required");
+        if (suspendedAgents.containsKey(name)) return Map.of("status", "ok", "agent", name, "already", true);
+        Agent agent = world.getAgent(name);
+        AgentState state = world.getState(name);
+        if (agent == null || state == null) return Map.of("status", "error", "message", "Agent not found");
+        int detachedGroups = conversationManager.detachAgent(name);
+        suspendedAgents.put(name, new SuspendedAgent(agent, state));
+        world.removeAgent(name);
+        return Map.of("status", "ok", "agent", name, "detached_groups", detachedGroups);
+    }
+
+    public synchronized Map<String, Object> resumeSocialAgent(String name) {
+        SuspendedAgent suspended = name == null ? null : suspendedAgents.remove(name);
+        if (suspended == null) return Map.of("status", "error", "message", "Agent is not suspended");
+        if (world.getAgent(name) != null) {
+            suspendedAgents.put(name, suspended);
+            return Map.of("status", "error", "message", "Agent name is occupied");
+        }
+        world.restoreAgent(suspended.agent(), suspended.state());
         return Map.of("status", "ok", "agent", name);
     }
+
+    public boolean isSuspendedAgent(String name) {
+        return name != null && suspendedAgents.containsKey(name);
+    }
+
+    public void setAgentPassive(String name, boolean passive) {
+        conversationManager.setAgentPassive(name, passive);
+    }
+
+    public boolean isAgentPassive(String name) {
+        return conversationManager.isAgentPassive(name);
+    }
+
+    private record SuspendedAgent(Agent agent, AgentState state) {}
 
     public Map<String, Object> getSocialState() { return socialState.toMap(); }
     public Map<String, Object> getSocialState(String agent) { return socialState.forAgent(agent); }
@@ -473,6 +524,13 @@ public class SimulationService {
         } catch (Exception e) {
             log.warn("Failed to save final snapshot: {}", e.getMessage());
         }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        stop();
+        taskExecutor.shutdownNow();
+        conversationManager.shutdown();
     }
 
     public Map<String, Object> getState() {

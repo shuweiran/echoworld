@@ -164,12 +164,19 @@ interface GalState {
   livePlayerName: string;
   /** 剧本杀 roleKey（可选，身份校验） */
   livePlayerKey: string;
+  /** 非 2D 场景中当前选择的轻量路人；下一次有效发言会携带其 roleId。 */
+  liveFocusedRoleId: string;
+  /** 当前非 2D 单聊/群聊的有效互动角色 IDs 与回复成员名。 */
+  liveFocusedRoleIds: string[];
+  liveConversationMembers: string[];
   /** P-0810-08：玩家（主控）发言不渲染气泡（呈现接管视图置 true；输入框保留发送即清空） */
   hidePlayerBubbles: boolean;
   /** 玩家发言请求中 */
   liveSending: boolean;
   /** 玩家发言最近错误（输入区提示） */
   liveSendError: string;
+  /** 异步世界邮箱已接受、但尚未得到后台终态的输入 ID。 */
+  livePendingInputId: string;
   /** P-0810-21：最近一次成功发送时间戳（输入区「已发送」反馈，不依赖玩家气泡回显） */
   liveLastSent: number;
   /** P-0810-21-D：玩家发言候选话术（一般模式玩家回合可选项；round_complete/进入时刷新，空=不显示） */
@@ -223,6 +230,8 @@ interface GalState {
   /** 玩家本地回显（user_input 去重） */
   enqueuePlayerEcho: (text: string) => void;
   setLiveIdentity: (playerName?: string, playerKey?: string) => void;
+  setLiveFocusedRole: (roleId: string) => void;
+  setLiveConversation: (memberNames: string[], roleIds?: string[]) => void;
   setSending: (v: boolean) => void;
   /** P-0810-08：玩家发言气泡开关（true=玩家消息不入队不渲染） */
   setHidePlayerBubbles: (v: boolean) => void;
@@ -419,9 +428,13 @@ export function createGalStore() {
   liveStreams: {},
   livePlayerName: '',
   livePlayerKey: '',
+  liveFocusedRoleId: '',
+  liveFocusedRoleIds: [],
+  liveConversationMembers: [],
   hidePlayerBubbles: false,
   liveSending: false,
   liveSendError: '',
+  livePendingInputId: '',
   liveLastSent: 0,
   liveSuggestions: [],
   liveUnknownRoles: [],
@@ -550,8 +563,12 @@ export function createGalStore() {
       liveStreams: {},
       livePlayerName: opts?.playerName || '',
       livePlayerKey: opts?.playerKey || '',
+      liveFocusedRoleId: '',
+      liveFocusedRoleIds: [],
+      liveConversationMembers: [],
       liveSending: false,
       liveSendError: '',
+      livePendingInputId: '',
       liveLastSent: 0,
       liveSuggestions: [],
       liveUnknownRoles: [],
@@ -581,7 +598,11 @@ export function createGalStore() {
       liveGeneralMode: '',
       liveQueue: [],
       liveStreams: {},
+      liveFocusedRoleId: '',
+      liveFocusedRoleIds: [],
+      liveConversationMembers: [],
       liveSending: false,
+      livePendingInputId: '',
       liveSendError: '',
       liveLastSent: 0,
       liveSuggestions: [],
@@ -762,6 +783,12 @@ export function createGalStore() {
         // P-0810-16：场景目标进展（定向广播；session_id 不符/为空不消费，防多局串扰）
         if (data?.session_id && data.session_id !== s.liveSessionId) break;
         s.applySceneTargetUpdate(data);
+        break;
+      }
+      case 'scene_goals_ready': {
+        // 起局先用规则目标，后台 LLM 目标就绪后整体替换；仍按会话过滤，防多局串扰。
+        if (data?.session_id && data.session_id !== s.liveSessionId) break;
+        s.setLiveGoals(data?.goals);
         break;
       }
       default:
@@ -950,6 +977,14 @@ export function createGalStore() {
       livePlayerName: playerName !== undefined ? playerName : s.livePlayerName,
       livePlayerKey: playerKey !== undefined ? playerKey : s.livePlayerKey,
     })),
+
+  setLiveFocusedRole: (roleId) => set({ liveFocusedRoleId: String(roleId || '') }),
+
+  setLiveConversation: (memberNames, roleIds = []) => set({
+    liveConversationMembers: [...new Set((memberNames || []).map(String).map(v => v.trim()).filter(Boolean))].slice(0, 12),
+    liveFocusedRoleIds: [...new Set((roleIds || []).map(String).map(v => v.trim()).filter(Boolean))].slice(0, 12),
+    liveFocusedRoleId: roleIds.length === 1 ? String(roleIds[0]) : '',
+  }),
 
   setSending: (v) => set({ liveSending: v }),
 

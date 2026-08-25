@@ -235,6 +235,8 @@ export class SimulationScene extends Phaser.Scene {
   private mapRoomLabels: Phaser.GameObjects.Text[] = [];
   private mapZoneLabels: Phaser.GameObjects.Text[] = [];
   private mapSpawnLabels: Phaser.GameObjects.Text[] = [];
+  /** 晨雾镇的实物瓦片实例；只用于 town 主题，重绘地图时统一释放。 */
+  private dawnTileSprites: Phaser.GameObjects.Image[] = [];
   /** 热点像素矩形缓存（脉冲重绘 + 点击命中共用） */
   private mapZones: { cx: number; cy: number; rx: number; ry: number; z: MapZone }[] = [];
   /** 地图内容点击提示（如「此区域无搜证」；底部居中，3s 淡出） */
@@ -262,6 +264,10 @@ export class SimulationScene extends Phaser.Scene {
    * 无素材（空表）时本方法零加载 → 行为与既有一致。
    */
   preload() {
+    // 用户提供的户外城镇瓦片（16×16 atlas）：仅晨雾镇启用，其他 LLM 地图继续使用契约色块兜底。
+    if (!this.textures.exists('dawn-town-tiles')) {
+      this.load.spritesheet('dawn-town-tiles', '/tiles/dawn-town-tiles.png', { frameWidth: 16, frameHeight: 16 });
+    }
     for (const name of Object.keys(this.agentAnims)) {
       const anim = this.agentAnims[name];
       if (!anim || !anim.pngUrl || !anim.jsonUrl) continue;
@@ -272,7 +278,7 @@ export class SimulationScene extends Phaser.Scene {
   }
 
   create() {
-    this.gridG = this.add.graphics();
+    this.gridG = this.add.graphics().setDepth(-5);
     this.obstacleG = this.add.graphics();
     this.markerG = this.add.graphics();
     this.groupG = this.add.graphics();
@@ -454,14 +460,31 @@ export class SimulationScene extends Phaser.Scene {
     const H = Math.max(1, m.height || ground?.length || 0);
     const tileW = WORLD_W / W;
     const tileH = WORLD_H / H;
+    const isDawnTown = m.generator?.kind === 'dawn-social' || m.map_id === 'map_dawn_social_20260820';
+    for (const sprite of this.dawnTileSprites) if (sprite.active) sprite.destroy();
+    this.dawnTileSprites = [];
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const gid = ground?.[y]?.[x] ?? 1;
         const col = collision?.[y]?.[x] ?? 0;
-        const fill = col !== 0 ? 0x223044 : tileColor(gid);
+        const water = Boolean(m.tileProps?.[`${x},${y}`]?.water);
+        const fill = water ? 0x256d8d : (col !== 0 ? 0x223044 : tileColor(gid));
         // 契约瓦片自身完整渲染：不叠整图背景，避免视觉模糊和路径/碰撞边界失真。
         g.fillStyle(fill, 1);
         g.fillRect(x * tileW, y * tileH, tileW + 0.5, tileH + 0.5);
+        if (isDawnTown && !water && this.textures.exists('dawn-town-tiles')) {
+          // 贴图帧：10/11 草地、0/4 石街、20/21 木地板、22/23 屋顶；
+          // 碰撞与可走性仍完全来自地图契约，视觉瓦片不改变行为。
+          const frame = gid === 3 ? ((x + y) % 7 === 0 ? 11 : 10)
+            : gid === 5 ? ((x + y) % 2 === 0 ? 0 : 4)
+              : gid === 1 ? ((x + y) % 2 === 0 ? 20 : 21)
+                : ((x + y) % 2 === 0 ? 22 : 23);
+          const sprite = this.add.image((x + 0.5) * tileW, (y + 0.5) * tileH, 'dawn-town-tiles', frame)
+            .setDisplaySize(tileW + 0.7, tileH + 0.7)
+            .setDepth(-4)
+            .setAlpha(col !== 0 ? 0.94 : 1);
+          this.dawnTileSprites.push(sprite);
+        }
       }
     }
   }

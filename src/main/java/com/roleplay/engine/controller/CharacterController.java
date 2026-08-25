@@ -6,6 +6,7 @@ import com.roleplay.engine.core.PersonaCardLoader;
 import com.roleplay.engine.db.service.DatabaseService;
 import com.roleplay.engine.service.GeneratorService;
 import jakarta.annotation.PostConstruct;
+import java.util.concurrent.CompletableFuture;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -98,10 +99,14 @@ public class CharacterController {
         List<Map<String, Object>> out = new ArrayList<>();
         for (Map<String, Object> ch : characters) {
             Map<String, Object> m = new LinkedHashMap<>(ch);
-            Map<String, Object> card = personaCards.get(String.valueOf(ch.get("name")));
+            String name = String.valueOf(ch.get("name"));
+            Map<String, Object> card = personaCards.get(name);
+            // 回退 PersonaCardLoader（磁盘卡，含 ttsTone 等 AI 生成字段）
+            if (card == null) card = PersonaCardLoader.cardFor(name);
             if (card != null) {
                 if (card.get("appearance") != null) m.putIfAbsent("appearance", card.get("appearance"));
                 if (card.get("summary") != null) m.putIfAbsent("summary", card.get("summary"));
+                if (card.get("ttsTone") != null) m.putIfAbsent("ttsTone", card.get("ttsTone"));
             }
             out.add(m);
         }
@@ -326,6 +331,8 @@ public class CharacterController {
             Map<String, Object> card = buildCardFromResult(name, result);
             personaCards.put(name, card);
             persistCardToDisk(name, card);
+            // P-0817-A：异步生成 TTS 音色描述（不阻塞响应）
+            generateTtsToneAsync(name, persona, voice, str(result.get("appearance"), ""), card);
         }
 
         // 表层响应：saved=true + name + appearance/summary + layers 键名列表，绝不回 layer 内容
@@ -387,6 +394,8 @@ public class CharacterController {
             Map<String, Object> card = buildCardFromResult(finalName, roleResult);
             personaCards.put(finalName, card);
             persistCardToDisk(finalName, card);
+            // P-0817-A：异步生成 TTS 音色描述（不阻塞响应）
+            generateTtsToneAsync(finalName, persona, voice, str(roleResult.get("appearance"), ""), card);
         }
         // 表层响应（对齐 generate 端点形状）：saved + name（最终落库名）+ appearance/summary + layers 键名列表
         Map<String, Object> res = new LinkedHashMap<>();
@@ -536,6 +545,29 @@ public class CharacterController {
         } catch (Exception e) {
             log.warn("CharacterController: persona 卡落盘失败「{}」: {}", name, e.getMessage());
         }
+    }
+
+    /**
+     * P-0817-A：异步生成 TTS 音色描述并更新角色卡。
+     * 在角色卡持久化后调用，不阻塞主流程。生成成功后更新内存卡 + 写盘。
+     */
+    private void generateTtsToneAsync(String name, String persona, String voice, String appearance,
+                                       Map<String, Object> card) {
+        CompletableFuture.supplyAsync(() -> {
+            try {
+                return generator.generateTtsTone(name, persona, voice, appearance);
+            } catch (Exception e) {
+                log.debug("CharacterController: TTS 音色描述生成失败「{}」: {}", name, e.getMessage());
+                return null;
+            }
+        }).thenAccept(tone -> {
+            if (tone != null && !tone.isBlank()) {
+                card.put("ttsTone", tone);
+                personaCards.put(name, card);
+                persistCardToDisk(name, card);
+                log.info("CharacterController: TTS 音色描述已生成「{}」: {}", name, tone);
+            }
+        });
     }
 
     /** 删卡文件（角色删除时清理，防重启残留）。 */

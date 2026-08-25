@@ -1,6 +1,7 @@
 package com.roleplay.engine.service;
 
 import com.roleplay.engine.llm.LLMClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -28,7 +29,7 @@ public class ArbiterService {
         SUPPLEMENT, TOPIC_SWITCH, COMMAND, NEW_PLOT
     }
 
-    public ArbiterService(LLMClient llmClient) {
+    public ArbiterService(@Qualifier("arbiterLlmClient") LLMClient llmClient) {
         this.llmClient = llmClient;
     }
 
@@ -95,13 +96,26 @@ public class ArbiterService {
                 当前阶段：day_discuss
                 轮次：1
 
+                已知对话历史摘要：
+                %s
+
+                上一轮轨道与行动（如有）：
+                %s
+
                 请根据当前阶段和规则，为存活角色配置本轮轨道和行动：
                 - 白天讨论：所有存活者 active（公开讨论）
+
+                【狼人杀主控推理协议】
+                1. 严格区分公开发言、已验证规则结果与角色私密身份；不能把未公开的身份或夜间信息泄露到公开轨道。
+                2. 先核对存活名单、阶段和历史中已发生的事件，再决定发言顺序；不要凭空宣布死亡、查验或胜负。
+                3. reasoning 只说明调度依据与不确定点，不替玩家下结论；胜负只按狼人数量与好人数量的规则状态判定。
 
                 回复JSON（必须包含 role_info 标注各角色身份）：
                 {"reasoning": "阶段说明+行动理由", "role_info": {"角色名": "身份(werewolf/seer/witch/villager)", "alive": true/false}, "tracks": [轨道列表]}
                 """, sceneDescription != null ? sceneDescription : "狼人杀游戏",
-                String.join(", ", agentNames));
+                String.join(", ", agentNames),
+                historySummary != null && !historySummary.isBlank() ? historySummary : "（无历史）",
+                prevText);
         } else {
             String goalsText = "";
             if (goals != null && !goals.isEmpty()) {
@@ -135,7 +149,7 @@ public class ArbiterService {
                     : "\n【轮换要求】≤3人时全部active。4人以上每轮必须轮换active角色。";
 
             prompt = String.format("""
-                你是一个角色扮演游戏的主控（DM）。请分析当前对话状态，为本轮配置铁轨。
+                你是一个角色扮演游戏的主控（DM）。请先基于完整上下文进行事实核对，再为本轮配置铁轨。
 
                 当前场景：%s
 
@@ -157,6 +171,12 @@ public class ArbiterService {
 
                 %s
                 【禁止调度角色】%s
+
+                【主控推理准则】
+                1. 只依据场景、历史、目标和上一轮预测作决定；不臆造已发生的事实。
+                2. 先判断剧情目标与角色信息边界，再决定谁需要说话；避免无关角色重复抢话。
+                3. 若调整上一轮预测、或目标彼此冲突，必须在 reasoning 说明取舍。
+                4. 把“已发生事实”“角色主张”“待验证推测”分开处理；下一轮优先安排能推进或验证当前目标的角色。
 
                 请回复JSON：
                 {"reasoning": "配置逻辑", "tracks": [{"id":"", "agents":[""], "mode":"merged/weak/isolated", "agent_actions":{}}, ...]}
@@ -440,12 +460,17 @@ public class ArbiterService {
                 铁轨配置：%s
                 各角色的本轮输出：%s
 
+                【狼人杀结果判定协议】
+                1. 只根据提供的轨道、发言及明确规则状态归纳本轮，公开旁白不得泄露未公开阵营或夜间私密决策。
+                2. 发言中的指控、辩解均是玩家主张，不等同于查验或定案；没有规则结果不得改写为事实。
+                3. phase、killed、saved、exiled、game_over 与 winner 必须彼此一致；不确定时保留空值或 false。
+
                 回复JSON：
                 {"narration": "GM旁白", "scene_progress": "阶段推进", "phase": "night/day_vote/day_discuss", "killed": "", "saved": "", "exiled": "", "game_over": false, "winner": "", "next_round": {"phase": "", "agents": [], "order": [], "reason": ""}}
                 """, sceneDescription, tracksStr, outputsStr);
         } else {
             prompt = String.format("""
-                你是主控（DM）。请分析本轮对话并输出结构化结果。
+                你是主控（DM）。请先核对场景、铁轨与本轮原始发言，再输出结构化结果。
 
                 当前场景：%s
                 铁轨配置：%s
@@ -454,6 +479,8 @@ public class ArbiterService {
                 要求：
                 1. 整合叙事：用一段连贯文字整合本轮所有角色发言（80-100字）
                 2. 下一轮判断：推测下一轮出场角色、轨道和顺序
+                3. 逻辑约束：不得编造未出现的信息；next_round 必须延续已发生事件与角色目标；有不确定处在 reason 中保守说明
+                4. 上下文校验：明确区分角色说出的主张与已被场景/行动证实的事实；不能把猜测写成剧情既定事实
 
                 回复JSON：
                 {"narration": "整合叙事（80-100字）", "scene_progress": "剧情推进（20-40字）", "next_round": {"agents": [], "mode": "merged", "order": [], "reason": ""}, "chain_analysis": {"tracks": [{"label": "", "mode": "", "reason": ""}]}}

@@ -5,7 +5,7 @@ import java.util.*;
 public class HearingSystem {
 
     private final SpatialGrid spatialGrid;
-    /** 当前地图的实体障碍；墙/建筑的直线遮挡会阻断普通对话和听觉。 */
+    /** 当前地图的实体障碍；墙体和建筑的直线遮挡会阻断普通对话和听觉。 */
     private volatile List<Obstacle> obstacles = List.of();
 
     public record HearingResult(String speakerName, String listenerName,
@@ -104,6 +104,15 @@ public class HearingSystem {
         double effA = rangeA * att * b.getHearRange() / 200.0;
         double effB = rangeB * att * a.getHearRange() / 200.0;
         return dist <= Math.min(effA, effB);
+    }
+
+    /**
+     * 玩家主动发言自动建立 DYAD 使用明确的会话距离上限；仍保留障碍物的隔音判断，
+     * 不把普通持续交流的距离衰减规则误用于“玩家找最近 AI 建组”这一入口。
+     */
+    public boolean canAutoDyadWithinDistance(AgentState a, AgentState b, double maxDistance) {
+        if (a == null || b == null || soundBlocked(a, b)) return false;
+        return a.distanceTo(b) < maxDistance;
     }
 
     private double computeVolume(AgentState agent) {

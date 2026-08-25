@@ -43,6 +43,8 @@ export function ScriptStatePanel(props: {
     onSearch, onTransferClue, onStartDiscussion, onStartVoting, onVote, onResolve, onFinish,
     onOpen2D, onRestart, onLeave, onBackToScene, onGenerateFull,
   } = props;
+  // Hook 必须在所有条件返回之前调用，避免 state 从空切换到有值时改变 Hook 数量。
+  const [secretOpen, setSecretOpen] = useState(false);
   if (!state) {
     return (
       <div className="ww-panel game-card">
@@ -52,7 +54,6 @@ export function ScriptStatePanel(props: {
   }
   const phase: string = state.phase || 'setup';
   // P-0815-F 批2（方向3）：秘密卡展开/收起（长秘密默认截断，与聊天区旁路条 24 字截断对齐）
-  const [secretOpen, setSecretOpen] = useState(false);
   const secretText: string = state.your_secret ? String(state.your_secret) : '';
   const secretTruncated = secretText.length > 24;
   // P-0815-F 批2（方向3）：简单对话版（mode=chat）—— 无取证无地图，隐藏搜证区/2D 讨论区

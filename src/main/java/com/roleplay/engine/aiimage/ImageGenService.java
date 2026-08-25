@@ -1,13 +1,20 @@
 package com.roleplay.engine.aiimage;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.roleplay.engine.broadcast.SseBroadcaster;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -21,6 +28,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Base64;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -133,7 +141,14 @@ public class ImageGenService {
     private final Map<String, GenTask> tasks = new ConcurrentHashMap<>();
     private final ExecutorService executor;
     private final ComfyUIClient comfyClient;
+    private final ObjectMapper mapper = new ObjectMapper();
+    private final HttpClient externalHttp = HttpClient.newBuilder().connectTimeout(java.time.Duration.ofSeconds(10)).build();
     private final Path outputRoot;
+    private volatile String provider;
+    private volatile String externalBaseUrl;
+    private volatile String externalApiKey;
+    private volatile String externalModel;
+    private volatile String externalEndpoint;
     private volatile String loraName;
     /** P-0810-05：表情 img2img 强度（yml roleplay.ai-image.img2img-denoise，默认 0.5）。 */
     private volatile double img2imgDenoise;
@@ -154,6 +169,11 @@ public class ImageGenService {
 
     public ImageGenService(ComfyUIClient comfyClient, AiImageProperties props) {
         this.comfyClient = comfyClient;
+        this.provider = valueOr(props.getProvider(), "comfyui");
+        this.externalBaseUrl = props.getExternalBaseUrl();
+        this.externalApiKey = props.getExternalApiKey();
+        this.externalModel = valueOr(props.getExternalModel(), "gpt-image-1");
+        this.externalEndpoint = valueOr(props.getExternalEndpoint(), "/images/generations");
         this.outputRoot = Paths.get(props.getOutputDir()).toAbsolutePath();
         this.loraName = props.getLoraName() == null ? "" : props.getLoraName().trim();
         this.img2imgDenoise = props.getImg2imgDenoise();
@@ -200,6 +220,11 @@ public class ImageGenService {
     /** 运行时更新图片生成 provider 设置；后续新任务立即使用。 */
     public void applyRuntimeSettings(AiImageProperties props) {
         if (props == null) return;
+        provider = valueOr(props.getProvider(), "comfyui");
+        externalBaseUrl = props.getExternalBaseUrl();
+        externalApiKey = props.getExternalApiKey();
+        externalModel = valueOr(props.getExternalModel(), "gpt-image-1");
+        externalEndpoint = valueOr(props.getExternalEndpoint(), "/images/generations");
         comfyClient.setBaseUrl(props.getComfyuiBaseUrl());
         loraName = props.getLoraName() == null ? "" : props.getLoraName().trim();
         img2imgDenoise = Math.max(0, Math.min(1, props.getImg2imgDenoise()));
@@ -210,6 +235,8 @@ public class ImageGenService {
     public boolean isRmbgEnabled() {
         return rmbgEnabled;
     }
+
+    public String provider() { return provider; }
 
     // ── 角色注册表 ─────────────────────────────────────────────
 
@@ -408,7 +435,7 @@ public class ImageGenService {
         WorkflowSpec spec = new WorkflowSpec(positive, NEGATIVE_PROMPT, baseSeed + frameIndex,
                 comp.width, comp.height, loraName, "rp_" + profile.id());
         Path dir = outputRoot.resolve(profile.id());
-        List<String> saved = comfyClient.generateOnce(spec, dir, fileName);
+        List<String> saved = generate(spec, dir, fileName);
         if (saved.isEmpty()) {
             throw new IOException("未产出图片: " + fileName);
         }
@@ -432,12 +459,95 @@ public class ImageGenService {
         if (!Files.isRegularFile(avatar)) {
             throw new IOException("avatar 底图缺失，无法 img2img: " + avatar);
         }
-        List<String> saved = comfyClient.generateImg2Img(spec, avatar, img2imgDenoise, dir, fileName);
+        List<String> saved = isExternalProvider()
+                ? generate(spec, dir, fileName)
+                : comfyClient.generateImg2Img(spec, avatar, img2imgDenoise, dir, fileName);
         if (saved.isEmpty()) {
             throw new IOException("未产出图片: " + fileName);
         }
         // P-0810-04：img2img 产物同样自动抠背景 → {frame}_t.png
         removeBackgroundIfEnabled(dir, fileName);
+    }
+
+    private List<String> generate(WorkflowSpec spec, Path dir, String fileName) throws IOException {
+        return isExternalProvider() ? generateExternal(spec, dir, fileName) : comfyClient.generateOnce(spec, dir, fileName);
+    }
+
+    private boolean isExternalProvider() {
+        return "openai-compatible".equalsIgnoreCase(provider) || "external".equalsIgnoreCase(provider);
+    }
+
+    /** OpenAI-compatible image generation：POST /images/generations，兼容 url 与 b64_json 响应。 */
+    private List<String> generateExternal(WorkflowSpec spec, Path dir, String fileName) throws IOException {
+        if (externalBaseUrl == null || externalBaseUrl.isBlank()) {
+            throw new IOException("外部图片 API 未配置 external-base-url");
+        }
+        if (externalApiKey == null || externalApiKey.isBlank()) {
+            externalApiKey = System.getenv("ROLEPLAY_IMAGE_API_KEY");
+        }
+        if (externalApiKey == null || externalApiKey.isBlank()) {
+            throw new IOException("外部图片 API 未配置 API Key");
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("model", externalModel);
+        body.put("prompt", spec.positivePrompt() + ". Avoid: " + spec.negativePrompt());
+        body.put("size", spec.width() + "x" + spec.height());
+        body.put("n", 1);
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(joinUrl(externalBaseUrl, externalEndpoint)))
+                .timeout(java.time.Duration.ofSeconds(Math.max(1, timeoutSeconds)))
+                .header("Content-Type", "application/json")
+                .header("Authorization", "Bearer " + externalApiKey.trim())
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body), StandardCharsets.UTF_8))
+                .build();
+        HttpResponse<String> response;
+        try {
+            response = externalHttp.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException("外部图片 API 请求被中断", e);
+        }
+        if (response.statusCode() >= 300) {
+            throw new IOException("外部图片 API HTTP " + response.statusCode() + ": " + excerpt(response.body()));
+        }
+        JsonNode data = mapper.readTree(response.body()).path("data");
+        if (!data.isArray() || data.isEmpty()) throw new IOException("外部图片 API 响应缺少 data");
+        JsonNode first = data.get(0);
+        byte[] bytes;
+        String b64 = first.path("b64_json").asText("");
+        if (!b64.isBlank()) {
+            bytes = Base64.getDecoder().decode(b64);
+        } else {
+            String url = first.path("url").asText("");
+            if (url.isBlank()) throw new IOException("外部图片 API 响应缺少 url/b64_json");
+            HttpRequest download = HttpRequest.newBuilder(URI.create(url)).timeout(java.time.Duration.ofSeconds(60)).GET().build();
+            try {
+                HttpResponse<byte[]> downloaded = externalHttp.send(download, HttpResponse.BodyHandlers.ofByteArray());
+                if (downloaded.statusCode() >= 300) throw new IOException("图片下载 HTTP " + downloaded.statusCode());
+                bytes = downloaded.body();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("外部图片下载被中断", e);
+            }
+        }
+        Files.createDirectories(dir);
+        Files.write(dir.resolve(fileName), bytes);
+        return List.of(fileName);
+    }
+
+    private static String joinUrl(String base, String path) {
+        String b = base == null ? "" : base.replaceAll("/+$", "");
+        String p = path == null ? "" : path.trim();
+        return b + (p.startsWith("/") ? p : "/" + p);
+    }
+
+    private static String valueOr(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value.trim();
+    }
+
+    private static String excerpt(String value) {
+        if (value == null) return "";
+        return value.length() > 300 ? value.substring(0, 300) : value;
     }
 
     /** P-0810-04：抠背景（失败仅 log.warn，不影响主流程——RmbgRemover 内部已兜底不抛）。 */
@@ -540,8 +650,8 @@ public class ImageGenService {
     /**
      * 场景背景图生成（同步返回 URL）。
      * <ul>
-     *   <li><b>入参</b>：scene（场景名/描述）→ 像素风非 NSFW 背景（Pony 文生图：
-     *       {@link #SCORE_TAGS} + pixel art + 场景描述 + {@link Composition#BACKGROUND} 构图词
+     *   <li><b>入参</b>：scene（场景名/描述）→ 二次元视觉小说风非 NSFW 背景（Pony 文生图：
+     *       {@link #SCORE_TAGS} + anime visual novel background + 场景描述 + {@link Composition#BACKGROUND} 构图词
      *       （background/no characters）+ 复用 {@link #NEGATIVE_PROMPT} 负面词）；</li>
      *   <li><b>落盘</b>：{@code outputRoot/backgrounds/{hash}.png}，URL {@code /ai-images/backgrounds/{hash}.png}
      *       （hash = scene 键 SHA-256 稳定 hash，同键同文件同 seed）；</li>
@@ -601,9 +711,11 @@ public class ImageGenService {
         }
     }
 
-    /** 场景背景图文生图（像素风、无角色；不做 RMBG 抠图——背景图本无角色）。 */
+    /** 场景背景图文生图（二次元视觉小说背景、无角色；不做 RMBG 抠图——背景图本无角色）。 */
     private String generateSceneBackgroundFile(String scene, String hash, Path dir) throws IOException {
-        String positive = SCORE_TAGS + ", pixel art, " + scene + ", " + Composition.BACKGROUND.description;
+        String positive = SCORE_TAGS + ", anime visual novel background, polished hand-painted 2d illustration, "
+                + scene + ", cinematic lighting, no characters, no text, no pixel art, "
+                + Composition.BACKGROUND.description;
         WorkflowSpec spec = new WorkflowSpec(positive, NEGATIVE_PROMPT, stableSeed(scene),
                 Composition.BACKGROUND.width, Composition.BACKGROUND.height, loraName, "bg_" + hash);
         List<String> saved = comfyClient.generateOnce(spec, dir, hash + ".png");
@@ -642,12 +754,16 @@ public class ImageGenService {
         return false;
     }
 
-    /** 测试/关闭用：优雅停线程池。 */
+    /** 测试/容器关闭用：优雅停线程池。 */
+    @PreDestroy
     public void shutdown() {
         executor.shutdown();
         try {
-            executor.awaitTermination(2, TimeUnit.SECONDS);
+            if (!executor.awaitTermination(2, TimeUnit.SECONDS)) {
+                executor.shutdownNow();
+            }
         } catch (InterruptedException e) {
+            executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
     }

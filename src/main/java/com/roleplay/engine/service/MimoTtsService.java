@@ -1,5 +1,6 @@
 package com.roleplay.engine.service;
 
+import jakarta.annotation.PreDestroy;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.roleplay.engine.config.AppConfig;
@@ -92,12 +93,13 @@ public class MimoTtsService {
     private final ObjectMapper mapper = new ObjectMapper();
     private final HttpClient http;
     private final ExecutorService ttsExecutor = Executors.newVirtualThreadPerTaskExecutor();
+    private final ExecutorService httpExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
     public MimoTtsService(AppConfig appConfig) {
         this.appConfig = appConfig;
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
-                .executor(Executors.newVirtualThreadPerTaskExecutor())
+                .executor(httpExecutor)
                 .build();
     }
 
@@ -181,15 +183,19 @@ public class MimoTtsService {
                 ? (isBlank(s.voiceName()) ? cfg().getDefaultVoice() : s.voiceName())
                 : null;
 
-        String body;
-        try {
-            body = buildRequestBody(mode, model, tone, text, format, voice, s.voiceData());
-        } catch (IOException e) {
-            throw new IllegalStateException("构建 MiMo TTS 请求失败: " + e.getMessage(), e);
+        String body = null;
+        if (!isExternalProvider()) {
+            try {
+                body = buildRequestBody(mode, model, tone, text, format, voice, s.voiceData());
+            } catch (IOException e) {
+                throw new IllegalStateException("构建 MiMo TTS 请求失败: " + e.getMessage(), e);
+            }
         }
 
         long start = System.currentTimeMillis();
-        TtsResult result = postSynthesize(apiKey, body, model, format, start);
+        TtsResult result = isExternalProvider()
+                ? postExternalSpeech(apiKey, text, model, format, voice, start)
+                : postSynthesize(apiKey, body, model, format, start);
         log.info("MiMo TTS 完成: mode={}, model={}, format={}, {} chars → {} bytes, {}ms",
                 mode, model, format, text.length(), result.audio().length, result.elapsedMs());
         return result;
@@ -208,6 +214,11 @@ public class MimoTtsService {
             case DESIGN: return cfg().getModelDesign();
             default: return cfg().getModelBasic();
         }
+    }
+
+    private boolean isExternalProvider() {
+        return "openai-compatible".equalsIgnoreCase(cfg().getProvider())
+                || "external".equalsIgnoreCase(cfg().getProvider());
     }
 
     /**
@@ -411,6 +422,45 @@ public class MimoTtsService {
         }
     }
 
+    /** OpenAI-compatible TTS：POST /audio/speech，响应为音频二进制。 */
+    private TtsResult postExternalSpeech(String apiKey, String text, String model, String format,
+                                          String voice, long start) {
+        try {
+            Map<String, Object> root = new LinkedHashMap<>();
+            root.put("model", model);
+            root.put("input", text);
+            root.put("voice", isBlank(voice) ? cfg().getDefaultVoice() : voice);
+            root.put("response_format", format);
+            String endpoint = cfg().getSpeechEndpoint();
+            if (isBlank(endpoint)) endpoint = "/audio/speech";
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(joinUrl(cfg().getBaseUrl(), endpoint)))
+                    .timeout(Duration.ofSeconds(Math.max(1, cfg().getTimeoutSeconds())))
+                    .header("Content-Type", "application/json")
+                    .header("Authorization", "Bearer " + apiKey)
+                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(root), StandardCharsets.UTF_8))
+                    .build();
+            HttpResponse<byte[]> response = http.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            long elapsed = System.currentTimeMillis() - start;
+            if (response.statusCode() != 200) {
+                String detail = new String(response.body(), StandardCharsets.UTF_8);
+                throw new IllegalStateException("外部 TTS HTTP " + response.statusCode() + ": " + excerpt(detail));
+            }
+            return new TtsResult(response.body(), format, text, model, elapsed);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("外部 TTS 请求被中断", e);
+        } catch (IOException e) {
+            throw new IllegalStateException("外部 TTS 请求失败: " + e.getMessage(), e);
+        }
+    }
+
+    private static String joinUrl(String base, String path) {
+        String b = base == null ? "" : base.replaceAll("/+$", "");
+        String p = path == null ? "" : path.trim();
+        return b + (p.startsWith("/") ? p : "/" + p);
+    }
+
     private static String excerpt(String s) {
         if (s == null) return "";
         return s.length() > 200 ? s.substring(0, 200) + "…" : s;
@@ -425,10 +475,11 @@ public class MimoTtsService {
     /** 运行时状态摘要（不含 apiKey）。 */
     public Map<String, Object> statusMap() {
         Map<String, Object> m = new LinkedHashMap<>();
-        m.put("provider", "xiaomimimo");
+        m.put("provider", cfg().getProvider());
         m.put("enabled", isEnabled());
         m.put("configured", resolveApiKey() != null);
         m.put("base_url", cfg().getBaseUrl());
+        m.put("speech_endpoint", cfg().getSpeechEndpoint());
         m.put("models", Map.of(
                 "basic", cfg().getModelBasic(),
                 "clone", cfg().getModelClone(),
@@ -452,15 +503,21 @@ public class MimoTtsService {
         return out;
     }
 
-    /** 关闭虚拟线程执行器（测试/容器收尾用；Spring 单例由 JVM 生命周期兜底）。 */
+    /** 关闭本服务拥有的两个虚拟线程执行器。 */
+    @PreDestroy
     public void shutdown() {
         ttsExecutor.shutdown();
+        httpExecutor.shutdown();
         try {
             if (!ttsExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
                 ttsExecutor.shutdownNow();
             }
+            if (!httpExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                httpExecutor.shutdownNow();
+            }
         } catch (InterruptedException e) {
             ttsExecutor.shutdownNow();
+            httpExecutor.shutdownNow();
             Thread.currentThread().interrupt();
         }
     }

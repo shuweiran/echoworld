@@ -37,6 +37,18 @@ public class ModeClassifier {
             for (String name : component) { if (assigned.contains(name)) { anyAssigned = true; break; } }
             if (anyAssigned) continue;
 
+            // PUBLIC_SPEAKING 是“一个声源 + 多个听众”，不是普通多人对话。
+            // 这类候选在旧逻辑中先被 members.size() < 2 丢弃，后面的
+            // determineMode(members.size() == 1) 因此永远不可达。只有当声学图
+            // 明确表现为单向扩散（声源能被至少两人听见、声源听不回听众）时，
+            // 才创建单成员演讲组，避免把普通三人闲聊误判成演讲。
+            AgentState publicSpeaker = findPublicSpeaker(component, audible, allStates);
+            if (publicSpeaker != null) {
+                groups.add(new GroupCandidate(List.of(publicSpeaker), ConversationMode.PUBLIC_SPEAKING));
+                assigned.add(publicSpeaker.getAgentName());
+                continue;
+            }
+
             List<AgentState> members = new ArrayList<>();
             for (String name : component) {
                 AgentState s = allStates.get(name);
@@ -56,6 +68,32 @@ public class ModeClassifier {
         }
 
         return groups;
+    }
+
+    private AgentState findPublicSpeaker(Set<String> component,
+                                         List<HearingSystem.HearingResult> audible,
+                                         Map<String, AgentState> allStates) {
+        AgentState candidate = null;
+        int bestListeners = 1;
+        for (String name : component) {
+            int outgoing = 0;
+            int incoming = 0;
+            for (HearingSystem.HearingResult h : audible) {
+                if (!h.canHear()) continue;
+                if (!name.equals(h.speakerName()) || !component.contains(h.listenerName())) continue;
+                outgoing++;
+            }
+            for (HearingSystem.HearingResult h : audible) {
+                if (!h.canHear()) continue;
+                if (!name.equals(h.listenerName()) || !component.contains(h.speakerName())) continue;
+                incoming++;
+            }
+            if (outgoing >= 2 && incoming == 0 && outgoing > bestListeners) {
+                candidate = allStates.get(name);
+                bestListeners = outgoing;
+            }
+        }
+        return candidate;
     }
 
     private Set<Set<String>> findConnectedComponents(Map<String, List<String>> adjacency,

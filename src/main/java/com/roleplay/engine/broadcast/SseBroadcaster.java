@@ -32,4 +32,13 @@ public interface SseBroadcaster {
     default void broadcastToSession(String sessionId, String eventType, Object data) {
         broadcast(eventType, data);
     }
+
+    /**
+     * 向指定会话内已认证的玩家连接推送私密事件。
+     *
+     * <p>默认实现安全丢弃；实现方必须显式提供玩家级投递能力，绝不把私密事件降级为整局广播。
+     */
+    default void broadcastToPlayers(String sessionId, String eventType, Object data, String... players) {
+        // fail closed: 私密事件没有玩家级通道时宁可丢弃，也不能降级为整局/全局广播
+    }
 }

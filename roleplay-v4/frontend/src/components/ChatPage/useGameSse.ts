@@ -8,10 +8,10 @@
  *   - 对局状态（script 星号 与 werewolf 星号事件）→ 写 store（轮询降级为兜底）
  *   - announcement → store.addAnnouncement（横幅/公告栏数据源恢复）
  *   - agent_token → 流式打字机逐字渲染
- * 会话定向：script 模式带 scriptSessionId、werewolf 带 werewolfSessionId、其他模式不带
- * （全局广播全覆盖；无匹配会话时定向事件静默丢弃，前端 3s 轮询兜底）。
+ * 会话定向：script 模式带 scriptSessionId + 玩家凭证，werewolf 带 werewolfSessionId，
+ * 一般模式带 Router sessionId；无匹配会话时定向事件静默丢弃，前端轮询兜底。
  */
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useAppStore } from '../../store/appStore';
 import { useSSE } from '../../api/useSSE';
 import { ttsPlayer } from '../../services/ttsPlayer';
@@ -33,6 +33,10 @@ const WW_ROLE_CN: Record<string, string> = {
 export function useGameSse() {
   const scriptSessionId = useAppStore(s => s.scriptSessionId);
   const werewolfSessionId = useAppStore(s => s.werewolfSessionId);
+  const generalSessionId = useAppStore(s => s.sessionId);
+  const currentPlayer = useAppStore(s => s.currentPlayer);
+  const scriptRoleKey = useAppStore(s => s.scriptRoleKey);
+  const werewolfRoleKey = useAppStore(s => s.werewolfRoleKey);
   const mode = useAppStore(s => s.mode);
 
   // 稳定 handler（ref 持有，避免每次渲染重建导致 useSSE 重连）
@@ -382,9 +386,20 @@ export function useGameSse() {
     return '';
   }, []);
 
-  // 会话定向：按当前模式选会话（变化时 useSSE 内部自动重连）
-  const sseSessionId = mode === 'script' ? scriptSessionId : (mode === 'werewolf' ? werewolfSessionId : '');
-  useSSE((evt, data) => handlerRef.current(evt, data), sseSessionId);
+  const onSseEvent = useCallback((evt: string, data: any) => handlerRef.current(evt, data), []);
+  const onSseStatus = useCallback((status: 'connecting' | 'open' | 'reconnecting') => {
+    useAppStore.getState().setSseHealthy(status === 'open');
+  }, []);
+
+  // 所有模式都按当前 session 订阅；剧本杀额外携带本人身份，才能收到服务端私密事件。
+  const sseSessionId = mode === 'script'
+    ? scriptSessionId
+    : (mode === 'werewolf' ? werewolfSessionId : generalSessionId);
+  const gameIdentity = mode === 'script'
+    ? { player: currentPlayer, playerKey: scriptRoleKey }
+    : (mode === 'werewolf' ? { player: currentPlayer, playerKey: werewolfRoleKey } : undefined);
+  useSSE(onSseEvent, sseSessionId || undefined, onSseStatus, gameIdentity);
+  useEffect(() => () => useAppStore.getState().setSseHealthy(false), []);
 
   // 暴露 getSessionId 供需要按当前对局取会话的场景使用（保留引用稳定性）
   return { getSessionId };

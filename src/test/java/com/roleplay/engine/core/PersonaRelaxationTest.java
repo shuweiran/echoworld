@@ -13,13 +13,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * P-0813-B：角色卡约束松绑（Persona 措辞与示例处理）。
  *
  * <p>覆盖：① layer0 标题措辞松绑（「不可违背最高优先级」→「核心行为准则…可随剧情合理演变」）；
- * ② 完整版 sampleLines 前加防复读指令行（「禁止逐字复述」）且示例最多输出 3 条（存量数据不动，仅渲染截断）；
- * ③ 轻量版不再输出 sampleLines 原句（只保留其他表达风格字段）；④ 完整版与轻量版末尾均追加正向收尾指令
+ * ② 完整版将口头禅与 sampleLines 降级为可变表达倾向，不透出原句；
+ * ③ 轻量版同样不透出固定台词；④ 完整版与轻量版末尾均追加正向收尾指令
  * （允许即兴/不完美回应，不必重复固定动作或口头禅）；⑤ 旧 4 字段回退路径不受影响（无行动收尾、无防复读指令）。
  */
 class PersonaRelaxationTest {
 
-    /** 五层卡（6 条示例 —— 验证渲染截断到 3 条）。 */
+    /** 五层卡（固定台词不应进入生成提示）。 */
     private Persona newFiveLayerPersona() {
         Persona p = new Persona("小铃");
         p.setLayers(Map.of(
@@ -46,26 +46,16 @@ class PersonaRelaxationTest {
         assertTrue(prompt.contains("当客人说咖啡不好喝时，先道歉再重做，不辩解。"), "layer0 规则内容保留");
     }
 
-    // ── ② 完整版：防复读指令 + 示例截断 3 条 ─────────────────────
+    // ── ② 完整版：固定台词降级为可变表达倾向 ─────────────────────
 
     @Test
-    @DisplayName("② 完整版 sampleLines 前加防复读指令行（禁止逐字复述）")
-    void fullPromptHasAntiRepeatInstruction() {
+    @DisplayName("② 完整版将口头禅与示例改为可变表达倾向")
+    void fullPromptTurnsSamplesIntoVariableTendency() {
         String prompt = newFiveLayerPersona().buildSystemPrompt();
-        assertTrue(prompt.contains("使用提示：以下示例仅提示语气节奏与说话习惯，禁止逐字复述，对话中应结合当下情境即兴发挥。"),
-                "示例区块前有防复读指令行");
-        assertTrue(prompt.contains("原话示例："), "原话示例标签保留");
-    }
-
-    @Test
-    @DisplayName("②b 完整版示例最多输出 3 条（6 条存量数据渲染截断，第 4 条起不出现）")
-    void fullPromptSamplesCappedAtThree() {
-        String prompt = newFiveLayerPersona().buildSystemPrompt();
-        assertTrue(prompt.contains("示例一") && prompt.contains("示例二") && prompt.contains("示例三"),
-                "前 3 条示例输出");
-        assertFalse(prompt.contains("示例四"), "第 4 条示例被截断（存量数据不动，仅渲染截断）");
-        assertFalse(prompt.contains("示例五"));
-        assertFalse(prompt.contains("示例六"));
+        assertTrue(prompt.contains("可变表达倾向"), "完整版明确为可变表达");
+        assertTrue(prompt.contains("符合当前情境时偶尔采用"), "只在触发情境时使用");
+        assertFalse(prompt.contains("「欢迎回来」"), "不透出口头禅原句");
+        assertFalse(prompt.contains("示例一"), "不透出 sampleLines 原句");
     }
 
     // ── ③ 轻量版：不含 sampleLines 原句 ─────────────────────────
@@ -75,8 +65,9 @@ class PersonaRelaxationTest {
     void lightweightDropsSampleLines() {
         String light = newFiveLayerPersona().buildLightweightPrompt();
         assertTrue(light.contains("【说话风格】"), "Layer2 风格段保留");
-        assertTrue(light.contains("「欢迎回来」"), "口头禅（其他表达风格字段）保留");
+        assertTrue(light.contains("可变风格线索"), "口头禅被降级为可变线索");
         assertTrue(light.contains("短句为主"), "句长与句式保留");
+        assertFalse(light.contains("「欢迎回来」"), "轻量版不透出口头禅原句");
         assertFalse(light.contains("示例一"), "轻量版不含 sampleLines 原句");
         assertFalse(light.contains("原话示例"), "轻量版不含「原话示例」区块");
     }

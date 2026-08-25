@@ -23,6 +23,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDateTime;
@@ -569,42 +570,55 @@ public class ScriptGameService {
         }
     }
 
-    private final Map<String, ScriptGame> games = new ConcurrentHashMap<>();
+    /** P-0805-A（B5）：最近访问时间戳（sessionId → lastAccessMillis）。 */
+    private final Map<String, Long> lastAccess = new ConcurrentHashMap<>();
+
+    /**
+     * 对局缓存。历史代码的大量业务入口直接调用 games.get；在这里统一记录访问，避免只由
+     * getGame 刷新 TTL、真实行动仍被误判为空闲。compute 路径由 findGame 显式刷新。
+     */
+    private final Map<String, ScriptGame> games = new ConcurrentHashMap<>() {
+        @Override
+        public ScriptGame get(Object key) {
+            if (!(key instanceof String sessionId)) return null;
+            return super.computeIfPresent(sessionId, (sid, game) -> {
+                lastAccess.put(sid, System.currentTimeMillis());
+                return game;
+            });
+        }
+    };
 
     /** P-0805-A（B5）：对局 TTL —— 内存 games 表超时未访问的对局惰性清理（防长期运行内存泄漏；重启后由快照重建）。 */
     @Value("${roleplay.game.script.game-ttl-ms:43200000}")
     private long gameTtlMs = 43200000L; // 默认 12h
 
-    /** P-0805-A（B5）：最近访问时间戳（sessionId → lastAccessMillis；getGame/init 时更新）。 */
-    private final Map<String, Long> lastAccess = new ConcurrentHashMap<>();
-
-    /** P-0805-A（B5）：惰性清扫计数器（每 256 次访问触发一次全表扫描，摊薄开销）。 */
-    private final java.util.concurrent.atomic.AtomicInteger sweepCounter = new java.util.concurrent.atomic.AtomicInteger();
-
     /** P-0805-A（B5，测试钩子）：运行时切换对局 TTL（毫秒；0=禁用清理，对齐 setVoteTimeoutMs 先例）。 */
     public void setGameTtlMs(long ms) { this.gameTtlMs = Math.max(0, ms); }
 
-    /** P-0805-A（B5）：访问即刷新（getGame 公共读取点）；惰性清扫（周期性扫描过期对局移除）+ 阶段超时惰性推进。 */
-    private ScriptGame touchGame(String sessionId) {
+    /** P-0824-F：读取即刷新最近访问时间。 */
+    private ScriptGame findGame(String sessionId) {
         if (sessionId == null) return null;
-        ScriptGame g = games.get(sessionId);
+        return games.computeIfPresent(sessionId, (sid, game) -> {
+            lastAccess.put(sid, System.currentTimeMillis());
+            return game;
+        });
+    }
+
+    /** P-0805-A（B5）：访问即刷新（getGame 公共读取点）+ 阶段超时惰性推进。 */
+    private ScriptGame touchGame(String sessionId) {
+        ScriptGame g = findGame(sessionId);
         if (g != null) {
-            lastAccess.put(sessionId, System.currentTimeMillis());
-            lazySweep();
             // P-0805-C：轮询触发的阶段超时自动推进（惰性，零定时器）
             maybeAdvanceOnTimeout(g);
         }
         return g;
     }
 
-    private void lazySweep() {
-        if (gameTtlMs <= 0) return;
-        int n = sweepCounter.incrementAndGet();
-        if ((n & 0xFF) != 0) return; // 每 256 次访问
-        sweepExpired();
-    }
-
-    /** P-0805-A（B5，测试钩子）：立即执行一次过期清扫（绕过节流）。 */
+    /**
+     * P-0824-F：定时清扫空闲对局，不再依赖第 256 次业务访问。
+     * games.compute 与 findGame 的 computeIfPresent 按 session key 串行，避免刚被触达的局并发误删。
+     */
+    @Scheduled(fixedDelayString = "${roleplay.game.script.sweep-interval-ms:60000}")
     public void sweepExpired() {
         if (gameTtlMs <= 0) return;
         long now = System.currentTimeMillis();
@@ -612,13 +626,69 @@ public class ScriptGameService {
         for (Map.Entry<String, Long> e : lastAccess.entrySet()) {
             if (e.getValue() != null && e.getValue() < deadline) {
                 String sid = e.getKey();
-                lastAccess.remove(sid);
-                ScriptGame evicted = games.remove(sid);
-                if (evicted != null) {
+                long observed = e.getValue();
+                final boolean[] expiredState = {false};
+                games.compute(sid, (key, game) -> {
+                    Long current = lastAccess.get(key);
+                    if (current != null && current == observed && current < deadline) {
+                        lastAccess.remove(key, current);
+                        expiredState[0] = true;
+                        return null;
+                    }
+                    return game;
+                });
+                if (expiredState[0]) {
+                    clearGameAttachments(sid);
                     log.info("Script game {} evicted (idle > {}ms), snapshot persists state", sid, gameTtlMs);
                 }
             }
         }
+    }
+
+    /** 显式关闭一局；快照仍保留，可由 resume 恢复。 */
+    public boolean evictGame(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return false;
+        String normalized = sessionId.trim();
+        ScriptGame removed = games.remove(normalized);
+        lastAccess.remove(normalized);
+        clearGameAttachments(normalized);
+        if (removed != null) log.info("Script game {} explicitly evicted; snapshot persists state", normalized);
+        return removed != null;
+    }
+
+    /** 统一移除所有 service 级旁路状态；讨论引擎先停止，防止清理后继续生成。 */
+    private void clearGameAttachments(String sessionId) {
+        ConversationManager conversation = discussionConversations.remove(sessionId);
+        if (conversation != null) {
+            try {
+                conversation.shutdown();
+            } catch (RuntimeException e) {
+                log.warn("Script game {} discussion shutdown failed during eviction: {}", sessionId, e.getMessage());
+            }
+        }
+        discussionWorlds.remove(sessionId);
+        discussionDirectors.remove(sessionId);
+        playerBindingsBySession.remove(sessionId);
+    }
+
+    /** 新建/恢复缓存统一登记 lastAccess；同 session 的旧旁路状态必须先清空。 */
+    private void cacheGame(String sessionId, ScriptGame game) {
+        games.put(sessionId, game);
+        lastAccess.put(sessionId, System.currentTimeMillis());
+    }
+
+    /**
+     * 初始化同一 session 的新对局时保留 controller 在 init 前登记的 player_id 绑定。
+     * 显式关闭/TTL 淘汰仍走 {@link #evictGame(String)} 并彻底清理绑定。
+     */
+    private void replaceCachedGame(String sessionId, ScriptGame game) {
+        Map<String, String> pendingBindings = new LinkedHashMap<>(
+                playerBindingsBySession.getOrDefault(sessionId, Map.of()));
+        evictGame(sessionId);
+        if (!pendingBindings.isEmpty()) {
+            playerBindingsBySession.put(sessionId, new ConcurrentHashMap<>(pendingBindings));
+        }
+        cacheGame(sessionId, game);
     }
 
     public ScriptGameService(LLMClient llmClient, ApprovalService approvalService) {
@@ -707,7 +777,7 @@ public class ScriptGameService {
             game.round = 1;
             game.phaseStartedAt = System.currentTimeMillis();
             game.phaseTimeoutMs = this.phaseTimeoutMs;
-            games.put(sessionId, game);
+            replaceCachedGame(sessionId, game);
 
             // C3: 概略态也发放 roleKey（重连/身份认证概略期可用；generate_full 补齐完整剧本时保留）
             for (String player : game.players) {
@@ -733,7 +803,7 @@ public class ScriptGameService {
         game.phase = chatMode ? Phase.DISCUSSION : Phase.INVESTIGATION;
         game.round = 1;
         game.phaseTimeoutMs = this.phaseTimeoutMs;
-        games.put(sessionId, game);
+        replaceCachedGame(sessionId, game);
 
         // GAP-4c: 剧本生成即落库（对局重启不丢剧本；A4-3 验收依赖）
         persistScript(game);
@@ -2197,7 +2267,7 @@ public class ScriptGameService {
      * 非法 door 目标（无目标、目标=当前图、door 不存在/非 door 型、远离 door、阶段不符）→ 容错错误返回。
      * 角色/线索/AP/秘密/票型为对局级状态，切换天然保留。
      *
-     * @param playerKey  可选身份校验（对齐 C3 玩家级端点，空串向后兼容）
+     * @param playerKey  必填身份凭证，必须匹配本局玩家 roleKey
      * @param doorZoneId 触发 door zone id（可空——缺省走显式 target_map_id 直切模式）
      * @param px, py     触发者瓦片坐标（可空——服务端不持有玩家权威位置，坐标由客户端上报，缺省跳过靠近校验）
      * @param targetMapId 目标地图 id（可空——缺省取 door zone 的 target/to/target_map_id 字段）
@@ -3447,6 +3517,11 @@ public class ScriptGameService {
         return discussionDirectors.get(sessionId);
     }
 
+    /** 测试钩子（同包）：指定对局的 player_id 绑定副本。 */
+    Map<String, String> getPlayerBindings(String sessionId) {
+        return new LinkedHashMap<>(playerBindingsBySession.getOrDefault(sessionId, Map.of()));
+    }
+
     /**
      * GAP-3: 讨论用 persona —— 不写入秘密明文（秘密隐藏由 WEAK 轨道 + 目标承担，A3-2）。
      * 秘密原文仍通过 getSecretFor / your_secret 仅发放给对应玩家。
@@ -3476,7 +3551,9 @@ public class ScriptGameService {
         } else {
             desc.append("你尚未掌握任何线索证据，主要通过他人发言获取信息。");
         }
-        desc.append("讨论时应根据已知线索发言、试探他人、隐藏不利信息。");
+        desc.append("【剧本杀主控讨论规则】先区分已持证据、他人公开陈述与个人推测：证据可引用，陈述需追问核验，"
+                + "推测必须保留不确定性；不得把猜测说成已证实事实，不得凭空补造线索、时间线或他人秘密。"
+                + "讨论时应根据已知线索发言、试探他人、隐藏不利信息，并让本轮发言服务于查证、澄清或误导的明确目的。");
         Persona persona = new Persona(player);
         persona.setPersonaDesc(desc.toString());
         persona.setBackground(game.background);
@@ -3716,7 +3793,7 @@ public class ScriptGameService {
         if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
         if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
         if (game.phase == Phase.ENDED) return Map.of("error", "对局已结束，无法退出");
-        // 身份校验（与玩家级端点一致：有 player_key 必须匹配；无 key 向后兼容按玩家名）
+        // 身份校验：player_key 必须匹配，玩家名不能替代凭证。
         Map<String, Object> denied = checkPlayerAccess(sessionId, player, playerKey);
         if (denied != null) return denied;
         boolean newly = game.trustees.add(player);
@@ -3892,15 +3969,17 @@ public class ScriptGameService {
     // ═══════════════════════════════════════════════════════════
 
     /**
-     * C3: 玩家级端点身份校验 —— 有 player_key 时校验其与该玩家在本次对局的 roleKey 匹配；
-     * 无 player_key 时向后兼容（仍按玩家名，现状不变）。
+     * C3/D-078: 玩家级端点身份校验 —— player_key 必须与该玩家在本次对局的 roleKey 匹配。
+     * 匿名公共状态不走本方法，由 controller 显式返回 {@code toMap("")}；不得再以玩家名替代凭证。
      *
      * @return null 表示通过；非 null 为错误 map（controller 转 403）
      */
     public Map<String, Object> checkPlayerAccess(String sessionId, String player, String playerKey) {
         ScriptGame game = games.get(sessionId);
         if (game == null) return Map.of("error", "游戏不存在");
-        if (playerKey == null || playerKey.isBlank()) return null; // 向后兼容：无 key 按玩家名
+        if (playerKey == null || playerKey.isBlank()) {
+            return Map.of("error", "身份校验失败：缺少 player_key");
+        }
         String expected = playerKeysOf(game).get(player);
         if (expected == null || !expected.equals(playerKey)) {
             return Map.of("error", "身份校验失败：player_key 与玩家不匹配");
@@ -3910,7 +3989,7 @@ public class ScriptGameService {
 
     /** C3: 玩家 roleKey 是否有效（匹配该玩家在本局的令牌）。 */
     public boolean isPlayerKeyValid(String sessionId, String player, String playerKey) {
-        if (playerKey == null || playerKey.isBlank()) return true; // 无 key 兼容
+        if (playerKey == null || playerKey.isBlank()) return false;
         ScriptGame game = games.get(sessionId);
         if (game == null) return false;
         String expected = game.playerKeys.get(player);
@@ -4224,6 +4303,9 @@ public class ScriptGameService {
         Map<String, Object> c = snap.get();
         if (!sessionId.equals(str(c.get("session_id")))) return null;
 
+        // 可能存在上次异常清理遗留的讨论引擎/身份绑定；恢复前统一摘除，随后从快照重建。
+        evictGame(sessionId);
+
         ScriptGame game = new ScriptGame();
         game.sessionId = sessionId;
         game.phase = parsePhase(c.get("phase"));
@@ -4408,7 +4490,7 @@ public class ScriptGameService {
         playerBindingsBySession.put(sessionId, new LinkedHashMap<>(savedBindings));
         remapByBindings(game, savedBindings);
 
-        games.put(sessionId, game);
+        cacheGame(sessionId, game);
         log.info("Script game {} restored from snapshot (phase={}, players={}, round={})",
                 sessionId, game.phase.name(), game.players.size(), game.round);
         return game;

@@ -125,4 +125,45 @@ class WerewolfRenameTest {
 
         assertTrue(svc.getHumanPlayers(sid).contains("大明"), "query player_id 应同样解析登记");
     }
+
+    @Test
+    @DisplayName("⑤ 真人已在逆序名单后位：init 私密视图和 roleKey 仍归真人")
+    void humanAlreadyInLaterPosition_receivesOwnPrivateViewAndRoleKey() {
+        WerewolfService svc = new WerewolfService(new ApprovalService());
+        WerewolfController ctl = new WerewolfController(svc, null,
+                new PlayerIdentityService(emptyRepo()));
+
+        Map<String, Object> body = initBody(List.of("AI甲", "真人", "AI乙"));
+        body.put("roles", Map.of("AI甲", "werewolf", "真人", "seer", "AI乙", "villager"));
+        ResponseEntity<Map<String, Object>> resp = ctl.init("真人", "", "", body);
+        Map<String, Object> view = resp.getBody();
+        String sid = String.valueOf(view.get("session_id"));
+
+        assertEquals("seer", view.get("your_role"), "init 必须返回真人视角，不能返回 players[0] 的 AI 私密角色");
+        assertEquals(svc.getRoleKey(sid, "真人"), view.get("role_key"), "init 令牌必须归当前真人");
+        assertFalse(view.get("role_key").equals(svc.getRoleKey(sid, "AI甲")), "不得泄露首个 AI 的令牌");
+        assertEquals("真人", svc.getGame(sid).alive.get(0), "Controller 应在建局前把真人移动到首位");
+    }
+
+    @Test
+    @DisplayName("⑥ player_id 解析名不同：替换旧名、迁移角色并返回解析名令牌")
+    void resolvedPlayerName_replacesLegacyNameAndOwnsInitToken() {
+        WerewolfService svc = new WerewolfService(new ApprovalService());
+        WerewolfController ctl = new WerewolfController(svc, null,
+                new PlayerIdentityService(boundRepo("pid-renamed", "新名")));
+
+        Map<String, Object> body = initBody(List.of("AI甲", "旧名", "AI乙"));
+        body.put("roles", Map.of("AI甲", "werewolf", "旧名", "witch", "AI乙", "villager"));
+        ResponseEntity<Map<String, Object>> resp = ctl.init("旧名", "", "pid-renamed", body);
+        Map<String, Object> view = resp.getBody();
+        String sid = String.valueOf(view.get("session_id"));
+        WerewolfService.GameState game = svc.getGame(sid);
+
+        assertEquals(List.of("新名", "AI甲", "AI乙"), game.alive, "解析名应替换旧名并置于首位，不得产生双身份");
+        assertFalse(game.roles.containsKey("旧名"), "旧名角色键必须移除");
+        assertEquals(WerewolfService.Role.WITCH, game.roles.get("新名"), "旧名的自定义角色应迁移到解析名");
+        assertEquals("witch", view.get("your_role"), "init 私密视图应按解析后的真人名生成");
+        assertEquals(svc.getRoleKey(sid, "新名"), view.get("role_key"), "返回令牌必须属于解析后的真人身份");
+        assertEquals(Set.of("新名"), svc.getHumanPlayers(sid), "AI 行动器的人类排除名单应使用解析名");
+    }
 }

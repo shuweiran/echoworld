@@ -1,4 +1,4 @@
-# CLAUDE.md — Claude Code 接入指引
+# CLAUDE.md — EchoWorld Claude Code 接入指引
 
 > 本文件是 Claude Code（或其他遵循 CLAUDE.md 约定的 AI 编码助手）的**自动加载入口**。
 

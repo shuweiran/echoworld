@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * An AI character that participates in the roleplay conversation.
@@ -29,6 +30,8 @@ public class Agent {
     private final String role;
     private final LLMClient llmClient;
     private volatile boolean isGenerating = false;
+    /** 简化生成路径（2D 对话等）的首轮完整人设门闩；之后由轻量提示维持风格。 */
+    private final AtomicBoolean directPersonaPrimed = new AtomicBoolean(false);
     /** P-0810-09：当前角色的隐藏目标（场景目标机制）—— buildContext/生成路径注入系统提示，不暴露给玩家。 */
     private volatile String hiddenGoal = null;
     /** P-0813-I：当前行为窗口文案提供者（2D 世界由 SimulationService 注册，读 AgentState.scheduleText）。
@@ -140,8 +143,8 @@ public class Agent {
 
         List<Message> messages = new ArrayList<>();
 
-        // 1. System prompt from persona
-        String systemContent = appendReminder(appendHiddenGoal(appendScheduleWindow(persona.buildSystemPrompt())));
+        // 首轮与带校准提醒的轮次使用完整人设；其余轮次用轻量版，避免固定台词逐轮强化。
+        String systemContent = appendReminder(appendHiddenGoal(appendScheduleWindow(personaPromptFor(history))));
         if (sceneDescription != null && !sceneDescription.isEmpty()) {
             systemContent += "\n\n【当前场景】\n" + sceneDescription;
         }
@@ -265,7 +268,7 @@ public class Agent {
         try {
             if (token != null) token.checkpoint();
             List<Message> messages = List.of(
-                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(appendScheduleWindow(persona.buildSystemPrompt())))),
+                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(appendScheduleWindow(personaPromptFor(context))))),
                 new Message(Message.Role.USER, "user", context)
             );
             completed = token != null
@@ -293,7 +296,7 @@ public class Agent {
         try {
             if (token != null) token.checkpoint();
             List<Message> messages = List.of(
-                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(appendScheduleWindow(persona.buildSystemPrompt())))),
+                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(appendScheduleWindow(personaPromptFor(context))))),
                 new Message(Message.Role.USER, "user", context)
             );
             completed = llmClient.callStream(messages, token, onDelta);
@@ -317,5 +320,20 @@ public class Agent {
     @Override
     public String toString() {
         return "Agent{" + getName() + "}";
+    }
+
+    private String personaPromptFor(List<Message> history) {
+        boolean hasConversation = history != null && history.stream()
+                .anyMatch(m -> m.getRole() != Message.Role.SYSTEM);
+        boolean hasCalibration = history != null && history.stream().anyMatch(m ->
+                m.getRole() == Message.Role.SYSTEM && m.getContent() != null
+                        && m.getContent().startsWith("【校准提醒】"));
+        return !hasConversation || hasCalibration ? persona.buildSystemPrompt() : persona.buildLightweightPrompt();
+    }
+
+    private String personaPromptFor(String context) {
+        boolean hasCalibration = context != null && context.contains("【校准提醒】");
+        return hasCalibration || !directPersonaPrimed.getAndSet(true)
+                ? persona.buildSystemPrompt() : persona.buildLightweightPrompt();
     }
 }

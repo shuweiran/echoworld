@@ -17,7 +17,7 @@ import static org.mockito.Mockito.mock;
 
 /**
  * P-0815-E 需求3：/api/simulation/events 刷新慢 + 界面卡顿优化验证——
- * ① SSE world_snapshot 节流：世界 200ms/tick，广播改为每 2 tick 一次（400ms）；
+ * ① SSE world_snapshot：世界 200ms/tick，位置每 tick 广播（200ms）；
  * ② SSE 事件载荷附 recentConversations：2D 聊天消息即时推送（不再等 3s 轮询）。
  *
  * <p>验证手段（沿用 SSEControllerSessionTest 先例）：SseEmitter.send 在未绑定响应前把事件
@@ -52,7 +52,7 @@ class SimulationSseThrottleTest {
     }
 
     @Test
-    @DisplayName("① SSE world_snapshot 节流：真实世界跑 ~1.5s（≈7 tick），广播事件数 ≈ tick/2（每 2 tick 一次）")
+    @DisplayName("① SSE world_snapshot：真实世界跑 ~1.5s（≈7 tick），广播事件数接近 tick 数")
     void sseSnapshotBroadcastIsThrottled() throws Exception {
         SimulationWorld world = new SimulationWorld();
         world.registerAgent(new Agent(new Persona("A", "测试人格A"), "test", null), 10, 10, 200.0, 50.0);
@@ -73,10 +73,10 @@ class SimulationSseThrottleTest {
         int events = countEvents(text, "world_snapshot");
 
         assertTrue(ticks >= 4, "世界应已跑至少 4 tick，实际 " + ticks);
-        // 节流语义：每 2 tick 至多一次广播（宽松上界）；未节流会 ≈ ticks 次
+        // 实时位置语义：每 tick 广播，允许少量调度丢帧但不应退化到 400ms 一次
         assertTrue(events >= 1, "至少 1 次广播");
-        assertTrue(events <= ticks / 2 + 1,
-                "广播次数应受节流限制（每 2 tick 一次）：events=" + events + " ticks=" + ticks);
+        assertTrue(events >= ticks / 2,
+                "广播不应低于约半数 tick：events=" + events + " ticks=" + ticks);
     }
 
     @Test

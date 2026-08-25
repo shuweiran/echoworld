@@ -8,6 +8,7 @@
  * P-0810-06（live 模式）：
  *  - 说话者从 store.speakers 解析（demo 角色 + live 动态占位角色）；\n *  - kind=system（announcement）→ 旁白样式 + 系统名（📢 前缀）展示；\n *  - kind=player（user_input/本地回显）→ 玩家气泡样式（右对齐金色）；\n *  - 流式句（streamed）→ 打字机实时渲染，hint 显示「✦ 生成中…」；\n *  - 无消息等待态：已连接等待 / 未连接提示。
  */
+import { type CSSProperties } from 'react';
 import { useGalStore } from './GalStore';
 import type { GalLiveMessage } from './GalStore';
 import type { GalMessage } from './galDemoData';
@@ -15,6 +16,13 @@ import { speakerName, speakerOf } from './galDemoData';
 import { GalSprite, GalNamePlate } from './GalCharacter';
 import { portraitUrlFor } from './GalStage';
 import { TtsPlayButton } from '../components/TtsPlayButton';
+
+/** 名字越长字号越收敛，名称框保持内容自适应而不压坏左上对话头。 */
+function namePlateStyle(name: string, color: string): CSSProperties {
+  const length = Array.from(name || '').length;
+  const fontSize = Math.max(11, 15 - Math.max(0, length - 5) * 0.38);
+  return { color, '--gal-name-size': `${fontSize.toFixed(1)}px` } as CSSProperties;
+}
 
 export function GalDialogBox() {
   const current = useGalStore(s => s.current);
@@ -149,7 +157,7 @@ export function GalDialogBox() {
         ) : isPlayerMsg ? (
           <>
             <div className="gal-dialog-head gal-dialog-head-right">
-              <div className="gal-dialog-name" style={{ color }}>{name}</div>
+              <div className="gal-dialog-name" style={namePlateStyle(name, color)}>{name}</div>
               <div className="gal-dialog-avatar">
                 {msg && <GalSprite speaker={speakerOf('player')!} size={2} />}
               </div>
@@ -173,7 +181,7 @@ export function GalDialogBox() {
                   return sp.placeholder ? <GalNamePlate speaker={sp} size={2} /> : <GalSprite speaker={sp} size={2} />;
                 })()}
               </div>
-              <div className="gal-dialog-name" style={{ color }}>{name}</div>
+              <div className="gal-dialog-name" style={namePlateStyle(name, color)}>{name}</div>
             </div>
             <div className="gal-dialog-text">
               {text}{typingInProgress && <span className="gal-caret">▌</span>}

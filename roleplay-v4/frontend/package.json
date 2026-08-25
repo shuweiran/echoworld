@@ -1,15 +1,22 @@
 {
   "name": "frontend",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
+  "main": "desktop/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "oxlint",
-    "preview": "vite preview"
+    "lint": "oxlint src desktop/main.cjs desktop/preload.cjs",
+    "preview": "vite preview",
+    "desktop:dev": "npm run build && electron ./desktop/main.cjs",
+    "desktop:dist": "npm run build && electron-builder --win nsis zip",
+    "desktop:runtime": "powershell -ExecutionPolicy Bypass -File ./desktop/build-runtime.ps1",
+    "desktop:prepare-release": "powershell -ExecutionPolicy Bypass -File ./desktop/prepare-release.ps1",
+    "desktop:update-manifest": "powershell -ExecutionPolicy Bypass -File ./desktop/create-update-manifest.ps1"
   },
   "dependencies": {
+    "electron-updater": "^6.8.9",
     "phaser": "^3.90.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
@@ -20,8 +27,51 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.7.0",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
     "oxlint": "^1.71.0",
     "typescript": "~6.0.2",
     "vite": "^5.4.21"
+  },
+  "build": {
+    "appId": "com.roleplay.huanjingbook",
+    "productName": "EchoWorld",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "desktop/main.cjs",
+      "desktop/preload.cjs",
+      "package.json",
+      "!**/*.{pfx,pem,key,keystore,p12,p8}"
+    ],
+    "extraResources": [
+      {
+        "from": "desktop/staged/roleplay-engine.jar",
+        "to": "engine/roleplay-engine.jar"
+      },
+      {
+        "from": "desktop/runtime-release",
+        "to": "jre"
+      },
+      {
+        "from": "desktop/staged/update-config.json",
+        "to": "update-config.json"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ],
+      "artifactName": "EchoWorld-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

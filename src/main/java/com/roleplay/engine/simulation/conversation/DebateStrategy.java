@@ -216,7 +216,7 @@ public class DebateStrategy implements ConversationStrategy {
         if (agent == null) return "";
 
         StringBuilder sb = new StringBuilder();
-        sb.append(agent.getPersona().buildSystemPrompt()).append("\n\n");
+        sb.append(agent.getPersona().buildLightweightPrompt()).append("\n\n");
 
         sb.append("【辩论模式】你正在参与一场辩论。你的立场：").append(self.getStance().name()).append("。\n");
 
@@ -256,7 +256,7 @@ public class DebateStrategy implements ConversationStrategy {
         if (agent == null) return "";
 
         StringBuilder sb = new StringBuilder();
-        sb.append(agent.getPersona().buildSystemPrompt()).append("\n\n");
+        sb.append(agent.getPersona().buildLightweightPrompt()).append("\n\n");
         sb.append("【辩论模式】你正在旁观一场辩论，立场中立。当前发言人是")
                 .append(group.getCurrentSpeaker()).append("。\n");
         sb.append("请做一个简短的观战反应（10字内），末尾加【情绪：xxx】。");

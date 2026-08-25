@@ -59,6 +59,8 @@ export interface ScriptGalChatPanelProps {
  *  响应式读取 liveSessionId：父组件挂载 effect（enterLiveMode）执行后本组件自动重连到该会话。 */
 function ScriptGalSseBridge() {
   const sessionId = useGalStore(s => s.liveSessionId);
+  const playerName = useGalStore(s => s.livePlayerName);
+  const playerKey = useGalStore(s => s.livePlayerKey);
   const applySseEvent = useGalStore(s => s.applySseEvent);
   const bumpLiveEvent = useGalStore(s => s.bumpLiveEvent);
   const setLiveStatus = useGalStore(s => s.setLiveStatus);
@@ -67,7 +69,7 @@ function ScriptGalSseBridge() {
     applySseEvent(evt, data);
   }, [applySseEvent, bumpLiveEvent]);
   const onStatus = useCallback((st: any) => setLiveStatus(st), [setLiveStatus]);
-  useSSE(onEvent, sessionId || undefined, onStatus);
+  useSSE(onEvent, sessionId || undefined, onStatus, { player: playerName, playerKey });
   return null;
 }
 

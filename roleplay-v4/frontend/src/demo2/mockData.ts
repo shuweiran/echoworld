@@ -29,6 +29,18 @@ function pick<T>(arr: T[], i: number): T {
 
 function makeRole(i: number, home: string[], secret = '', introOverride = ''): RoleCard {
   const name = pick(ROLE_NAME_POOL, i);
+  const ttsTones = [
+    '青年女声，温柔甜美，语速偏慢，尾音轻柔',
+    '青年男声，低沉磁性，语速沉稳，偶尔带慵懒感',
+    '青年女声，清脆活泼，语速快，语气多变',
+    '青年男声，阳光少年音，语速适中，语气明朗',
+    '青年女声，淡雅知性，语速平缓，语气温和',
+    '青年男声，冷淡低沉，语速慢，语气克制',
+    '少年音，清亮稚嫩，语速快，语气好奇',
+    '青年女声，沙哑慵懒，语速慢，语气漫不经心',
+    '中年男声，浑厚沉稳，语速慢，语气威严',
+    '青年男声，爽朗干脆，语速快，语气直率',
+  ];
   return {
     id: `role_${i}_${name}`,
     name,
@@ -41,6 +53,7 @@ function makeRole(i: number, home: string[], secret = '', introOverride = ''): R
     hasSecret: !!secret,
     source: 'preset',
     homeScripts: home,
+    ttsTone: ttsTones[i % ttsTones.length],
   };
 }
 

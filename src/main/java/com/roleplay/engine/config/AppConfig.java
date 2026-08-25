@@ -27,6 +27,8 @@ public class AppConfig {
     private LLMConfig llm = new LLMConfig();
     /** P-0818-B：地图生成专用 LLM（roleplay.map-llm.*，小米 MiMo）——只用于地图/结构生成 */
     private MapLlmConfig mapLlm = new MapLlmConfig();
+    /** 主控 LLM：仲裁、地图及角色/场景生成共用；角色对话仍使用 llm。 */
+    private ArbiterLlmConfig arbiterLlm = new ArbiterLlmConfig();
     private MemoryConfig memory = new MemoryConfig();
     private ArbiterConfig arbiter = new ArbiterConfig();
     private MonitorConfig monitor = new MonitorConfig();
@@ -58,6 +60,8 @@ public class AppConfig {
     public void setLlm(LLMConfig llm) { this.llm = llm; }
     public MapLlmConfig getMapLlm() { return mapLlm; }
     public void setMapLlm(MapLlmConfig mapLlm) { this.mapLlm = mapLlm; }
+    public ArbiterLlmConfig getArbiterLlm() { return arbiterLlm; }
+    public void setArbiterLlm(ArbiterLlmConfig arbiterLlm) { this.arbiterLlm = arbiterLlm; }
 
     public MemoryConfig getMemory() { return memory; }
     public void setMemory(MemoryConfig memory) { this.memory = memory; }
@@ -145,6 +149,20 @@ public class AppConfig {
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
         public String getBaseUrl() { return baseUrl; }
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+        public String getModel() { return model; }
+        public void setModel(String model) { this.model = model; }
+    }
+
+    /** 主控独立连接配置。默认值与角色 LLM 相同，但可在设置页单独调整。 */
+    public static class ArbiterLlmConfig {
+        private String apiKey = "";
+        private String apiBase = "https://api.deepseek.com";
+        private String model = "deepseek-v4-flash";
+
+        public String getApiKey() { return apiKey; }
+        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+        public String getApiBase() { return apiBase; }
+        public void setApiBase(String apiBase) { this.apiBase = apiBase; }
         public String getModel() { return model; }
         public void setModel(String model) { this.model = model; }
     }
@@ -388,6 +406,8 @@ public class AppConfig {
         public void setMimo(MimoConfig mimo) { this.mimo = mimo; }
 
         public static class MimoConfig {
+            /** TTS provider：xiaomimimo 保持现有 MiMo chat/completions；openai-compatible 使用 /audio/speech。 */
+            private String provider = "xiaomimimo";
             private boolean enabled = true;
             private String apiKey = "";
             private String baseUrl = "https://token-plan-cn.xiaomimimo.com/v1";
@@ -398,8 +418,11 @@ public class AppConfig {
             private String defaultTone = "自然温柔的语气";
             private String builtinVoices = "mimo_default";
             private int timeoutSeconds = 60;
+            private String speechEndpoint = "/audio/speech";
             private String openclawConfig = "";
 
+            public String getProvider() { return provider; }
+            public void setProvider(String provider) { this.provider = provider; }
             public boolean isEnabled() { return enabled; }
             public void setEnabled(boolean enabled) { this.enabled = enabled; }
             public String getApiKey() { return apiKey; }
@@ -420,6 +443,8 @@ public class AppConfig {
             public void setBuiltinVoices(String builtinVoices) { this.builtinVoices = builtinVoices; }
             public int getTimeoutSeconds() { return timeoutSeconds; }
             public void setTimeoutSeconds(int timeoutSeconds) { this.timeoutSeconds = timeoutSeconds; }
+            public String getSpeechEndpoint() { return speechEndpoint; }
+            public void setSpeechEndpoint(String speechEndpoint) { this.speechEndpoint = speechEndpoint; }
             public String getOpenclawConfig() { return openclawConfig; }
             public void setOpenclawConfig(String openclawConfig) { this.openclawConfig = openclawConfig; }
         }

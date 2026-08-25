@@ -36,7 +36,7 @@ async function request<T>(url: string, options?: RequestInit & { timeout?: numbe
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: res.statusText }));
-      throw new Error(err.detail || `HTTP ${res.status}`);
+      throw new Error(err.error || err.detail || `HTTP ${res.status}`);
     }
     // P1-6：后端 DELETE（/api/scenes/{id}、/api/characters/{name} 等）返回 200 空 body，
     // 原无条件 res.json() 会抛 "Failed to execute 'json' on 'Response': Unexpected end of JSON input"。
@@ -215,22 +215,50 @@ export const api = {
       body: JSON.stringify({ agents, me: me || '', characters: characterDetails || [] }),
     });
   },
-  startRound: (turns: number = 1) => request<any>('/api/round/start', { method: 'POST', body: JSON.stringify({ turns }) }),
+  startRound: (turns: number = 1, sessionId?: string) => request<any>('/api/round/start', {
+    method: 'POST', body: JSON.stringify({ turns, ...(sessionId ? { session_id: sessionId } : {}) }),
+  }),
   rollback: (round: number, sessionId?: string) => request<any>('/api/round/rollback', { method: 'POST', body: JSON.stringify({ round, ...(sessionId ? { session_id: sessionId } : {}) }) }),
   /** P-0810-21-D：玩家发言候选话术（一般模式玩家回合可选项；POST /api/round/suggest，LLM 失败后端兜底通用候选） */
   suggest: (sessionId: string, count?: number) => request<any>('/api/round/suggest', { method: 'POST', body: JSON.stringify({ session_id: sessionId, count: count || 3 }) }),
   /** P-0810-07：send 增可选 session_id（一般模式多会话定向；缺省走默认单例，旧调用零变化） */
   send: (text: string, playerName?: string, sessionId?: string) => request<any>('/api/send', { method: 'POST', body: JSON.stringify({ text, player_name: playerName || '', ...(sessionId ? { session_id: sessionId } : {}) }) }),
+  /** P-0824-L：一般模式异步输入邮箱；202 只表示入队，AI 输出继续经会话 SSE 到达。 */
+  worldInput: (text: string, playerName: string | undefined, sessionId: string, inputId?: string,
+               focusedRoleId?: string, focusedRoleIds?: string[], conversationMembers?: string[]) =>
+    request<any>('/api/world/input', {
+      method: 'POST',
+      body: JSON.stringify({
+        session_id: sessionId,
+        input_id: inputId || (globalThis.crypto?.randomUUID?.() ?? `input-${Date.now()}`),
+        content: text,
+        speaker: playerName || '',
+        ...(focusedRoleId ? { focused_role_id: focusedRoleId } : {}),
+        ...(focusedRoleIds?.length ? { focused_role_ids: focusedRoleIds } : {}),
+        ...(conversationMembers?.length ? { conversation_members: conversationMembers } : {}),
+        priority: 'CRITICAL',
+      }),
+    }),
+  /** 一般模式世界状态：轻量路人、生命周期与场景人口概况。 */
+  worldState: (sessionId: string) =>
+    request<any>(`/api/world/state?session_id=${encodeURIComponent(sessionId)}`),
   /** P-0810-07：查询当前一般模式 mode（free/protagonist/multi_track/director；GET /api/mode?session_id=） */
   getMode: (sessionId?: string) =>
     request<any>(`/api/mode${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''}`),
   /** P-0810-15：场景背景图（配合后端 P-0810-14 背景端点；body {scene} → {url}；未就绪/失败由调用方渐变占位兜底） */
   sceneBackground: (scene: string) =>
     request<any>('/api/ai-image/scene-background', { method: 'POST', body: JSON.stringify({ scene }), timeout: 120000 }),
-  stop: () => request<any>('/api/stop', { method: 'POST' }),
-  setMode: (mode: string, protagonist?: string, directorCharacter?: string) => request<any>('/api/mode', { method: 'POST', body: JSON.stringify({ mode, protagonist: protagonist || '', director_character: directorCharacter || '' }) }),
+  stop: (sessionId?: string) => request<any>('/api/stop', {
+    method: 'POST', body: JSON.stringify(sessionId ? { session_id: sessionId } : {}),
+  }),
+  setMode: (mode: string, protagonist?: string, directorCharacter?: string, sessionId?: string) => request<any>('/api/mode', {
+    method: 'POST',
+    body: JSON.stringify({ mode, protagonist: protagonist || '', director_character: directorCharacter || '', ...(sessionId ? { session_id: sessionId } : {}) }),
+  }),
 
-  setGoals: (goals: string[]) => request<any>('/api/goals', { method: 'POST', body: JSON.stringify({ goals }) }),
+  setGoals: (goals: string[], sessionId?: string) => request<any>('/api/goals', {
+    method: 'POST', body: JSON.stringify({ goals, ...(sessionId ? { session_id: sessionId } : {}) }),
+  }),
   getGoals: () => request<any>('/api/goals'),
   getHistory: (params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -257,29 +285,29 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ players, roles: roles || {}, ...(roomCode ? { room_code: roomCode } : {}) }),
     }),
-  /** P-0802-I：status 支持显式 session_id（重连/多局场景按对局定位，优先于玩家名反查） */
-  werewolfStatus: (playerName: string, sessionId?: string) =>
-    request<any>(`/api/werewolf/status?player_name=${encodeURIComponent(playerName)}${sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : ''}`),
+  /** 狼人杀私密状态：对局、玩家和 roleKey 均显式传递，禁止按玩家名或当前局回退。 */
+  werewolfStatus: (sessionId: string, player: string, playerKey: string) =>
+    request<any>(`/api/werewolf/status?session_id=${encodeURIComponent(sessionId)}&player=${encodeURIComponent(player)}&player_key=${encodeURIComponent(playerKey)}`),
   /** P-0802-I：断线重连恢复 —— body: session_id 或 room_code + player；
    *  P-0802-J：+player_key（本人 roleKey，必填，防跨角色冒充；对齐剧本杀 C3 roleKey 体系） */
   werewolfResume: (body: { session_id?: string; room_code?: string; player?: string; player_key?: string }) =>
     request<any>('/api/werewolf/resume', { method: 'POST', body: JSON.stringify(body) }),
   // P-0802-C：狼人杀游戏端点封装（调研报告 G0 阶段缺口：原仅 init/status 两个封装，游戏端点前端零调用）
-  werewolfNightAction: (player: string, action: string, target: string) =>
-    request<any>('/api/werewolf/night_action', { method: 'POST', body: JSON.stringify({ player, action, target }) }),
-  werewolfHunterShoot: (player: string, target: string) =>
-    request<any>('/api/werewolf/hunter_shoot', { method: 'POST', body: JSON.stringify({ player, target }) }),
-  werewolfVote: (player: string, target: string) =>
-    request<any>('/api/werewolf/vote', { method: 'POST', body: JSON.stringify({ player, target }) }),
-  werewolfResolveNight: (sessionId?: string) =>
-    request<any>('/api/werewolf/resolve_night', { method: 'POST', body: JSON.stringify({ session_id: sessionId || '' }) }),
-  werewolfStartVoting: (sessionId?: string) =>
-    request<any>('/api/werewolf/start_voting', { method: 'POST', body: JSON.stringify({ session_id: sessionId || '' }) }),
-  werewolfResolveVote: (sessionId?: string) =>
-    request<any>('/api/werewolf/resolve_vote', { method: 'POST', body: JSON.stringify({ session_id: sessionId || '' }) }),
+  werewolfNightAction: (sessionId: string, player: string, playerKey: string, action: string, target: string) =>
+    request<any>('/api/werewolf/night_action', { method: 'POST', body: JSON.stringify({ session_id: sessionId, player, player_key: playerKey, action, target }) }),
+  werewolfHunterShoot: (sessionId: string, player: string, playerKey: string, target: string) =>
+    request<any>('/api/werewolf/hunter_shoot', { method: 'POST', body: JSON.stringify({ session_id: sessionId, player, player_key: playerKey, target }) }),
+  werewolfVote: (sessionId: string, player: string, playerKey: string, target: string) =>
+    request<any>('/api/werewolf/vote', { method: 'POST', body: JSON.stringify({ session_id: sessionId, player, player_key: playerKey, target }) }),
+  werewolfResolveNight: (sessionId: string, dmKey: string) =>
+    request<any>('/api/werewolf/resolve_night', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-DM-Key': dmKey }, body: JSON.stringify({ session_id: sessionId }) }),
+  werewolfStartVoting: (sessionId: string, dmKey: string) =>
+    request<any>('/api/werewolf/start_voting', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-DM-Key': dmKey }, body: JSON.stringify({ session_id: sessionId }) }),
+  werewolfResolveVote: (sessionId: string, dmKey: string) =>
+    request<any>('/api/werewolf/resolve_vote', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-DM-Key': dmKey }, body: JSON.stringify({ session_id: sessionId }) }),
   /** P-0802-F：白天讨论人类发言（接入后端讨论引擎，下轮入发言记录） */
-  werewolfDiscussionSay: (player: string, message: string) =>
-    request<any>('/api/werewolf/discussion_say', { method: 'POST', body: JSON.stringify({ player, message }) }),
+  werewolfDiscussionSay: (sessionId: string, player: string, playerKey: string, message: string) =>
+    request<any>('/api/werewolf/discussion_say', { method: 'POST', body: JSON.stringify({ session_id: sessionId, player, player_key: playerKey, message }) }),
   // 剧本杀 (Script murder mystery)
   // P-0803-K（剧本杀双版本）：mode 可选 —— 'full'（默认，真剧本杀：搜证+地图）/ 'chat'（简单对话版：无取证无地图，init 直达 DISCUSSION）
   // P-0803-P（联机房剧本杀接线，原缺口）：roomCode 可选 —— 非空时随 body 传 room_code 绑定房间
@@ -408,8 +436,11 @@ export const api = {
   scriptFinish: (player: string, playerKey?: string) =>
     request<any>('/api/script/finish', { method: 'POST', body: JSON.stringify({ player, ...(playerKey ? { player_key: playerKey } : {}) }) }),
   /** P1（剧本杀可玩性修复，任务 2b）：ENDED 后重开一局 —— 同剧本主题同玩家（复用 session_id，轮询/SSE 定位不变） */
-  scriptRestart: () =>
-    request<any>('/api/script/restart', { method: 'POST', body: JSON.stringify({ session_id: getScriptSessionId() }) }),
+  scriptRestart: (player: string, playerKey: string) =>
+    request<any>('/api/script/restart', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: getScriptSessionId(), player, player_key: playerKey }),
+    }),
   /** P1（剧本杀可玩性修复，任务 2a）：玩家退出对局 —— 角色转托管（AI 代管，投票权作废） */
   scriptLeave: (player: string, playerKey?: string) =>
     request<any>('/api/script/leave', { method: 'POST', body: JSON.stringify({ player, ...(playerKey ? { player_key: playerKey } : {}) }) }),
@@ -430,8 +461,8 @@ export const api = {
   scriptKeys: (sessionId: string, dmKey?: string) =>
     request<any>(`/api/script/keys?session_id=${encodeURIComponent(sessionId)}`, { headers: dmKey ? { 'X-DM-Key': dmKey } : {} }),
   /** P-0802-J: 狼人杀 roleKey 分发（全员令牌一览，对齐剧本杀 scriptKeys） */
-  werewolfKeys: (sessionId: string) =>
-    request<any>(`/api/werewolf/keys?session_id=${encodeURIComponent(sessionId)}`),
+  werewolfKeys: (sessionId: string, dmKey: string) =>
+    request<any>(`/api/werewolf/keys?session_id=${encodeURIComponent(sessionId)}`, { headers: { 'X-DM-Key': dmKey } }),
   /** C3: 断线重连恢复 —— body: game_id 或 room_code + player_key → 恢复玩家视图（ENDED 含终态结果） */
   scriptResume: (body: { game_id?: string; room_code?: string; player_key?: string }) =>
     request<any>('/api/script/resume', { method: 'POST', body: JSON.stringify(body) }),

@@ -230,6 +230,47 @@ public class MemoryStore {
         return sb.toString();
     }
 
+    /**
+     * 为角色补充与当前输入相关的较早记忆。
+     *
+     * <p>最近消息已经由 {@link #getAgentContext(String, int)} 完整注入，故此处排除它们，
+     * 避免把刚发生的对话重复塞进上下文。消息检索严格复用角色可见性过滤；压缩块没有
+     * 轨道可见性元数据，调用方只能在全员可见的 merged 轨道开启其检索。</p>
+     */
+    public String getRelevantMemoryContext(String agentName, String query, int topMessages,
+                                           int topChunks, int recentMessageWindow,
+                                           boolean includeCompressedChunks) {
+        if (session == null || query == null || query.isBlank()) return "";
+
+        List<Message> visible = session.getMessagesVisibleTo(agentName);
+        int olderEnd = Math.max(0, visible.size() - Math.max(0, recentMessageWindow));
+        List<Message> olderMessages = visible.subList(0, olderEnd);
+        List<ScoredMemory> messageResults = retrieval.retrieveMessages(
+                olderMessages, query, topMessages, session.getRoundCount());
+        List<ScoredMemory> chunkResults = includeCompressedChunks
+                ? retrieval.retrieveChunks(session.getCompressedChunks(), query, topChunks, session.getRoundCount())
+                : List.of();
+
+        StringBuilder sb = new StringBuilder();
+        if (!chunkResults.isEmpty()) {
+            sb.append("【相关记忆摘要】\n");
+            for (ScoredMemory sm : chunkResults) {
+                sb.append("- ").append(sm.getChunk().getContextString()).append("\n");
+            }
+        }
+        if (!messageResults.isEmpty()) {
+            if (!sb.isEmpty()) sb.append("\n");
+            sb.append("【相关历史消息】\n");
+            for (ScoredMemory sm : messageResults) {
+                Message m = sm.getMessage();
+                String snippet = m.getContent() == null ? "" : m.getContent();
+                sb.append("[").append(m.getName()).append("]: ")
+                        .append(snippet, 0, Math.min(150, snippet.length())).append("\n");
+            }
+        }
+        return sb.toString();
+    }
+
     // ── Low information detection ─────────────────────────────
 
     public static boolean isLowInformation(Message msg, Message prevMsg) {

@@ -74,6 +74,10 @@ public class RouterService {
     private final PlayerIdentityService identityService;
 
     private final Map<String, Agent> agents = new ConcurrentHashMap<>();
+    /** 自治世界文本模式的非破坏性休眠槽；保留原 Agent、记忆与内部状态。 */
+    private final Map<String, Agent> worldSuspendedAgents = new ConcurrentHashMap<>();
+    /** 世界运行时拥有的角色名；旧 /api/agents 不得覆盖、删除或触发全局 SSE。 */
+    private final Set<String> worldOwnedAgentNames = ConcurrentHashMap.newKeySet();
     private final Map<String, Object> state = new ConcurrentHashMap<>();
 
     /** C-2: 一般模式串行调度开关（roleplay.round.serial，默认 false=保持并行行为；true=同轮按序生成、每完成一个即时入史）。 */
@@ -222,6 +226,8 @@ public class RouterService {
         this.roundsSinceCalibration = 0;
 
         agents.clear();
+        worldSuspendedAgents.clear();
+        worldOwnedAgentNames.clear();
         List<String> agentNames = new ArrayList<>();
         for (Persona p : personas) {
             Agent agent = new Agent(p, "agent", llmClient);
@@ -248,6 +254,8 @@ public class RouterService {
         }
         memory.setSession(session);
         agents.clear();
+        worldSuspendedAgents.clear();
+        worldOwnedAgentNames.clear();
         for (Agent a : agentList) {
             agents.put(a.getName(), a);
         }
@@ -341,18 +349,71 @@ public class RouterService {
     }
 
     /**
-     * 一般模式 init 时确保目标集就绪：已有 → 跳过；DB 场景有 goals → 装载；否则 LLM 生成
-     * （失败规则兜底，恒不抛）。非一般模式（werewolf/script 等）零触碰。
+     * 一般模式 init 时确保目标集就绪：已有 → 跳过；DB 场景有 goals → 立即装载；否则先装载
+     * 规则目标并在后台生成 LLM 目标。这样起局不再等待模型网络调用，目标仍会在生成完成后替换并持久化。
+     * 非一般模式（werewolf/script 等）零触碰。
      */
     public synchronized void ensureSceneGoals(String sceneId, String sceneDesc, String customPlayerGoal) {
         if (!isGeneralMode(mode) || sceneGoalService == null) return;
         if (hasSceneGoals()) return;
         List<String> roleNames = new ArrayList<>(agents.keySet());
-        Map<String, Object> goals = sceneGoalService.generateAndLoad(sceneId, sceneDesc, roleNames, customPlayerGoal);
-        if (goals != null && !goals.isEmpty()) {
-            setSceneGoals(goals);
-            log.info("Session {} scene goals ready: {} role goals + global + player",
-                    sessionId, roleNames.size());
+        Map<String, Object> stored = sceneGoalService.loadStoredGoals(sceneId, roleNames).orElse(null);
+        if (stored != null && !stored.isEmpty()) {
+            setSceneGoals(stored);
+            log.info("Session {} loaded cached scene goals", sessionId);
+            return;
+        }
+
+        Map<String, Object> fallback = sceneGoalService.fallbackGoals(roleNames, customPlayerGoal);
+        setSceneGoals(fallback);
+        String expectedSessionId = sessionId;
+        CompletableFuture.runAsync(() -> {
+            try {
+                Map<String, Object> generated = sceneGoalService.generateAndPersist(
+                        sceneId, sceneDesc, roleNames, customPlayerGoal);
+                applyGeneratedSceneGoals(expectedSessionId, fallback, generated);
+            } catch (Exception e) {
+                // 规则目标已经可用；后台生成失败不影响已进入的对局。
+                log.warn("Scene goal background generation skipped: session={} err={}", expectedSessionId, e.getMessage());
+            }
+        });
+        log.info("Session {} started with fallback scene goals; LLM generation scheduled", sessionId);
+    }
+
+    /** 仅当前会话仍使用这份规则目标时，才接纳后台生成结果，避免旧任务串进重开后的会话。 */
+    private synchronized void applyGeneratedSceneGoals(String expectedSessionId, Map<String, Object> fallback,
+                                                        Map<String, Object> generated) {
+        if (!Objects.equals(sessionId, expectedSessionId) || sceneGoals != fallback || generated == null || generated.isEmpty()) {
+            return;
+        }
+        preserveGoalStatuses(fallback, generated);
+        setSceneGoals(generated);
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("session_id", sessionId);
+        payload.put("goals", getSceneGoalsView());
+        if (sse != null) sse.broadcastToSession(sessionId, "scene_goals_ready", payload);
+        log.info("Session {} background scene goals ready", sessionId);
+    }
+
+    /** 后台生成期间已发生的进展优先保留，避免新描述覆盖已经推进过的状态。 */
+    @SuppressWarnings("unchecked")
+    private static void preserveGoalStatuses(Map<String, Object> current, Map<String, Object> replacement) {
+        for (String key : List.of(SceneGoalService.KEY_GLOBAL, SceneGoalService.KEY_PLAYER)) {
+            Object from = current.get(key);
+            Object to = replacement.get(key);
+            if (from instanceof Map<?, ?> source && to instanceof Map<?, ?> target && source.get("status") != null) {
+                ((Map<String, Object>) target).put("status", String.valueOf(source.get("status")));
+            }
+        }
+        Object fromRoles = current.get(SceneGoalService.KEY_ROLE_GOALS);
+        Object toRoles = replacement.get(SceneGoalService.KEY_ROLE_GOALS);
+        if (!(fromRoles instanceof Map<?, ?> sourceRoles) || !(toRoles instanceof Map<?, ?> targetRoles)) return;
+        for (Map.Entry<?, ?> entry : sourceRoles.entrySet()) {
+            Object from = entry.getValue();
+            Object to = targetRoles.get(entry.getKey());
+            if (from instanceof Map<?, ?> source && to instanceof Map<?, ?> target && source.get("status") != null) {
+                ((Map<String, Object>) target).put("status", String.valueOf(source.get("status")));
+            }
         }
     }
 
@@ -562,6 +623,18 @@ public class RouterService {
         if (sse != null) sse.broadcastStopped();
     }
 
+    /**
+     * SessionRegistry 淘汰专用：只关闭本 Router 的续轮/等待状态，不触发共享
+     * InterruptManager.cancelAll，避免清理一个过期会话时中断其他活跃会话。
+     */
+    public synchronized void closeSessionResources() {
+        running = false;
+        autoRunning = false;
+        cancelPendingAutoContinueLocked();
+        awaitingPlayback = false;
+        manualRoundBatch = false;
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  Core round execution
     // ═══════════════════════════════════════════════════════════
@@ -598,6 +671,13 @@ public class RouterService {
      * 并发 runRound 会造成同轮消息交错/CME）。
      */
     public synchronized RoundResult runRound(String userInput, String userInterjection, String speaker, String playerId) {
+        return runRoundTargeted(userInput, userInterjection, speaker, playerId, List.of());
+    }
+
+    /** 非 2D 会话定向轮：仅指定成员生成回复；空集合保持原有全体调度语义。 */
+    public synchronized RoundResult runRoundTargeted(String userInput, String userInterjection,
+                                                      String speaker, String playerId,
+                                                      Collection<String> responseAgents) {
         if (agents.isEmpty()) {
             if (sse != null) sse.broadcastError("No active session");
             return RoundResult.error("No active session");
@@ -743,6 +823,12 @@ public class RouterService {
         if (!protagonist.isEmpty()) {
             agentMap.remove(protagonist);
         }
+        if (responseAgents != null && !responseAgents.isEmpty()) {
+            Set<String> allowed = responseAgents.stream()
+                    .filter(Objects::nonNull).map(String::trim).filter(name -> !name.isEmpty())
+                    .filter(agents::containsKey).collect(Collectors.toSet());
+            agentMap.keySet().retainAll(allowed);
+        }
 
         // P-0813-B：校准轮注入 —— 每 calibrate-every 个「AI 自主推进轮」向会话消息列表追加校准提醒
         // （layer0 前 3 条 + 反差 + buildDriftPreventionPrompt 角色关系，Author's Note 式防漂移）。
@@ -766,14 +852,15 @@ public class RouterService {
             trackById.put(String.valueOf(t.getOrDefault("id", "main")), t);
         }
 
+        String memoryQuery = memoryQuery(userInput, userInterjection);
         if (serialRound) {
             // C-2 串行调度：按轨道顺序 × 轨道内 agent 顺序逐个生成，每个 agent 输出完成
             // 立即 memory.addMessage + SSE 推送 —— 后发言者 buildAgentContext 读到
             // 的对话历史即包含前面角色本轮已完成的发言（解决「同轮上下文不共享」）。
-            execResult = executeRoundSerial(config, agentMap, trackById, agentOutputs);
+            execResult = executeRoundSerial(config, agentMap, trackById, agentOutputs, memoryQuery);
         } else {
             AgentExecutor.ContextBuilder ctxBuilder = (agentName, trackMode, trackId, cfg) ->
-                buildAgentContext(agentName, trackMode, trackId);
+                buildAgentContext(agentName, trackMode, trackId, memoryQuery);
             execResult = executor.executeRound(config, agentMap, ctxBuilder);
         }
 
@@ -1136,7 +1223,7 @@ public class RouterService {
     //  Agent context building
     // ═══════════════════════════════════════════════════════════
 
-    private String buildAgentContext(String agentName, String trackMode, String trackId) {
+    private String buildAgentContext(String agentName, String trackMode, String trackId, String memoryQuery) {
         Agent agent = agents.get(agentName);
         if (agent == null) return "";
 
@@ -1210,6 +1297,11 @@ public class RouterService {
         String summary = memory.getSummaryContext();
         if (!summary.isEmpty()) contextParts.add(summary);
 
+        // 相关性检索只补充不在短期窗口内的旧消息；非 merged 轨道不检索无可见性标记的压缩块。
+        String relatedMemory = memory.getRelevantMemoryContext(agentName, memoryQuery, 3, 2, 30,
+                "merged".equalsIgnoreCase(trackMode));
+        if (!relatedMemory.isEmpty()) contextParts.add(relatedMemory);
+
         // Recent messages visible to this agent
         List<Message> visible = memory.getAgentContext(agentName, 30);
         if (!visible.isEmpty()) {
@@ -1222,6 +1314,13 @@ public class RouterService {
         }
 
         return String.join("\n\n", contextParts);
+    }
+
+    /** 优先使用本轮玩家输入检索旧记忆；自动轮没有输入时按场景召回。 */
+    private String memoryQuery(String userInput, String userInterjection) {
+        if (userInput != null && !userInput.isBlank()) return userInput;
+        if (userInterjection != null && !userInterjection.isBlank()) return userInterjection;
+        return sceneDescription == null ? "" : sceneDescription;
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -1247,7 +1346,8 @@ public class RouterService {
             TrackConfig config,
             Map<String, Agent> agentMap,
             Map<String, Map<String, Object>> trackById,
-            List<Map<String, Object>> agentOutputs) {
+            List<Map<String, Object>> agentOutputs,
+            String memoryQuery) {
 
         Instant roundStart = Instant.now();
         List<AgentExecutor.AgentOutput> outputs = new ArrayList<>();
@@ -1286,7 +1386,7 @@ public class RouterService {
                 CancellationToken token = it.getCancelToken();
                 token.checkpoint(); // 生成前检查点
                 // 上下文在生成时构建：此时 memory 已含本轮前面角色已完成的发言
-                String context = buildAgentContext(task.agentName(), task.trackMode(), task.trackId());
+                String context = buildAgentContext(task.agentName(), task.trackMode(), task.trackId(), memoryQuery);
                 token.checkpoint(); // 上下文构建后检查点
                 // P-0802-M：后端真·流式 —— 增量经 SSE agent_token 逐片推送（前端逐字渲染）；
                 // 完整内容仍由下方 broadcastAgentOutput 结算（流式失败自动降级非流式，内容不丢）
@@ -1545,24 +1645,74 @@ public class RouterService {
         };
     }
 
-    public void addAgent(String name, Persona persona) {
+    public synchronized void addAgent(String name, Persona persona) {
+        if (worldOwnedAgentNames.contains(name)) {
+            throw new IllegalStateException("world-owned agent cannot be overwritten: " + name);
+        }
         agents.put(name, new Agent(persona, "agent", llmClient));
-        // Update state with current agent list
-        List<String> agentNames = new ArrayList<>(agents.keySet());
-        state.put("agents", agentNames);
-        state.put("agent_count", agentNames.size());
+        refreshAgentRosterState();
         // D8: 角色加入推送
         if (sse != null) sse.broadcastAgentAdded(name, "active");
     }
 
-    public void removeAgent(String name) {
+    public synchronized void removeAgent(String name) {
+        if (worldOwnedAgentNames.contains(name)) {
+            throw new IllegalStateException("world-owned agent cannot be removed by legacy API: " + name);
+        }
         agents.remove(name);
-        // Update state
+        refreshAgentRosterState();
+        // D8: 角色离开推送
+        if (sse != null) sse.broadcastAgentRemoved(name);
+    }
+
+    /** 世界运行时专用：不发旧的全局 SSE，由 WorldRuntimeService 负责按 session 定向广播。 */
+    public synchronized void addWorldAgent(String name, Persona persona) {
+        if (agents.containsKey(name) || worldSuspendedAgents.containsKey(name)) {
+            throw new IllegalStateException("agent already exists: " + name);
+        }
+        agents.put(name, new Agent(persona, "agent", llmClient));
+        worldOwnedAgentNames.add(name);
+        refreshAgentRosterState();
+    }
+
+    /** 文本模式降载：移动原 Agent 对象而非重建，保留内部记忆与状态。 */
+    public synchronized boolean suspendWorldAgent(String name) {
+        Agent agent = agents.remove(name);
+        if (agent == null) return worldSuspendedAgents.containsKey(name);
+        worldSuspendedAgents.put(name, agent);
+        refreshAgentRosterState();
+        return true;
+    }
+
+    public synchronized boolean resumeWorldAgent(String name) {
+        if (agents.containsKey(name)) return false;
+        Agent agent = worldSuspendedAgents.remove(name);
+        if (agent == null) return false;
+        agents.put(name, agent);
+        refreshAgentRosterState();
+        return true;
+    }
+
+    public synchronized boolean removeWorldAgent(String name) {
+        boolean removed = agents.remove(name) != null;
+        removed |= worldSuspendedAgents.remove(name) != null;
+        worldOwnedAgentNames.remove(name);
+        refreshAgentRosterState();
+        return removed;
+    }
+
+    public boolean isWorldSuspendedAgent(String name) {
+        return name != null && worldSuspendedAgents.containsKey(name);
+    }
+
+    public boolean isWorldOwnedAgent(String name) {
+        return name != null && worldOwnedAgentNames.contains(name);
+    }
+
+    private void refreshAgentRosterState() {
         List<String> agentNames = new ArrayList<>(agents.keySet());
         state.put("agents", agentNames);
         state.put("agent_count", agentNames.size());
-        // D8: 角色离开推送
-        if (sse != null) sse.broadcastAgentRemoved(name);
     }
 
     // ═══════════════════════════════════════════════════════════

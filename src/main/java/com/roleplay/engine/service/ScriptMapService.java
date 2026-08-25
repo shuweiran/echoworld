@@ -8,6 +8,7 @@ import com.roleplay.engine.simulation.map.MapValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -33,7 +34,7 @@ public class ScriptMapService {
 
     private static final Logger log = LoggerFactory.getLogger(ScriptMapService.class);
 
-    /** P-0818-B/E 修正：地图生成回到主链路 DeepSeek（快）；视觉审核才用小米 MiMo（MapVisualAuditor） */
+    /** 地图生成使用主控 LLM；视觉审核才使用可选的多模态 MapLlmClient。 */
     private final LLMClient llmClient;
 
     /** 配置化的 BSP 降级种子（roleplay.game.map.bsp-seed，默认 0=未配置回退 {@link #DEFAULT_BSP_SEED}）。 */
@@ -48,7 +49,7 @@ public class ScriptMapService {
     @Value("${roleplay.game.map.max-height:256}")
     private int mapMaxHeight = 256;
 
-    public ScriptMapService(LLMClient llmClient) {
+    public ScriptMapService(@Qualifier("arbiterLlmClient") LLMClient llmClient) {
         this.llmClient = llmClient;
     }
 

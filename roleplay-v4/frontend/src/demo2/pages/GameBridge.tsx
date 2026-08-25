@@ -50,12 +50,12 @@ export function GameBridge() {
   const startedRef = useRef(false);
   // P-0810-08：一般模式 chat 默认 Gal 视图；经典视图（ChatPage 同会话）回退开关
   const [galClassic, setGalClassic] = useState(false);
-  // P-0811-G 修复：startScene 返回的独立会话 session_id（不依赖 useAppStore.sessionId——loadState 会覆盖成默认单例）
+  // startScene 返回的独立会话 session_id（与 appStore 显式 session 状态同步）。
   const [chatSessionId, setChatSessionId] = useState('');
   // P-0820-M：一般模式 2D 探索统一使用设置页的结构地图配置（复用角色选择页缓存；无缓存则生成）
   const [exploreMap, setExploreMap] = useState<ScriptMap | null>(null);
   const generalSessionId = useAppStore(s => s.sessionId);
-  const generalMaps = useDemoStore(s => s.generalMaps);
+  const getGeneralMap = useDemoStore(s => s.getGeneralMap);
   const setGeneralMap = useDemoStore(s => s.setGeneralMap);
   // P-0817-D：地图尺寸读设置（与角色选择页预览同源；超 40×24 自动走后端 BSP 确定性大图）
   const mapGen = useDemoStore(s => s.settings.mapGen);
@@ -131,18 +131,6 @@ export function GameBridge() {
           // ScriptGalChatPanel 的 liveSay → scriptDiscussionSay 带 key 身份校验立即可用（纯前端 store 层）。
           if (resp?.role_key) useAppStore.getState().setScriptRoleKey(String(resp.role_key));
           useAppStore.setState({ mode: 'script', currentPlayer: selectedPlayer, boundCharacterName: selectedPlayer });
-          await useAppStore.getState().loadState();
-          // P-0815-B 实测修复（主会话）：loadState 拉 /api/state 默认单例（mode='director'）会覆盖上面的
-          // mode='script'，导致 ChatPage script 逻辑（3s 轮询 / ScriptStatePanel / ScriptGalChatPanel）全失效、
-          // 显示成一般模式「自由对话」。与 general 分支 L167-169「重设回 sessionId」同款保护，此处重设回 script。
-          // loadState() reads the generic /api/state and can clear the script player's
-          // boundCharacterName. Restore the authoritative script identity after it.
-          useAppStore.setState({
-            mode: 'script',
-            currentPlayer: selectedPlayer,
-            boundCharacterName: selectedPlayer,
-            ...(resp?.role_key ? { scriptRoleKey: String(resp.role_key) } : {}),
-          });
           // P-0815-F（方向1，根因 A）：init 为两阶段生成（outline_only 缺省 true，对局停在 SETUP），
           // 此处自动触发完整剧本生成（POST /api/script/generate_full，后端异步）——
           // fire-and-forget：不阻塞 ready 进入对局；失败仅 warn 不阻断（玩家仍可在右侧面板手动点「🔄 生成完整剧本」）。
@@ -151,15 +139,47 @@ export function GameBridge() {
               console.warn('[GameBridge] generate_full 触发失败（可在状态面板手动重试）：', e));
           }
         } else if (gameMode === 'werewolf') {
-          setStep('正在创建狼人杀对局（AI 补满 8 人）…');
           const playerName = playerRole?.name ?? (gamePlayers[0] || '我');
+          const savedSessionId = localStorage.getItem('werewolfSessionId') || '';
+          const savedRoleKey = localStorage.getItem('werewolfRoleKey') || '';
+          const savedPlayer = localStorage.getItem('werewolfPlayer') || playerName;
+          // 刷新/进程恢复优先恢复原局；凭证存在但恢复失败时明确报错，禁止静默 init 第二局。
+          if (savedSessionId && savedRoleKey && savedPlayer) {
+            setStep('正在恢复狼人杀对局…');
+            const resumed = await api.werewolfResume({
+              session_id: savedSessionId,
+              player: savedPlayer,
+              player_key: savedRoleKey,
+            });
+            if (resumed?.error) throw new Error(String(resumed.error));
+            const resumedSessionId = String(resumed?.session_id || savedSessionId);
+            app.setWerewolfSessionId(resumedSessionId);
+            app.setWerewolfRoleKey(savedRoleKey);
+            app.setCurrentPlayer(savedPlayer);
+            localStorage.setItem('werewolfPlayer', savedPlayer);
+            useAppStore.setState({
+              mode: 'werewolf',
+              ...(resumed?.phase ? { werewolfPhase: resumed.phase } : {}),
+              ...(typeof resumed?.round === 'number' ? { werewolfRound: resumed.round } : {}),
+            });
+            setPhase('ready');
+            return;
+          }
+          setStep('正在创建狼人杀对局（AI 补满 8 人）…');
           const aiFill = WW_AI_NAMES.filter(n => !gamePlayers.includes(n));
-          const players = [...gamePlayers, ...aiFill].slice(0, 8);
+          // 后端 init 只向 players[0] 返回本人 role_key；把当前真人固定在首位，避免拿到他人令牌。
+          const players = [playerName, ...gamePlayers.filter(n => n !== playerName), ...aiFill.filter(n => n !== playerName)].slice(0, 8);
           const resp = await api.werewolfInit(playerName, players);
           const sid = resp?.session_id;
-          if (sid) useAppStore.setState({ werewolfSessionId: sid });
-          useAppStore.setState({ mode: 'werewolf', currentPlayer: playerName });
-          await useAppStore.getState().loadState();
+          const roleKey = resp?.role_key;
+          if (!sid || !roleKey) throw new Error('狼人杀初始化响应缺少 session_id 或 role_key');
+          app.setWerewolfSessionId(String(sid));
+          app.setWerewolfRoleKey(String(roleKey));
+          app.setCurrentPlayer(playerName);
+          localStorage.setItem('werewolfPlayer', playerName);
+          useAppStore.setState({
+            mode: 'werewolf',
+          });
         } else if (gameMode === 'general' && (runMode === 'explore' || selectCtx.scriptId === 'g_dawn_social')) {
           // 2D 探索：LLM 瓦片地图（P-0811-G：复用角色选择页缓存；无缓存进入时生成）
           setStep('正在加载 2D 世界（生成地图）…');
@@ -172,8 +192,9 @@ export function GameBridge() {
             setPhase('ready');
             return;
           }
-          if (selectCtx.scriptId && generalMaps[selectCtx.scriptId]) {
-            setExploreMap(generalMaps[selectCtx.scriptId]);
+          const savedMap = getGeneralMap(selectCtx.scriptId);
+          if (savedMap) {
+            setExploreMap(savedMap);
           } else {
             try {
               if (g && g.desc?.trim()) {
@@ -202,7 +223,7 @@ export function GameBridge() {
                 // 无描述 → 用场景自带默认地图
                 setExploreMap((g as any)?.map ?? null);
               }
-            } catch (e: any) {
+            } catch {
               // 生成失败 → 用场景自带默认地图兜底（仍能进地图，不空场景）
               setExploreMap((g as any)?.map ?? null);
             }
@@ -223,15 +244,12 @@ export function GameBridge() {
           const startResp = await api.startScene(script.title, agents, playerName, charDetails);
           // P-0810-16：startScene 响应 goals（enabled=true + player_goal 明文 + AI ??）→ 场景卡即时渲染
           useGalStore.getState().setLiveGoals(startResp?.goals);
-          // P-0811-G 修复：用 startScene 返回的独立会话 session_id（loadState 会把 useAppStore.sessionId 覆盖成
-          // 默认单例 → GalGeneralView SSE 连错会话 → 「已连接·等待对局消息」卡住）
+          // 使用 startScene 返回的独立会话 session_id，确保 Gal 与通用状态请求指向同一会话。
           const scid = startResp?.session_id || '';
           setChatSessionId(scid);
           useAppStore.setState({ sessionId: scid });
           useAppStore.setState({ mode: 'free', currentPlayer: playerRole?.name ?? '我' });
-          await useAppStore.getState().loadState();
-          // loadState 拉默认单例可能覆盖 sessionId → 重设回 startScene 会话
-          if (scid) useAppStore.setState({ sessionId: scid });
+          await useAppStore.getState().loadState(scid || undefined);
         }
         setPhase('ready');
       } catch (e: any) {

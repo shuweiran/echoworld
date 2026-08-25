@@ -207,7 +207,7 @@ public class TrackStrategy implements ConversationStrategy {
         if (agent == null) return "";
 
         StringBuilder sb = new StringBuilder();
-        sb.append(agent.getPersona().buildSystemPrompt()).append("\n\n");
+        sb.append(agent.getPersona().buildLightweightPrompt()).append("\n\n");
 
         String nar = narrationSupplier.apply("dummy");
         sb.append("【场景】").append(nar != null && !nar.isEmpty() ? nar : "你们正在聊天。").append("\n");
@@ -245,7 +245,7 @@ public class TrackStrategy implements ConversationStrategy {
         if (agent == null) return "";
 
         StringBuilder sb = new StringBuilder();
-        sb.append(agent.getPersona().buildSystemPrompt()).append("\n\n");
+        sb.append(agent.getPersona().buildLightweightPrompt()).append("\n\n");
 
         String nar = narrationSupplier.apply("dummy");
         sb.append("【场景】").append(nar != null && !nar.isEmpty() ? nar : "你们正在聊天。").append("\n");
@@ -272,7 +272,7 @@ public class TrackStrategy implements ConversationStrategy {
                 ? assignment.contextNote() : "完全隔离";
 
         StringBuilder sb = new StringBuilder();
-        sb.append(agent.getPersona().buildSystemPrompt()).append("\n\n");
+        sb.append(agent.getPersona().buildLightweightPrompt()).append("\n\n");
 
         String nar = narrationSupplier.apply("dummy");
         sb.append("【场景】").append(nar != null && !nar.isEmpty() ? nar : "你独自一人在某处。").append("\n");

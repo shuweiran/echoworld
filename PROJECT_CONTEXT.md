@@ -1,11 +1,27 @@
-# PROJECT_CONTEXT.md — Roleplay-Java 项目速览（AI 必读①）
+# PROJECT_CONTEXT.md — EchoWorld 项目速览（AI 必读①）
 
 > ⚠️ **所有 agent 开工前必读**：① 本文件（5 秒速览）→ ② `DECISION_LOG.md`（为什么这么设计）→ ③ 按任务需要读 `TEST_STATUS.md` / `docs/问题清单-20260731.md`。
+>
+> **当前态优先**：2026-08-23 起，先阅读 `docs/当前维护状态.md`；本文件下方的阶段细节含历史摘要，不应单独作为发布或维护依据。
 
 ## 一句话目标
-开发一个 **Java 多 Agent 角色扮演引擎**：2D 空间 × 铁轨系统（Track System）融合的实时社会模拟，支持狼人杀/剧本杀双游戏。
+开发 **EchoWorld**：一个基于 Java 的 Spatial Multi-Agent Simulation Engine，让多个 AI Agent 在共享 2D 世界中移动、感知、交互，并根据空间与听觉关系获得不同的信息上下文。
 
-## 当前阶段
+狼人杀、剧本杀和自由角色扮演是用于验证社会互动、隐藏信息和空间上下文隔离能力的应用场景，而不是项目本身的唯一定位。
+
+## 当前状态（2026-08-25）
+
+- 项目核心：一般模式、剧本杀、狼人杀、Phaser 2D 与空间社会模拟链路均已落地；后续以缺陷修复、体验完善与可维护发行流程为主。
+- 桌面版：固定 16:9、内置 Java、后端本机启动、用户数据目录和候选更新流程已完成；已产出 `0.1.0` EXE/ZIP 与可执行后端 JAR，仍未公开发布正式版。
+- 发行门禁：后续桌面构建必须使用本次可执行 Spring Boot jar、`runtime-release`、明确版本号和 HTTPS 更新地址；详见 `docs/桌面版维护与更新流程.md`。
+- 大厅 UI：主导航已收敛为首页/剧本/角色/说明书/设置；新增可滑动说明书、统一线性图标与范围滑块视觉。
+- 一般模式自治世界：2D/非 2D 共用异步输入邮箱、受控世界命令、角色分级生命周期、轻量群演池与后台地图任务；主控 LLM 主动判断室外/公共室内/私人室内等场景人口，Java 限幅并渐进增减。每会话另维护动态剧本：总目标与已发生事实不可被 LLM 改写，成功互动实时推进阶段目标、后续拍点与张力，并同步到 Router；非 2D 可在“动态剧本”面板查看。点击不晋升，成功的有效互动达到阈值后异步补全角色卡，再进入完整 Agent；文本模式休眠保留原 Agent。非 2D 有玩家时，隐藏角色栏支持每张卡“单独聊天/加入群聊”，Router 硬过滤本轮回复成员。该批源码待同步 Spring static 与部署。
+- 当前美术包：非 2D Gal 对话名牌按名称长度动态收敛字号、内容自适应；“沉没的圣·奥古斯丁教堂”已生成并接入专属二次元背景和马库斯/塞缪尔/艾琳/莉莉安/维克托立绘，后续运行时场景生成提示统一为非像素二次元视觉小说风。
+- 当前测试基线：2026-08-25 全量 Maven 1093 tests / 0 failures / 0 errors / 0 skipped，LONG-01 500 轮通过；核心空间/信息隔离定向 40/0；SpeechGate 固定 100 轮负载将生成候选从 500 降至 182；前端 TypeScript + Vite 构建通过（148 modules）。
+- 公开文档入口：`README.md` → `docs/architecture.md` / `docs/concepts/context-routing.md` / `docs/testing.md` / `docs/evaluation.md`；内部维护状态见 `docs/当前维护状态.md`，历史决策见 `DECISION_LOG.md`。
+- 公开仓库收敛：README 只保留空间世界、听觉、发言门控与上下文隔离四项主张；前端职责说明位于 `roleplay-v4/frontend/README.md`；CI 增加前端 lint 与架构依赖门禁。审阅材料写入本地忽略的 `.local/`，不作为公开项目内容。
+
+## 历史阶段摘要
 - ✅ Phase 1-4 完成（Track 融合全链路：SpatialTrackResolver → TrackStrategy → 双导演 → MovementConstraint）
 - ✅ **剧本杀 6/6 Step 完成**（秘密机制/前端主链路/判定加固/审批门已落地并提交；**Step 3v 讨论接对话引擎已落地（GAP-3，2026-08-01 批次 A）**；**Step 4v ENDED 终态 + saveScript 落库已落地（GAP-4b/4c，批次 B）**；**剧本 schema v1 版本化 + 双生成器统一已落地（批次 C1，2026-08-01，见 D-014 / docs/剧本-schema-v1.md）**；**DM 主持人面板 + 重连 UI 已落地（批次 C4，2026-08-01，见 D-018）**；蓝图 `docs/剧本杀差距分析-待办.md` v3）
 - 🟠 问题清单 P0 缺陷并行修复中（另一个主会话「全功能覆盖测试方案」在改，**派单前确认不撞车**）
@@ -58,7 +74,7 @@
 - [x] **Phaser 迁移阶段 2（LLM 生成地图接入，2026-08-01，三阶段全闭环）**：后端 POST /api/script/map（session_id/theme/seed/regenerate → LLM 生成 → 契约 v1 宽容解析 → Java 校验器 MapValidator 7 项检查 → 失败降级 BSP）+ `simulation/map/` 包 3 类（MapContract/MapValidator/BspMapGenerator）+ `service/ScriptMapService.java`（缓存命中/regenerate 强制重生成 + map_data 随对局快照落库）；测试 4 类 37 用例，全量 mvn **254/0**；前端 `phaser/` 地图三件（mapData.ts/ScriptMapScene.ts/PhaserScriptMapView.tsx）+ ScenePage 剧本杀 Tab「生成地图」入口 + 搜证联动（zones.clue_location ↔ clues.location，搜证成功热点变绿 markZoneSearched）；npm build 63 modules → index-Ccc-CMzG.js 已同步 static，**8000 重启生效（PID 25760）**；已通过未衡终审，遗留 P2 两项见「未完成」——见 DECISION_LOG D-020 / docs/Phaser迁移计划.md
 - [x] **晨雾镇一般模式 2D 社会实验（2026-08-20，P-0820-I~L）**：晨雾镇已从本地 SVG 预览壳切回一般模式 Phaser 2D 主链路；专用 96×64 室外城镇地图以草地可通行、道路、河流和全图建筑碰撞替代错误放大的室内 BSP。角色位置、AI 移动和真实对话均由 `SimulationService` 权威驱动，晨雾镇启动后实测 8 个角色运行。预览服务器同步代理 `/api` 至 8000，避免预览环境退化为本地假状态。
 
-## 未完成（按优先级）
+## 历史遗留待办（以 `docs/当前维护状态.md` 为准）
 - [x] ~~演讲/广播断线补发前端接线（GET /api/announcements/recent 已就绪，useSSE 重连后自动补拉未接，P3）~~（已解决 2026-08-04，P-0804-A：useSSE 重连成功后续拉 announcementRecent(since) 重放）
 - [x] ~~**Phaser 阶段2 终审遗留 P2（非阻塞）①**：BSP 降级 seed 硬编码 DEFAULT_BSP_SEED=20260801~~（已解决 2026-08-04，P-0804-A：ScriptMapService @Value 注入 roleplay.game.map.bsp-seed，yml 双份）
 - [ ] **Phaser 阶段2 终审遗留 P2（非阻塞）②**：地图数据不在对局 `toMap` 的 `your_secret` 同级暴露（地图经 POST /api/script/map 生成响应 + 快照 map_data 获取，前端已消费；实现选择，非缺陷，如需随对局状态下发可后续补充）
@@ -67,7 +83,7 @@
 - [x] ~~G1 根治~~（已解除 2026-07-31 21:35，见台账 #28）：AppConfig `@ConfigurationProperties` 绑定后启动自动读环境变量 `ROLEPLAY_LLM_API_KEY`，`configured=True`，无需运行时注入
 - [x] ~~剧本杀重连 UI（POST /api/script/resume + roleKey 分发）前端接线~~（已完成 2026-08-01 批次 C4：ChatPage「🔄 恢复对局」入口 + 🎛 主持人面板 roleKey 复制分发）
 
-## 当前最大问题
+## 历史最大问题（以 `docs/当前维护状态.md` 为准）
 1. **G1 LLM 401 — ✅ 已解除（2026-07-31 21:35，台账 #28/#32）**：根因 D25（AppConfig 无配置绑定注解，yml 环境变量占位符从不生效）已修复——AppConfig 加 `@ConfigurationProperties(prefix="roleplay")` 绑定 + 补全 setter 后，启动自动读环境变量 `ROLEPLAY_LLM_API_KEY`，`configured=True`，不再需要运行时注入；131/0 测试全绿 + 启动 configured=True + 真实对话 14.3s 真机验证 PASS。依赖真实 LLM 的用例现可运行（问题清单 G1 已标 ✅ 已解除）
 2. **并行工作流**：另一主会话在改同一批文件（ScriptGameService 已改 D5 secrets）→ **任何派单前先 git diff 确认基线**
 3. **剧本杀约 95% 完成**：前端已实装——ScenePage 剧本杀 Tab + 状态面板、script API 全部封装、14 项玩家功能完整可玩（AI 开局/搜证/讨论/投票/揭晓/2D 模拟，3 秒轮询刷新）；2D 地图已复用一般模式角色库显示同局 AI 巡逻，搜证/交互后刷新 Gal、线索与 AP；后端已闭环——ENDED 终态 + saveScript 双点落库（批次B）、script SSE 推送（批次B）、剧本 Schema v1 + 双生成器统一（批次C1）、AP 行动点 + 线索转交（批次C2）、断线重连与会话恢复 roleKey+快照（批次C3）、**DM 主持人面板 + 重连 UI（批次C4）**、**投票超时+quorum+退出托管+ENDED 重开+LLM 降级提示（P-0804-B，2026-08-04，见 D-037）**；剩余缺口：私聊后端有前端无、联机房（/api/rooms/*）仅狼人杀 Tab 接入剧本杀未接（room_code 绑定入口已备，前端接续）、剧本杀历史体系未接 RouterService（P2）
@@ -76,6 +92,8 @@
 | 文件 | 内容 |
 |---|---|
 | `DECISION_LOG.md` | **架构决策史**（为什么这么设计，AI 必读②） |
+| `docs/当前维护状态.md` | **当前工作入口**（当前优先级、桌面候选状态、文档分层） |
+| `docs/桌面版维护与更新流程.md` | **桌面维护入口**（版本、候选构建、更新、回滚；当前不发布正式版） |
 | `TEST_STATUS.md` | **测试状态台账**（每次测试后更新） |
 | `docs/问题清单-20260731.md` | 全量缺陷 A-G + 问题→文档对照表 H |
 | `docs/剧本杀差距分析-待办.md` | 剧本杀 P0 开发蓝图 v3 |

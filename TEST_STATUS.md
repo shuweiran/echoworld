@@ -7,7 +7,30 @@
 
 ---
 
-## ?? 当前基线（最新汇总，2026-08-16 22:5x）
+## ?? 当前基线（最新汇总，2026-08-25）
+> ✅ v244（2026-08-25，**P-0825-N：面试主项目公开主线 + WEAK 泄漏修复**）：README 压缩并收敛为 Spatial World / Hearing / SpeechGate / Context Isolation；新增公开架构、Context Track、测试、评测、术语、三角色 Demo、仓库审计和测绘/GIS/AI 岗位讲解文档；前端首屏改为空间仿真主线。新增“闸门密钥在北侧控制柜”信息泄漏测试，首跑发现旧 `WEAK` 规则摘要泄漏“闸门密钥”并失败；修复为封闭主题类别后，核心空间/隔离/稳定性定向 **40/0/0/0**。`SpeechGateEvaluationTest` 固定 100 轮 × 5 Agent：候选 **500 → 182，削减 63.6%**。最终全量 Maven **1093/0/0/0**、LONG-01 500 轮 PASS；前端 TypeScript 0、Vite **148 modules**，`index-l1T5UqNK.js` / `index-Dp_ZazRR.css`，dist/static SHA256 一致；Markdown 本地链接检查、`git diff --check` 通过。未启动或重启 8000，未 git commit。
+
+> ⚠️ v243（2026-08-25，**P-0825-M：EchoWorld 品牌迁移**）：完成品牌文案、Maven 展示元数据、前端页面 title/description、专属 favicon、Issue 模板与入口文档更新；保留 `com.roleplay`、`roleplay.*`、`ROLEPLAY_*`、Maven artifactId 与数据路径以维持兼容。尝试执行前端构建，但本机 `npm`/TypeScript 进程未产出构建结果且持续卡住，已终止该次本地子进程；本轮没有可登记为通过的自动化测试，未重启 8000，未 git commit。
+
+> ✅ v242（2026-08-25，**P-0825-L：一般模式场景目标后台生成**）：`startScene` 与 `/api/init` 命中已存场景目标仍同步读取；未命中时立即返回完整规则目标并启动后台 LLM 生成，完成后持久化并用会话定向 `scene_goals_ready` 更新 Gal 场景卡。迟到任务受 sessionId+规则目标引用双守卫限制，目标替换前合并已推进状态。新增 `SceneStartSceneGoalsTest` 异步门控：阻塞 LLM 时 `startScene` 在 500ms 内返回规则目标，释放后收到正式目标事件。Maven 定向 `SceneGoalServiceTest,SceneGoalStatusTest,SceneStartSceneGoalsTest` **12/0**；`mvn compile -q` 与前端 `npm run build`（TypeScript 0、Vite 148 modules）通过。构建生成静态产物但未部署或重启 8000，未 git commit。
+
+> ✅ v241（2026-08-25，**P-0825-K：移除李伟占位立绘框并同步**）：修正目标为场景内人物“李伟”的立绘框，而非左上姓名框。未知角色首字占位删除深色半透明底和虚线描边，分层舞台的立绘容器删除残留 box-shadow；姓名框样式保持。前端 `npm run build`：TypeScript 0、Vite 148 modules；同步新 bundle 后停止 8000 旧实例并 clean package，PID **17084** 启动，首页 200 且新 JS 命中。未 git commit。
+>
+> ✅ v240（2026-08-25，**P-0825-J：教堂美术同步与 8000 重启**）：只同步新的 `index.html`、`index-CyYgqT7_.js`、`index-CATvtvra.css` 和“沉没的圣·奥古斯丁教堂”6 个资源，未把被否定的咖啡馆素材带入 Spring static。先停旧 PID 11656 解除 JAR 文件锁，`mvn clean package -DskipTests -q` 通过，再以既有启动方式启动 PID **19568**。`GET /` 200 且引用新 JS、教堂背景/艾琳立绘各 200，Tomcat 8000 启动日志正常。一般模式会话为内存态，重启后即时场景已重置，需重新进入该场景。未 git commit。
+>
+> ✅ v239（2026-08-25，**P-0825-I：沉没的圣·奥古斯丁教堂非 2D 美术包**）：读取当前运行会话 `df662a80-1bb`，确认场景为“沉没的圣·奥古斯丁教堂”、登场为马库斯/塞缪尔/艾琳/莉莉安/维克托。使用 ImageGen 生成并审核教堂背景与五张对应成人角色立绘，作为该场景的本地受控资源；Gal 舞台按场景名命中背景、按角色名回退立绘，运行时角色自生成图仍优先。场景生图提示移除 `pixel art`，改为二次元视觉小说背景；对话名字牌按长度缩放字号、内容自适应并可换行。前端 `npm run build`：TypeScript 0、Vite **148 modules** 通过。未同步 static、未启动/重启 8000、未 git commit。
+>
+> ✅ v238（2026-08-25，**P-0825-H：动态剧本主控 + D48/D49 修复**）：WorldRuntime 为每个一般模式会话维护版本化动态剧本：总目标和已发生变化由 Java 权威保留，每次成功互动推进 revision；主控同次结构化规划仅可补写当前阶段、后续剧本、下一拍与 0-100 张力，不能改写玩家选择或执行命令。总目标与阶段目标同步给 Router 的既有 goals；`/api/world/state` 下发 `story_script`，Gal 顶栏“动态剧本”面板实时展示。异步邮箱保存 input_id，界面轮询终态：入队/失败不再伪装为已生成；坏 Aseprite 元数据在登记前跳过并降级。`mvn compile -q` 通过；定向 `DynamicStoryManagerTest,WorldCommandPlannerTest,WorldRuntimeServiceTest` **24/0/0**；前端 `npm run build`（TypeScript 0、Vite 147 modules）通过。未同步 static、未启动/重启 8000、未 git commit；D48/D49 的真机复验待下次部署后执行。
+>
+> ⚠️ v237（2026-08-25，**P-0825-E：非 2D 角色栏/单聊/群聊前端真机**）：真实浏览器从首页进入“街角咖啡馆”，选择玩家“夜行人”并进入自由聊天。隐藏角色栏默认收起；展开后 3 张卡均有“单独聊天/加入群聊”；单聊条正确显示“夜行人、苏浅浅”；群聊 1 人时建立按钮禁用、选中苏浅浅+白露后启用并显示三方成员。Tokenra 实例两次输入均被 `/api/world/input` 接收，但回复被 403 `insufficient_user_quota` 阻断且前端未显示失败（D48）。并行外部切换 OpenRouter 后以新会话复跑，苏浅浅单聊真实生成通过；群聊再次投递成功，但第二个输入仍在邮箱等待，服务端同时出现 429/流解析重试，未取得“两名群成员均回复”的完整证据。控制台另发现 `charanim-助手` atlas JSON/图片加载 ERROR（D49）。本轮不修改业务代码、不把受外部负载阻断的群聊回复验证冒充 PASS。
+>
+> ✅ v236（2026-08-25，**P-0825-D：A/B/C 统一部署**）：前端 dist 与 Spring static **12/12 SHA 一致**；首次增量 package 暴露 `target/classes` 历史哈希残留，改用 `mvn clean package -DskipTests` 后 JAR 仅保留当前 `index-DbHmj9CE.js` / `index-DyG7J78e.css`。停止旧 PID 26752，环境变量注入 LLM/主控密钥后启动 PID **7412**；`GET /`、`/api/mode`、`/api/world/state?session_id=simulation` 均 **200**，首页引用新哈希，启动 ERROR **0**。功能测试沿用紧邻 v235 的全量 **1088/0/0/0** 与 LONG-01 PASS；本轮只做 clean package 和部署健康检查。
+>
+> ✅ v235（2026-08-25，**P-0825-B：非 2D 单聊/群聊 + 隐藏角色栏**）：Gal 一般模式在有玩家时把角色卡移入默认收起的独立抽屉；每卡提供“单独聊天/加入群聊”，群聊至少选择两名 AI，当前会话条同步成员与轻量/完整状态。输入新增 `conversation_members/focused_role_ids`，WorldRuntime 成功回合逐角色幂等计分，Router 执行层硬过滤非会话成员。定向 `RouterTargetedRoundTest,RouterServiceSerialRoundTest,RouterServiceDuoSkipIntegrateTest,RouterServiceDirectorNarrationTest,WorldRuntimeServiceTest,WorldRuntimeEndpointTest,SessionRegistryLifecycleTest` **39 tests / 0 failures / 0 errors**；前端 `npm run build` 通过（147 modules，`index-DbHmj9CE.js` / `index-DyG7J78e.css`）。全量 `mvn test -q`：**1088 tests / 0 failures / 0 errors / 0 skipped**；LONG-01 500 轮 PASS。未同步 static、未启动/重启 8000、未 git commit。
+>
+> ⚠️ v233（2026-08-25，**P-0825-A 收官：代际清理、世界角色所有权、非 2D 路人交互**）：补齐 SessionRegistry 移除通知的 Router 代际标识，同 ID 新代首次绑定先清旧资源、迟到旧回调不得清新代；旧 `/api/agents` 对 WorldAgent 返回 409 且 Router 层硬拒绝；一般模式默认 Gal 界面展示 `ambient_agents`，选中路人后的实际发言携带 `focused_role_id`。定向 `SessionRegistryLifecycleTest,RouterWorldOwnershipTest,WorldRuntimeServiceTest,WorldRuntimeEndpointTest,RouterRenameTest` **31 tests / 0 failures / 0 errors**；前端 `npm run build` 通过（Vite 147 modules，`index-Dmi0GozD.js` / `index-DXyhpeCN.css`）。最终全量 `mvn test -q`：**1086 tests / 0 failures / 1 error / 0 skipped**；唯一错误为既有 `ScriptPresentEndpointTest.presentHttpFlow` 响应字段瞬时缺失，随后单类复跑通过，未冒充全量全绿。LONG-01 500 轮 PASS。未同步 static、未启动/重启 8000、未 git commit。
+>
+> ⚠️ v232（2026-08-25，**P-0825-A：LLM 场景人口预算 + 有效互动晋升 + 晋升角色卡**）：定向 `WorldCommandPlannerTest,ScenePopulationProfileTest,RoleLifecycleRuleEngineTest,WorldRuntimeServiceTest,WorldRuntimeEndpointTest,RouterRenameTest,SessionRegistryLifecycleTest` 全部通过；覆盖非 2D 室内人数限幅、旧规划乱序丢弃、点击 0 分、成功消息事件幂等、补卡 pending 防旁路、恶意 persona 安全兜底、文本 Agent 原对象休眠/归档恢复、会话关闭绑定失败不复活。前端 `npm run build` 通过（Vite 147 modules，`index-Djv6Juzn.js`）。最终全量 `mvn test -q`：**1084 tests / 1 failure / 0 errors / 0 skipped**；唯一失败为既有 `ConversationPlaybackDrivenTest.playbackDone_unknownOrRepeated_signalsNotLost` 10 秒等待，单类复跑 **9 tests / 1 failure** 仍复现，未冒充全绿；本批未改该播放驱动链路。LONG-01 500 轮 PASS。未同步 static、未启动/重启 8000、未 git commit。
 > ✅ v160（2026-08-19，**P-0819-A：剧本杀完整流程修复**）：定向 Maven `ScriptGameServiceTest/ScriptGameApTransferTest/ScriptGameUiMvpTest` 全绿；前端 `npm run build` 全绿（tsc + vite，143 modules）。覆盖角色身份绑定、首次搜证公开线索、阶段推进端点与主区按钮、准备阶段 Gal 人物介绍、讨论→投票入口及布局收敛。未部署 8000、未同步 static、未 git commit。
 > ✅ v161（2026-08-19，**P-0819-B：工作区阅读难度整理**）：非业务文档校验通过——`git diff --check` PASS；工作区阅读入口/忽略目录一致性检查 PASS。未执行 Maven/前端构建（本批仅改阅读文档和 AI 默认忽略规则，未改 Java/前端源码）。
 > ✅ v162（2026-08-19，**P-0819-A：剧本杀准备期 Gal 交流**）：定向 Maven `ScriptOutlineFullTest` 全绿（含新增 O-1b：SETUP 发言实时回显并进入 pendingHumanEvents）；前端 `npm run build` 全绿（tsc + vite，143 modules）。验证日志显示 chat 模式完整剧本就绪后仍按 round 1/round 2 收尾；未部署 8000、未同步 static、未 git commit。
@@ -822,7 +845,7 @@ pm run build\（tsc -b 0 错误 + vite 64 modules，index-DEFyKJ5G.js 1,840,208B
 - **定向测试**：mvn test -Dtest=SceneGoalServiceTest,SceneGoalStatusTest **9/9 全绿**（BUILD SUCCESS，EXIT=0；结构字段齐全/自定义玩家目标优先/LLM 失败兜底/缺角色归一化/判定解析/判定失败静默/状态机未开始→完成+SSE 广播 revealed 揭示全文/无变化不广播/Agent 隐藏目标注入）
 - **全量 mvn test**：**517 run / 1 failure / 0 errors**（70→72 类；498 基线零破坏 + 本批 9 用例 + 并行未登记批次新增用例）；唯一失败 = **既有 flaky** `ScriptGamePrivateChatTest.privateSayRepliesAndPersists`（mock LLM 脚本角色名随机「女仆/凯尔」定位偶发，Round 50/v51/v52 已登记同款；**单跑 8/8 PASS 复证**，BUILD SUCCESS）；LongTextStabilityTest 本轮 PASS（2.498s）；ComfyUIClientTest 11/0（并行批次已同步 CheckpointLoaderSimple 重构）
 - **兼容性**：旧场景无 goals 字段零破坏（宽容解析 null）；无目标会话不触发生成/判定；werewolf/script 模式 isGeneralMode 守卫零触碰；Agent 无 hiddenGoal 时系统提示逐字节不变
-- **禁动文件**：ArbiterService/审批/狼人杀/剧本杀 Service/SSE 主链路/static/前端 零改动；不打包不重启 8000 不 git commit（统一 gate 待授权）；SSE 契约与改动清单见 docs/修改记录.md #134 / DECISION_LOG D-047
+- **禁动文件**：ArbiterService/审批/狼人杀/剧本杀 Service/SSE 主链路/static/前端 零改动；不打包不重启 8000 不 git commit（统一 gate 待授权）；SSE 契约与改动清单见 docs/修改记录.md #134 / DECISION_LOG D-047A
 
 ## Round 54 / v54（2026-08-10 19:45-19:50，**P-0810-11 修复 roundHistory 跨会话残留**）
 - **目标**：部署前最后小改动——startScene 起局复用默认单例 router，RouterService.roundHistory 跨会话不清理 → POST /api/round/rollback（RoundController L72-79 → rollbackToRound）回滚时恢复旧会话 roundHistory 快照（P-0810-08 前端走查实测：单例会话 8 消息回滚 → 0）
@@ -1833,6 +1856,11 @@ oleplay-v4/frontend/src/phaser/simGroupFilter.ts——纯函数 shouldShowWorldM
 - **持久化验证**：统一地图生成结果增加“保存地图”和“保存并进入 2D 探索”；保存调用现有 `setGeneralMap(scriptId, map)`，写入 `roleplay_demo2_general_maps_v1`，GameBridge 命中当前场景缓存时直接复用。
 - **纪律**：未启动 `spring-boot:run`，未同步 8000 static，未 git commit。
 
+## Round 189 / v189（2026-08-20）（P-0820-S 地图缓存按剧本隔离）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules，产物 `index-CmA4ltbq.js` / `index-5RjB7pb7.css`。
+- **隔离逻辑**：保存地图时写入所属 `scriptId`；读取地图时校验所属场景，旧的空 ID 全局地图不再加载；RoleSelectPage 与 GameBridge 均按当前场景安全读取。
+- **纪律**：未启动 `spring-boot:run`，未同步 8000 static，未 git commit。
+
 ## Round 187 / v187（2026-08-20）（P-0820-H 晨雾镇实跑）
 - **实跑方式**：通过现有 8000 的 `POST /api/simulation/load-characters` 注入晨雾镇 collision 地图与 8 个测试角色，再调用 `POST /api/simulation/start`。
 - **运行结果**：启动成功；运行约 30 秒时 `running=true`、`tick=296`、`agentCount=8`；出现 3 组自动对话、6 个社会接触事件、关系状态开始写入；之后保持 5 个角色在对话中，其他角色继续漫游/等待。
@@ -1888,7 +1916,275 @@ oleplay-v4/frontend/src/phaser/simGroupFilter.ts——纯函数 shouldShowWorldM
 - **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
 - **视觉/交互核查**：手绘俯视底图由 Phaser 作为底层纹理加载，碰撞瓦片仍保持高不透明度；每个未旁听会话组只取最早一条 `group` 消息显示在发言者头顶，进入该组后即时收起预览，避免世界聊天刷屏。
 
+## Round 197 / v197（2026-08-20）（P-0820-O 清晰瓦片视觉）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
+- **视觉核查**：整张手绘背景图不再加载；ground/collision 以 100% 不透明度绘制，路径、河流、建筑边界和碰撞语义不再被底图混色模糊。
+
 ## Round 197 / v197（2026-08-20）（P-0820-P GitHub 开源完整度验收）
 - **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
 - **后端测试**：`mvn test -q` EXIT=0；Surefire 汇总为 988 tests、0 failures、0 errors、0 skipped。
 - **发布文件核查**：根仓库纳入前端源码与必要配置，未纳入 `node_modules`、`dist`、临时目录、日志或数据库文件；新增 MIT LICENSE；README 与 CI/Docker 路径保持一致。
+
+## Round 198 / v198（2026-08-20）（P-0820-O 会话可见性与隔墙声学修复）
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules，产物 `index-rjt0E_aO.js`。
+- **后端编译**：`mvn -q -DskipTests compile` EXIT=0。
+- **逻辑核查**：导演旁听时不再将空 `currentTrack` 写回 `joinedGroup`；墙体/建筑的 `blocksSound` 直线遮挡同时作用于自动建组、手动入组和既有会话持续性，避免房间内外穿墙交流。
+- **待补**：重新打包 8000 后以浏览器真实点击验证旁听跨过两次 4 秒轮询仍保持打开，以及隔墙角色不会成组。
+
+## Round 199 / v199（2026-08-20）（P-0820-O 真机回归）
+- **发布验证**：8000 已重打包并重启（PID 38412）；`GET /` 200 且引用 `index-DcOQHtbf.js`。
+- **浏览器真实交互**：在“晨雾镇 · AI 社会实验”的不带玩家观看模式中，点击地图右上活动组的“👁 旁听对话”后，右侧出现顾城、周野的两条组内发言；等待 **8.5 秒**（跨两次 4 秒群组轮询）后，会话面板与同组两条消息仍保持可见，未再自动关闭。
+- **隔墙回归**：`mvn -q '-Dtest=HearingSystemObstacleTest' test` EXIT=0；同一听觉半径的两名角色无墙可互听，插入 `blocksSound` 房间外墙后 `canHearEachOther=false` 且候选听觉组合为空。
+
+## Round 200 / v200（2026-08-20）（P-0820-O 旁听速度、记录与恢复）
+- **前端构建/发布**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules，`index-DdWaba_e.js` / `index-5RjB7pb7.css` 已同步并重打包；8000 `GET /` 200 且引用新 JS。
+- **浏览器真实交互**：导演模式点击活动组旁听后，面板标题显示“旁听 12字/秒”；点击“🗂 记录”可列出 `周野+顾城`、`唐梨+程放` 等组别及条数/最后时间，切到“按时间”后按 `16:48` 等时间桶展示组别与发言者。
+- **恢复语义核查**：页面切后台/失焦时 `visibilitychange`/`blur` 仅清本地逐字计时器并保留 `revealRef`；恢复焦点后从该位置重建计时器。输入暂停超时只对输入生效，后台停留不会跳过发言。
+
+## Round 202 / v202（2026-08-20）（P-0820-O 旁听自动续轮）
+- **根因实证**：`conversation-status` 中活动 DYAD 的 `turns=2`、`idleMs` 持续增长，后端正处于 playback-driven 的 `awaitPlayback`；经典旁听未回传 `playback_done`，因此只显示首轮两句后超时解散。
+- **修复**：旁听组所有已收到消息播放完成后，前端按“组 id + 最后一条消息 id”去重回传一次 `simPlaybackDone`；新一轮消息得到新的 key 后继续循环。同步修正 `worldSigRef` 的无前缀签名键，令 done/playing 状态可正常回写和触发续轮。
+- **发布验证**：`npm run build` EXIT=0（144 modules）；8000 重新打包启动，`GET /` 200 且引用 `index-DqhMZGMW.js`。
+
+## Round 201 / v201（2026-08-20）（P-0820-Q 外部图片/TTS Provider）
+- **编译**：`mvn -q -DskipTests compile` EXIT=0。
+- **定向测试**：`MimoTtsServiceTest` 与 `ExternalImageProviderTest` 通过；外部 TTS 桩验证 `/audio/speech` 二进制音频、模型/音色/Authorization 请求字段，外部图片桩验证 `/images/generations` base64 图片落盘和 8 帧生成任务。
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules。
+- **全量测试**：`mvn test -q` 执行 991 项，0 errors，1 failure；失败为 `ConversationJoinDistanceTest.autoDyad_withinRange_created`（150px 自动 DYAD 预期 1、实际 0），与本批 Provider 文件无关，定向重跑仍复现，未擅自修改对话主链路。
+
+## Round 202 / v202（2026-08-20）（P-0820-R 2D 刷新与方向控制修复）
+- **后端定向测试**：`mvn test -q "-Dtest=SimulationMoveDirTest,MovementSystemPlayerIsolationTest,SimulationSseThrottleTest"` EXIT=0；覆盖方向换向、玩家碰撞、零方向停止与 SSE 200ms 广播。
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules，产物 `index-Cfts6Ixn.js`。
+- **代码核查**：`git diff --check` PASS；未重启 8000、未同步 static、未 git commit。
+
+## Round 203 / v203（2026-08-20）（P-0820-T 2D 旁听连续对话）
+
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules，产物 `index-OZKMA_1a.js`。
+- **后端定向测试**：`mvn -q -Dtest=HearingSystemObstacleTest test` EXIT=0。
+- **发布验证**：`mvn -q -DskipTests package` EXIT=0；8000 已重启，`GET /` 200 且引用 `index-OZKMA_1a.js`。
+- **真机回归**：浏览器点击“旁听对话”后，同一组右侧实测显示 15 条连续 AI 发言；接口同时观测到同组 `rounds=3`、`turns=6`，确认不再停在首轮两句。
+
+## Round 204 / v204（2026-08-20）（P-0820-V 晨雾镇实物瓦片）
+
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules，产物 `index-_QTka_pd.js`。
+- **资源校验**：构建目录已包含 `dawn-town-tiles.png`、`avalon-object-layer.png`、`lpc-house-inside.png` 三个实际瓦片资源。
+- **后端编译**：`mvn -q -DskipTests compile` EXIT=0。
+- **发布状态**：静态源目录已同步；8000 被外部 Java 进程占用且尚未监听，未擅自终止，未完成在线资源请求验证。
+
+## Round 204 / v204（2026-08-20）（P-0820-U 2D 对话入口与演讲可达性）
+- **后端定向测试**：`mvn -q -Dtest=ModeClassifierSpatialClusteringTest test` EXIT=0；新增单向声学扩散 → `PUBLIC_SPEAKING` 回归用例，既有空间聚类用例保持通过。
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 144 modules，产物 `index-B271gfZh.js`。
+- **行为核查**：点击 NPC 只打开真实对话面板并提示输入，不自动注入玩家消息；多人组仍按既有“加入发言”语义，未宣称为 WEAK 脱敏旁听。
+- **发布状态**：未同步 static、未重启 8000、未 git commit。
+
+## Round 205 / v205（2026-08-22）（P-0822-B 桌面游戏视觉基础第一阶段）
+
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 145 modules，产物 `index-BY8R3TZu.js`。
+- **覆盖范围**：新增原创晨雾镇品牌主视觉、统一 SVG `Icon` 组件；首页和顶栏导航去除 emoji 依赖并接入图标系统；未同步 `static/`、未重启 8000、未 git commit。
+
+## Round 206 / v206（2026-08-22）（P-0822-C 桌面壳与发行配置第一阶段）
+
+- **源码检查**：`node --check desktop/main.cjs` 与 `node --check desktop/preload.cjs` EXIT=0。
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 145 modules，产物 `index-BY8R3TZu.js`。
+- **已知阻断**：Electron 依赖元数据已写入，但下载 Electron 二进制时网络 `fetch failed`，因此未生成 NSIS `.exe` 或 ZIP；自动更新模块留待依赖可用后接入并实包验证。
+
+## Round 207 / v207（2026-08-22）（P-0822-D 产品品牌去场景化）
+
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 145 modules，产物 `index-C6un5slh.js`。
+- **覆盖范围**：产品级 Logo、首页提示及视觉规范改为通用“幻境之书”叙事角色扮演主题；晨雾镇地图/存档/瓦片实现未改。
+
+## Round 208 / v208（2026-08-22）（P-0822-E 抽象开放剧本标识）
+
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 145 modules，产物 `index-UwOKfOds.js`。
+- **覆盖范围**：产品 Logo 改为原生 SVG 的未闭合线条、中心留白与金色光点，表达“没有预设剧本、由参与者展开故事”；未改场景/存档内容。
+
+## Round 209 / v209（2026-08-22）（P-0822-F 极简叙事路径产品标识）
+
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 145 modules，产物 `index-UwOKfOds.js`。
+- **覆盖范围**：图标收敛为一条连续路径、一个分岔和一个节点，移除书页、光点和装饰性线条。
+
+## Round 210 / v210（2026-08-22）（P-0822-G 桌面版内置 Java 运行环境）
+
+- **运行环境构建**：`desktop/build-runtime.ps1` EXIT=0；jlink 已生成 JDK 21 精简运行环境，内置 `java.exe --version` 验证通过。
+- **发行配置**：Electron 打包将同时带入后端 jar 与 `desktop/runtime`，桌面主进程优先使用内置 `jre/bin/java.exe`。
+
+## Round 211 / v211（2026-08-22）（P-0822-H 桌面自动更新闭环）
+
+- **源码检查**：`node --check desktop/main.cjs`、`node --check desktop/preload.cjs` EXIT=0。
+- **前端构建**：`npm run build` EXIT=0；TypeScript 通过，Vite 146 modules，产物 `index-1tkT_RDb.js`。
+- **打包阻断**：再次下载 Electron 二进制仍为 `fetch failed`，故无法执行实际安装包构建；更新模块已按 generic 静态更新源完成代码接线，待 Electron 可用后进行 NSIS 增量更新实包验证。
+
+## Round 212 / v212（2026-08-22）（P-0822-I 桌面实包完成）
+
+- **发行构建**：`npm run desktop:dist` EXIT=0；TypeScript 通过，Vite 146 modules；electron-builder 成功生成 NSIS 安装程序、ZIP 绿色包与 NSIS blockmap。
+- **发行物核查**：`release/HuanjingBook-0.0.0-x64.exe`（254,568,742 B）、`release/HuanjingBook-0.0.0-x64.zip`（304,614,572 B）均存在；解包目录含 `幻境之书.exe`、`resources/engine/roleplay-engine.jar`、`resources/jre/bin/java.exe` 与 `app.asar`。
+- **附加检查**：`node --check desktop/main.cjs`、`node --check desktop/preload.cjs`、`git diff --check` 通过。构建器未使用自定义 Windows 壳图标：SVG→ICO 转换受本机 Node 24 与 electron-builder 图标工具兼容性影响，功能与应用内品牌图标不受影响。
+
+## Round 213 / v213（2026-08-22）（P-0822-J 桌面后端启动超时修复）
+
+- **根因**：发行包误带普通 jar，`java -jar` 报“no main manifest attribute”；替换可执行 Spring Boot jar 后，精简 JRE 又暴露 `java.instrument.IllegalClassFormatException` 缺失。
+- **修复与验证**：jlink 增加 `java.instrument`；最终发行包用自身 `resources/jre/bin/java.exe` 启动自身 `resources/engine/roleplay-engine.jar`，隔离端口 Tomcat 在 6.7 秒内 ready。
+- **发行物**：`npm run desktop:dist` EXIT=0，生成 EXE 429,709,436 B、ZIP 483,105,350 B 与 blockmap；根目录 `release/` 的同名下载文件已替换为修复版。
+
+## Round 214 / v214（2026-08-22）（P-0822-K 安装环境后端超时二次修复）
+
+- **运行目录修复**：Java 子进程的工作目录固定为 Electron 用户数据目录 `backend/`，消除安装目录不可写时 H2 数据库和运行时资源初始化失败的风险；冷启动等待从约 20 秒扩大到 45 秒。
+- **可诊断性**：后端标准输出与错误输出写入用户目录 `backend.log`，启动失败对话框附带日志位置及末尾内容。
+- **端到端验证**：直接运行最终 `win-unpacked/幻境之书.exe`，内置 Java 被桌面主进程启动；日志显示 Tomcat 6.4 秒启动完成，且收到桌面主进程的 HTTP 探测请求。修复版 EXE/ZIP 已替换根目录 `release/`。
+
+## Round 215 / v215（2026-08-23）（P-0823-A 桌面维护与更新流程固化）
+
+- **维护门禁**：新增 staging 准备脚本，校验 Spring Boot 可执行 manifest、HTTPS 更新地址与 release runtime；普通 jar 被按预期拒绝，且不会生成 staging 内容。
+- **版本门禁**：更新清单脚本拒绝开发版本 `0.0.0`，防止未定义版本进入自动更新通道。
+- **静态校验**：`package.json` JSON、候选构建 workflow YAML、`node --check desktop/main.cjs`、`npm run build`（Vite 146 modules）及 `git diff --check` 通过。
+- **发布状态**：仅新增手动候选构建工作流，未执行它、未创建公开 Release、未上传任何正式发行物。
+
+## Round 216 / v216（2026-08-23）（P-0823-B 项目文档当前态整理）
+
+- **当前入口**：新增 `docs/当前维护状态.md`，将当前优先级、桌面候选状态、文档分层和开工顺序从历史描述中拆出。
+- **文档路由**：README、PROJECT_CONTEXT、INDEX 与并行登记同步；PROJECT_CONTEXT 下方旧阶段内容明确标为历史摘要，跨日并行行移入“已结束作业”区。
+- **校验与发布状态**：文档路径与标题检查、`git diff --check` 通过；未改业务代码、未执行公开发布、未 git commit。
+
+## Round 217 / v217（2026-08-23）（P-0823-C 0.1.0 发布候选）
+
+- **后端回归**：`mvn -q -Dtest=ConversationJoinDistanceTest,HearingSystemObstacleTest test` 通过；全量 `mvn -q test`：993 tests，0 failures，0 errors，0 skipped，152 test classes。
+- **Maven 产物**：`mvn -q -DskipTests package` 通过；`target/roleplay-engine-0.1.0.jar` 240,808,509 B，manifest 含 `Implementation-Version: 0.1.0`、Spring Boot `JarLauncher`、`Start-Class: com.roleplay.engine.RoleplayApplication`。
+- **桌面产物**：0.1.0 与 0.0.1 均生成 NSIS 安装程序、ZIP 和 blockmap；0.1.0 生成 `latest.yml`，SHA-512 与 EXE 大小一致。更新清单脚本已修复 Windows PowerShell/.NET 对 `SHA512.HashData` 的兼容问题。
+- **隔离安装验收**：0.0.1 安装目录成功安装，内置 JRE 21 拉起后端（随机端口 49350，约 6.6 秒 ready）；全新用户数据目录设置保存后，0.1.0 覆盖安装并再次启动成功（随机端口 56335，约 6.4 秒 ready）。
+- **限制**：当前令牌未提升，`New-LocalUser` 被 Windows 拒绝访问；真实“新 Windows 账户”验收待提升权限，已完成全新用户数据目录的等价隔离验证；未 git commit。
+
+## Round 218 / v218（2026-08-23）（P-0823-D 桌面大厅 UI 收敛）
+
+- **前端构建**：`npm run build` 通过，TypeScript 通过，Vite 147 modules；产物包含新增说明书页面与图标/滑块样式。
+- **功能核对**：主导航收敛为 5 项；说明书支持步骤按钮、上一步/下一步、范围滑块拖动；设置页既有 `input[type=range]` 统一获得可见轨道和拖拇样式。
+- **范围**：未改后端、未重启 8000、未同步桌面安装包、未 git commit。
+
+## Round 219 / v219（2026-08-23）（P-0823-E 桌面包同步）
+
+- **桌面构建**：`npm run desktop:prepare-release` 与 `npm run desktop:dist` 通过；生成 0.1.0 NSIS、ZIP、blockmap，根 `release/` 已同步最新文件并重新生成 `latest.yml`。
+- **资源核验**：解包 `app.asar` 含“幻境之书说明书”；已覆盖测试安装目录并启动新 EXE。
+- **窗口核验**：可访问性树显示首页、剧本选择、角色库、说明书、设置 5 项导航；说明书显示 4 个步骤及“滑动浏览说明书”滑块。
+- **范围**：未重启 8000、未 git commit。
+
+## Round 220 / v220（2026-08-23）（P-0823-F 大厅首屏与内容页滚动）
+
+- **前端/桌面构建**：`npm run build` 147 modules、`node --check desktop/main.cjs`、`npm run desktop:dist` 全部通过。
+- **布局核验**：1280×720 桌面窗口首页完整显示标题、氛围信息和 5 个入口卡片；角色库、剧本、设置等页面通过 `.app2-main-scroll` 提供应用内独立纵向滚动。
+- **图标核验**：桌面网关 SVG MIME 类型修复后，品牌 SVG 不再显示破图；窗口级可访问性与截图均确认 5 项导航和首页内容正常。
+- **范围**：未重启 8000、未 git commit。
+
+## Round 221 / v221（2026-08-23）（P-0823-G 桌面 H2 锁冲突修复）
+
+- **根因复现**：同一用户数据目录允许多个 Electron 主进程同时启动 Java，第二个 H2 连接打开 `roleplay.mv.db` 失败并退出 code=1。
+- **修复**：`main.cjs` 增加 Electron 单实例锁；第二次打开仅恢复/聚焦已有窗口。
+- **验证**：`node --check desktop/main.cjs`、桌面 NSIS/ZIP/blockmap 构建与覆盖安装通过；连续启动两次后桌面子进程 4 个但内置 Java 后端仅 1 个，H2 不再重复锁定；未重启 8000、未 git commit。
+
+## Round 222 / v222（2026-08-23）（P-0823-H 前端浅色模式部署）
+
+- **前端构建**：`npm run build` 通过（TypeScript + Vite 147 modules）。
+- **静态部署核验**：`src/main/resources/static/index.html` 已引用 `index-Dzxr9qXW.js` 与 `index-DJ_iObqj.css`；两个产物存在，分别含主题运行时和浅色样式标记。
+- **范围**：8000 当前未监听，未启动或重启后端；`git diff --check` 通过，未 git commit。
+
+## Round 223 / v223（2026-08-23）（P-0823-I 桌面 UI 易用性与重构包）
+
+- **界面改造**：说明书新增配置指南；设置页复杂配置提供 ⓘ 悬停/键盘聚焦说明，技术术语替换为易理解表述；修复设置、素材路径与窄窗口导航的文字截断问题。
+- **构建与包内核验**：`npm run build` 通过（Vite 147 modules）；`npm run desktop:dist` 通过，桌面包内已核验“哪些需要设置”和“把光标停在”文本。
+- **候选产物**：根 `release/` 已同步 `HuanjingBook-0.1.0-x64.exe`（394,547,441 B）、ZIP（444,930,993 B）、blockmap（412,209 B）与匹配 SHA-512 的 `latest.yml`；未执行公开发布、未启动 8000、未 git commit。
+
+## Round 224 / v224（2026-08-23）（P-0823-J 浅色主题即时生效）
+
+- **修复**：主题下拉选择现在立即更新全局主题并持久化，提示“已切换为浅色/深色/跟随系统”；无需再次点击“保存全部设置”。
+- **构建与安装**：`npm run build`、`npm run desktop:dist` 与更新清单生成通过；新版候选包已覆盖当前安装目录。
+- **启动核验**：桌面 App 后端正常监听随机端口 `55954`，可见主窗口标题为 `Roleplay v4`；未 git commit。
+
+## Round 225 / v225（2026-08-23）（P-0823-M 相关性旧记忆检索接入）
+
+- **实现**：一般模式角色上下文新增“相关记忆”段：用本轮玩家输入检索短期窗口外的可见历史消息；自动轮以场景为检索词。压缩摘要只在 merged 公开轨道召回，WEAK/ISOLATED 轨道不引入无可见性元数据的摘要。
+- **验证**：定向 `MemoryStoreRelevantMemoryTest,MemoryRetrievalTest` 通过；全量 `mvn test -q`：**995 tests / 153 类 / 0 failures / 0 errors / 0 skipped**。8000 未启动或重启，未 git commit。
+
+## Round 226 / v226（2026-08-23）（P-0823-N 角色提示词去复读）
+
+- **实现**：首轮及 `【校准提醒】` 轮使用完整五层人设，普通轮使用轻量人设；口头禅、原话示例与引号台词均降级为“按触发情境偶尔采用”的可变表达倾向。2D 对话策略同步改用轻量人设。
+- **验证**：定向 `PersonaRelaxationTest,PersonaFiveLayerTest,RouterServiceCalibrationTest,TrackStrategyTest` 通过；全量 `mvn test -q`：**995 tests / 153 类 / 0 failures / 0 errors / 0 skipped**。8000 未启动或重启，未 git commit。
+
+## Round 227 / v227（2026-08-23）（P-0823-O 主控与角色 LLM 分离）
+
+- **实现**：新增独立主控 provider。`ArbiterService`、`ScriptMapService`、`StructureMapService` 和 `GeneratorService` 注入主控 LLM；角色逐轮说话仍使用原角色 LLM。主控提示增加事实核对、目标/信息边界和保守决策约束。
+- **配置/UI**：`/api/config/integrations` 支持 `arbiter_llm` 的运行时读写（密钥仅掩码返回）；设置页可单独填写主控模型、地址、密钥，并明确地图生成/结构蓝图默认使用主控，旧地图 LLM 仅用于可选视觉审核。
+- **验证**：定向 `ConfigControllerArbiterLlmTest,SceneMapLlmModeTest,GeneratorSceneRolesTest,GeneratorCharacterFiveLayerTest,ArbiterTrackPredictionTest,ArbiterDuoProtagonistGuardTest,ScriptMapServiceTest,StructureMapServiceTest` 通过；全量 `mvn test -q`：**996 tests / 154 类 / 0 failures / 0 errors / 0 skipped**；前端 `npm run build` 通过（Vite 147 modules）。8000 未启动或重启，未 git commit。
+
+## Round 228 / v228（2026-08-23）（P-0823-P 三模式主控上下文与推理加强）
+
+- **实现**：一般模式主控明确分离事实、角色主张和待验证推测；狼人杀调度 prompt 补入历史摘要、上一轮行动及公开/私密信息边界，结果整合要求阶段、淘汰、救援与胜负字段一致；剧本杀和狼人杀讨论上下文均加入证据/陈述/推测分层，禁止编造线索、时间线、身份或规则结果。
+- **验证通过**：`ArbiterModeReasoningContextTest,ArbiterTrackPredictionTest,ArbiterDuoProtagonistGuardTest,ScriptGameDiscussionTest,WerewolfGameFixTest` 定向执行通过。
+- **全量结果（如实记录）**：`mvn test -q` 执行 **998 tests / 155 类**，失败 2 项：`ConversationPlaybackDrivenTest` 的连点两轮时序、`LongTextStabilityTest` 第 1 轮耗时约 14.1 秒超过 10 秒阈值。两项均不覆盖本批文件；单独复跑时 `ConversationPlaybackDrivenTest` 通过，`LongTextStabilityTest` 仍失败（约 14.2 秒）。8000 未启动或重启，未 git commit。
+
+## Round 229 / v229（2026-08-24）（P-0824-A/B/C/D 安全修复第一批）
+
+- **后端实现**：网页抓取默认关闭，只有 `roleplay.web.fetch-allowed-hosts` 精确可信主机白名单可开放，并叠加公网地址/响应上限/HTML 截断保护；剧本杀 roleKey 空值和 restart 重置旁路关闭；狼人杀玩家/DM 鉴权及 init 令牌归属修复，前端同步 session/player/key、X-DM-Key 和重开新令牌。
+- **后端验证**：错误工作目录 `roleplay-v4` 的首次 Maven 命令因无 POM 退出（未执行测试）；并行子批次曾污染共享 `target`，主会话停止并发构建后执行 `mvn clean test-compile`，首次因 `ScriptPresentEndpointTest` 漏 `assertFalse` import 失败，如实修正后 test-compile 通过。首轮 9 类 50/0；未衡初审发现 3 个旁路并整改后，最终 10 类定向测试 **59 tests / 0 failures / 0 errors**：`WebSearchServiceSecurityTest,ScriptGameResumeTest,ScriptPresentEndpointTest,WerewolfControllerAuthorizationTest,ScriptControllerBugBatchTest,WerewolfRoleKeyTest,WerewolfStage1Test,WerewolfGameFixTest,WerewolfGameSmokeTest,WerewolfRenameTest`。
+- **前端/桌面验证**：两次 `npm run build` 均通过（最终 Vite 147 modules；主 JS 2,135.16 kB，既有 >500 kB 警告）；`npx oxlint src desktop/main.cjs desktop/preload.cjs` **0 error**（既有 warnings 保留）；两个 desktop 文件 `node --check` 通过；临时 ASAR 实包只含 main/preload 且未发现证书/私钥扩展。
+- **边界**：未跑全量 Maven，Round 228 的两项历史红测状态不变；旧 `release` 候选包仍含历史 PFX，禁止分发，待主人确认删除/重建及证书轮换；未同步 Spring static，未启动或重启 8000，未 git commit。
+- **阶段审查**：未衡初审不通过并指出 DNS rebinding、狼人杀 init 令牌归属、剧本 restart 重置三项旁路；全部整改并完成 59/0 后二次复审 **通过**。非阻断遗留：可信抓取白名单尚未补部署示例。
+
+## Round 230 / v230（2026-08-24）（P-0824-E/F/G/H 全仓矛盾与低效缺陷收口）
+
+- **实现**：SSE 按 session/player/roleKey 隔离私密事件；未知会话改为 404，并增加 12h TTL、128 上限、LRU/定时清扫和显式关闭；剧本局缓存淘汰统一清理旁路状态与讨论线程池；执行器统一增加销毁路径；TTS 异步任务增加 100 槽背压；本机配置默认仅绑定 `127.0.0.1`、关闭 H2 控制台；前端修复多会话串线、重复轮询、SSE 旧连接复活、狼人杀刷新误开新局及 raw fetch 静默失败。
+- **回归修复**：`LongTextStabilityTest` 同时 mock 角色/主控 LLM，避免 500 轮真实重试；旧剧本测试统一携带 roleKey；修复 init 前登记的 `player_id` 被缓存替换误清理，恢复旧快照改名映射。
+- **后端验证**：核心定向 **84 tests / 0 failures / 0 errors**；长文本单测 500 轮通过（P95 7~8ms）；最终全量 **1026 tests / 159 类 / 0 failures / 0 errors / 0 skipped**。
+- **前端验证**：`npm run build` 通过（Vite 147 modules）；`npm run lint` 0 error（保留既有 warnings）；Spring static 已同步为唯一 `index-B7yyNgmd.js` + `index-DyiFSn8r.css`，入口哈希与 dist 一致。
+- **发布残留**：源码 PFX 与前端旧 release 已删除；根 `release` 旧候选仍被当前 Codex 进程锁定 `app.asar`，明确不可发布，退出 Codex 后删除。未执行 `spring-boot:run`，未启动/重启 8000，未 git commit。
+
+## Round 231 / v231（2026-08-24）（P-0824-I/J/K/L 一般模式自治世界）
+
+- **实现范围**：异步输入邮箱；结构化世界命令协议/总线/主控规划；AMBIENT/TEMPORARY/SUPPORTING/CORE 四档与 ACTIVE/PASSIVE/DORMANT/ARCHIVED/EXITED 五态；轻量群演池；地图后台任务生命周期；安全退场；`/api/world/*`；前端异步输入与群演投影合并。
+- **定向验证**：`InputMailboxTest,WorldCommandProtocolTest,RoleLifecycleRuleEngineTest,MapLifecycleServiceTest,WorldCommandPlannerTest,WorldRuntimeServiceTest,WorldRuntimeEndpointTest,SessionRegistryLifecycleTest,SimulationAgentSuspensionTest` 全部通过，共 **48 tests / 0 failures / 0 errors**；包含真实 Spring 上下文、MockMvc 端点、同名防冒用、非法迁移、失败重试、会话世代隔离、玩家排除、reset 对账、原 Agent/AgentState 恢复和禁自动发布覆盖。
+- **全量验证**：最终安全补丁后 `mvn test -q` 执行 **1070 tests / 0 failures / 1 error / 0 skipped**；唯一错误仍为本批未改链路 `ScriptPresentEndpointTest.presentHttpFlow` 的响应字段瞬时缺失，此前同一错误单类复跑 **1/0** 通过。主源码 compile 通过；不把复跑结果冒充全量全绿。
+- **收官补验**：第五轮终审的世代令牌前置校验、真实角色点击唤醒、reset/load 同锁更替完成后，`WorldRuntimeServiceTest,WorldRuntimeEndpointTest,SimulationAgentSuspensionTest` **15/0**；第六轮补 Router 获取后二次 token 校验与命令 drain/execute 同锁后，`WorldRuntimeServiceTest,WorldRuntimeEndpointTest` **14/0**；前端重新 build 通过。
+- **前端验证**：`npm run build` 通过（TypeScript + Vite 147 modules，主 JS `index-BQEMyu2n.js`）；`npm run lint` **0 error**，保留工作区既有 warnings；轻量群演身份可透传，首次点击晋升，真实角色点击可唤醒 PASSIVE。
+- **边界**：地图 PUBLISHED 表示校验通过并进入可用注册表，不自动热切当前一般模式权威地图；本批未同步 Spring static、未执行 `spring-boot:run`、未启动或重启 8000、未 git commit。
+
+## Round 233 / v233（2026-08-25）（P-0825-A 场景人口与有效互动收官）
+
+- **实现收口**：SessionRegistry 移除监听携带被摘除 Router，WorldRuntime 以实例条件清理；同 ID 新代首次绑定会先清旧代邮箱/角色/命令，迟到旧代回调不能擦除新代。Router 记录 WorldAgent 所有权，旧 `/api/agents` 增删接口无法覆盖或删除世界角色。非 2D 默认 Gal 界面轮询 `ambient_agents`、展示场景路人并把所选 `roleId` 随实际发言作为 `focused_role_id` 发送；单击本身仍为 0 分。
+- **定向验证**：`SessionRegistryLifecycleTest,RouterWorldOwnershipTest,WorldRuntimeServiceTest,WorldRuntimeEndpointTest,RouterRenameTest` 共 **31 tests / 0 failures / 0 errors**；覆盖旧代迟到清理、新代旧资源清空、Router 所有权硬门禁、有效互动与端点行为。
+- **前端验证**：`npm run build` 通过，TypeScript 0 错误，Vite **147 modules**；产物 `index-Dmi0GozD.js` / `index-DXyhpeCN.css`，仅既有大 chunk 警告。
+- **全量验证**：`mvn test -q` 共 **1086 tests / 0 failures / 1 error / 0 skipped**；唯一错误是未改链路 `ScriptPresentEndpointTest.presentHttpFlow` 响应字段瞬时缺失，紧接着单类复跑通过。LONG-01 500 轮 PASS；不把单类复跑冒充全量全绿。
+- **边界**：未同步 Spring static，未运行 `spring-boot:run`，未启动/重启 8000，未 git commit。
+
+## Round 237 / v237（2026-08-25）（P-0825-E 非 2D 前端真机）
+
+- **真实路径**：首页 → 剧本选择 → 一般模式 → 街角咖啡馆 → 启用玩家 → 选择“夜行人” → 自由聊天；页面确认“4 名角色 · 带玩家”，在线 bundle 为 `index-DbHmj9CE.js`。
+- **角色栏 PASS**：默认收起时无“单独聊天”按钮；点击“角色 3”后 3 张角色卡完整展示，每卡同时有“单独聊天/加入群聊”。
+- **单聊 PASS（UI/投递）**：点击苏浅浅“单独聊天”后会话条显示“夜行人、苏浅浅”；真实输入发送按钮由 disabled→enabled→发送后 disabled，页面显示已接收。
+- **群聊 PASS（UI/投递）**：0/1 人时“建立群聊”禁用；精确选择苏浅浅、白露后显示“已选 2 名”，按钮启用；创建后会话条显示“夜行人、苏浅浅、白露”，真实输入被接收。
+- **回复闭环部分通过**：Tokenra 首轮持续返回 403 `insufficient_user_quota`；world state 现场 `accepted=2 / drained=1 / pending=1 / recent_results=0`，前端未把异步失败反馈给玩家，登记 D48。并行外部切换 OpenRouter 后刷新重建会话 `100ec19d-efa`，单聊真实生成苏浅浅台词；群聊再次成功投递，但现场仍为 `accepted=2 / drained=1 / pending=1`，服务端同时有 429 与流解析重试，未在本轮取得苏浅浅+白露双回复完整证据。
+- **控制台**：发现 `charanim-助手` atlas JSON 解析与图片加载 ERROR，Gal 仍以占位立绘运行，登记 D49。
+- **边界**：浏览器和只读 API/日志诊断；未改业务代码，未运行 Maven/前端构建，未重启 8000，未 git commit。
+
+## Round 236 / v236（2026-08-25）（P-0825-D A/B/C 统一部署）
+
+- **静态同步**：前端 `dist` 与 Spring `static` 共 **12/12** 文件 SHA 一致；当前入口为 `index-DbHmj9CE.js` / `index-DyG7J78e.css`。
+- **打包验证**：增量 package 因 `target/classes` 保留历史哈希而被否决；执行 `mvn clean package -DskipTests` 后 JAR 仅含当前两份 index 资源，并含 World 模块 **43** 个 class。
+- **安全与启动**：生产 YAML 移除两处明文密钥回退，LLM 与主控密钥仅从进程环境注入；停止旧 PID 26752，启动新 PID **7412**。未使用 `spring-boot:run`。
+- **健康检查**：`GET /`、`/api/mode`、`/api/world/state?session_id=simulation` 均 **200**；首页引用新 JS/CSS，启动日志 ERROR **0**。
+- **测试承接**：本轮仅 clean package 与部署检查；功能验证沿用紧邻 v235 的定向 **39/0/0**、全量 Maven **1088/0/0/0**、LONG-01 500 轮 PASS，以及前端 147 modules build PASS。
+
+## Round 235 / v235（2026-08-25）（P-0825-B 非 2D 定向会话与隐藏角色栏）
+
+- **后端**：`/api/world/input` 接收最多 12 个去重的 `conversation_members` 与 `focused_role_ids`；WorldRuntime 只在成功回合后逐角色记录独立幂等 DIALOGUE 互动；Router `runRoundTargeted` 在 Agent 执行层保留所选成员，未选 AI 不生成回复。空成员列表仍走原全体调度，导演模式零变化。
+- **前端**：有玩家的一般 Gal 顶栏新增“角色 N”入口，角色栏默认隐藏；完整角色与轻量路人统一卡片，每卡两个选项“单独聊天/加入群聊”，群聊至少两名 AI。当前会话条显示单聊/群聊成员，可结束聊天；轻量路人首次成功发言后随轮询更新为完整角色。
+- **验证**：定向 7 类 **39/0/0**；全量 Maven **1088/0/0/0**，LONG-01 500 轮 PASS；前端 TypeScript + Vite build 通过（147 modules，`index-DbHmj9CE.js` / `index-DyG7J78e.css`，仅既有大 chunk 警告）。
+- **边界**：未同步 Spring static，未运行 `spring-boot:run`，未启动/重启 8000，未 git commit。
+
+## Round 234 / v234（2026-08-25）（P-0825-C 角色卡 TTS 默认声线）
+
+- **实现范围**：角色卡隐藏 TTS 栏移除“语音朗读”独立启动开关；AI 消息合成默认自动应用角色卡声线，未配置时使用系统默认音色。隐藏栏和右侧面板仍可由玩家展开，以修改、试听和保存声线。
+- **前端验证**：`npm run build` 通过，TypeScript 0 错误、Vite **147 modules**；产物 `index-ChWF02bp.js` / `index-DXyhpeCN.css`，仅既有大 chunk 警告。
+- **边界**：纯前端角色卡 UI 收敛；未同步 Spring static，未运行 `spring-boot:run`，未启动或重启 8000，未 git commit。
+## Round 238 / v238（2026-08-25）（P-0825-O 面试官审阅整改第一轮）
+
+- **架构门禁**：新增 ArchUnit `ArchitectureTest`，验证 Track、地图、移动规则及 core/agent 不反向依赖 Web controller；定向 **2 tests / 0 failures / 0 errors**。
+- **前端质量**：TypeScript + Vite 构建通过（**148 modules**）；新增 `npm run lint` CI 步骤，本地 lint **0 error**，保留既有 React Hook / Fast Refresh 等 warning，未将 warning 冒充已修复。
+- **全量结果（如实记录）**：`mvn -q test` 运行 **1095 tests / 0 failures / 1 error / 0 skipped**；唯一错误为既有瞬时 `ScriptPresentEndpointTest.presentHttpFlow`。紧接着该类单独复跑 **1/0/0** 通过；本批未触及该链路，故不把单类通过冒充为全量全绿。
+- **静态资源**：删除审计确认、但仓库内无许可/署名记录的 Avalon/LPC 瓦片；前端 bundle 已同步 Spring static，dist/static JS SHA-256 一致。未执行 `spring-boot:run`，未启动或重启 8000。

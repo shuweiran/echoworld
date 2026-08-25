@@ -4,6 +4,7 @@ import com.roleplay.engine.controller.CharacterController;
 import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.SessionRegistry;
+import com.roleplay.engine.service.world.WorldRuntimeService;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
 import com.roleplay.engine.simulation.map.SocialExperimentMap;
 import org.slf4j.Logger;
@@ -30,12 +31,14 @@ public class SimulationController {
     private final CharacterController characterController;
     /** P-0814-A：会话注册表（playback_done 无 group_id 时推进一般模式 RouterService 轮次）。 */
     private final SessionRegistry sessions;
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    @org.springframework.context.annotation.Lazy
+    private WorldRuntimeService worldRuntime;
     private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<SimulationWorld.WorldSnapshot> recentSnapshots = new CopyOnWriteArrayList<>();
     private static final int MAX_RECENT_SNAPSHOTS = 100;
-    /** P-0815-E 需求3：SSE 全量快照广播节流间隔（世界 200ms/tick；每 2 tick=400ms 广播一次，
-     *  2.5 次/秒替代每 tick 5 次/秒——服务端序列化+推送负载减半、前端全量重渲染减半，消「界面一卡一卡」）。 */
-    private static final int SSE_BROADCAST_TICK_INTERVAL = 2;
+    /** P-0820-R：SSE 全量快照每个世界 tick 广播一次（200ms/5Hz），保证玩家位置及时可见。 */
+    private static final int SSE_BROADCAST_TICK_INTERVAL = 1;
 
     public SimulationController(SimulationService simulationService, SimulationWorld world,
                                 CharacterController characterController) {
@@ -140,7 +143,12 @@ public class SimulationController {
             personas.add(p);
         }
 
-        simulationService.initWithPersonas(personas, sceneName, playerName, playerId, customObstacles, mapLabel);
+        final List<Obstacle> selectedObstacles = customObstacles;
+        final String selectedMapLabel = mapLabel;
+        Runnable load = () -> simulationService.initWithPersonas(
+                personas, sceneName, playerName, playerId, selectedObstacles, selectedMapLabel);
+        if (worldRuntime != null) worldRuntime.replaceSimulationWorld(load);
+        else load.run();
         return Map.of("status", "ok", "message", "Loaded " + personas.size() + " characters into simulation");
     }
 
@@ -177,7 +185,8 @@ public class SimulationController {
 
     @PostMapping("/reset")
     public Map<String, Object> reset() {
-        simulationService.clearAll();
+        if (worldRuntime != null) worldRuntime.replaceSimulationWorld(simulationService::clearAll);
+        else simulationService.clearAll();
         return Map.of("status", "ok", "message", "Simulation reset");
     }
 
@@ -197,12 +206,18 @@ public class SimulationController {
     public Map<String, Object> addAgent(@RequestBody Map<String, Object> body) {
         String name = body == null ? "" : String.valueOf(body.getOrDefault("name", ""));
         String persona = body == null ? "" : String.valueOf(body.getOrDefault("persona", ""));
+        if (worldRuntime != null && worldRuntime.isManagedAgentName(name)) {
+            return Map.of("status", "error", "message", "Agent name is owned by lifecycle manager");
+        }
         return simulationService.addSocialAgent(name, persona);
     }
 
     /** 动态移除一般模式 2D 社会实验角色，并清理关系/记忆/目标。 */
     @DeleteMapping("/agent/{agentName}")
     public Map<String, Object> removeAgent(@PathVariable String agentName) {
+        if (worldRuntime != null && worldRuntime.isManagedAgentName(agentName)) {
+            return Map.of("status", "error", "message", "Managed agent must retire through world lifecycle");
+        }
         return simulationService.removeSocialAgent(agentName);
     }
 
@@ -244,6 +259,17 @@ public class SimulationController {
             @RequestBody Map<String, String> body) {
         String message = body.getOrDefault("message", "");
         simulationService.sendUserMessage(agentName, message);
+        String focusedRoleId = body.getOrDefault("focused_role_id", "").trim();
+        String interactionId = body.getOrDefault("interaction_id", "").trim();
+        if (worldRuntime != null && !message.isBlank() && !focusedRoleId.isBlank()
+                && !interactionId.isBlank()) {
+            try {
+                worldRuntime.interactOnce(WorldRuntimeService.SIMULATION_SESSION, focusedRoleId,
+                        com.roleplay.engine.service.world.RoleInteractionKind.DIALOGUE, interactionId);
+            } catch (IllegalArgumentException ignored) {
+                // 焦点群演可能已被其他命令晋升/退场；不回滚已接受的玩家发言。
+            }
+        }
         return Map.of("status", "ok");
     }
 
@@ -276,6 +302,8 @@ public class SimulationController {
         state.setTargetX(x);
         state.setTargetY(y);
         state.setHasTarget(true);
+        // 点击目标与方向键是两种互斥控制源，点击后清掉上一次方向输入。
+        state.setManualDirection(0.0, 0.0);
         // Phase 4: 手动目标标记——MovementConstraint 不得覆盖玩家手动指定。
         state.setManualTarget(true);
         return Map.of("status", "ok");
@@ -316,6 +344,8 @@ public class SimulationController {
         state.setTargetX(tx);
         state.setTargetY(ty);
         state.setHasTarget(true);
+        // P-0820-R：方向键保存确定性方向，MovementSystem 直接执行，不经过惯性/斥力积分。
+        state.setManualDirection(nx, ny);
         // 手动目标标记：MovementConstraint/导演/日程均跳过（D-006/P-0813-E），时间戳随每次调用刷新
         state.setManualTarget(true);
         return Map.of("status", "ok", "targetX", Math.round(tx * 100.0) / 100.0, "targetY", Math.round(ty * 100.0) / 100.0);

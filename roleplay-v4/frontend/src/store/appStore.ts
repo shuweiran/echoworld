@@ -102,7 +102,7 @@ interface AppState {
   leaveRoom: () => Promise<void>;
   assignRoomCharacters: (characters: string[]) => Promise<Record<string, string>>;
 
-  loadState: () => Promise<void>;
+  loadState: (sessionId?: string) => Promise<any>;
   loadHistory: () => Promise<void>;
   enterScene: (sceneId: string, agentNames: string[], currentPlayer?: string) => Promise<void>;
   goToView: (v: 'home' | 'scene' | 'config' | 'chat') => void;
@@ -129,6 +129,9 @@ interface AppState {
   addTaskBlock: (tasks: Task[]) => void;
   addIntegration: (narration: string) => void;
   setRunning: (v: boolean) => void;
+  /** 对局 SSE 健康时不启用通用状态轮询；断线后轮询才作为兜底。 */
+  sseHealthy: boolean;
+  setSseHealthy: (v: boolean) => void;
   clearMessages: () => void;
   forceReset: () => Promise<void>;
   setWerewolfWaitHuman: (v: boolean) => void;
@@ -231,6 +234,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   /** P-0814-A：经典视图播放完毕自动推进标志（默认 false=旧行为；round_complete 后置位） */
   playbackArmed: false,
   statusPhase: '就绪',
+  sseHealthy: false,
   charStatuses: {},
   roomCode: localStorage.getItem('roomCode') || '',
   currentPlayer: localStorage.getItem('playerName') || 'me',
@@ -250,7 +254,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   werewolfPlayers: [],
   werewolfMyRole: '',
   werewolfWaitHuman: false,
-  werewolfSessionId: '',
+  werewolfSessionId: (() => { try { return localStorage.getItem('werewolfSessionId') || ''; } catch { return ''; } })(),
   werewolfAlive: [],
   werewolfVisible: {},
   werewolfDiscussion: [],
@@ -259,7 +263,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   werewolfApproval: '',
   werewolfWitchVictim: '',
   // P-0802-J：狼人杀本人 roleKey（重连凭证，空=尚未发放/未获取）
-  werewolfRoleKey: '',
+  werewolfRoleKey: (() => { try { return localStorage.getItem('werewolfRoleKey') || ''; } catch { return ''; } })(),
   // Script (剧本杀)
   scriptState: null,
   scriptPhase: '',
@@ -361,39 +365,52 @@ export const useAppStore = create<AppState>((set, get) => ({
     return assignments;
   },
 
-  loadState: async () => {
-    const data = await api.getState();
+  loadState: async (sessionId?: string) => {
+    const before = get();
+    const requestedSessionId = sessionId ?? before.sessionId;
+    const data = await api.getState(requestedSessionId || undefined);
+    const current = get();
+    // 会话切换期间到达的旧响应不得覆盖新对局。
+    if (requestedSessionId && current.sessionId && requestedSessionId !== current.sessionId) return data;
+    const specialMode = current.mode === 'script' || current.mode === 'werewolf';
     // Java backend returns agents/round/mode/... at TOP level (no `router` wrapper);
     // keep `data.router?.xxx` fallback for compatibility with the old response shape.
     const agents = data.agents || data.router?.agents || [];
     // P-0802-P4：按 player_id 推导「已绑定角色名」——角色列表里 player_id 等于本玩家的那个
     // 即玩家本人角色；改名为后角色名即最新绑定名（localStorage 镜像同步，供 client.ts 读）
-    const myPid = get().playerId;
+    const myPid = current.playerId;
     const boundChar = (data.characters || []).find((c: any) => c.player_id === myPid);
-    const boundName = boundChar ? String(boundChar.name || '') : '';
-    try { localStorage.setItem('boundCharacterName', boundName); } catch { /* ignore */ }
+    const responseBoundName = boundChar ? String(boundChar.name || '') : '';
+    const boundName = specialMode ? current.boundCharacterName : responseBoundName;
+    if (!specialMode) {
+      try { localStorage.setItem('boundCharacterName', boundName); } catch { /* ignore */ }
+    }
     set({
       initialized: !!data.initialized || !!data.session_id || data.status === 'running' || data.status === 'initialized',
       characters: data.characters || [],
       scenes: data.scenes || [],
       agents,
       currentRound: data.round ?? data.router?.round ?? 0,
-      mode: data.mode || data.router?.mode || 'free',
+      mode: specialMode ? current.mode : (data.mode || data.router?.mode || 'free'),
       protagonist: data.protagonist ?? data.router?.protagonist ?? '',
       directorCharacter: data.director_character ?? data.router?.director_character ?? '',
       goals: data.goals || data.router?.goals || [],
       trackHistory: data.track_history || data.router?.track_history || [],
-      sessionId: data.session_id || data.router?.session_id || '',
+      sessionId: specialMode
+        ? current.sessionId
+        : (data.session_id || data.router?.session_id || requestedSessionId || ''),
       sceneDescription: data.scene_description || data.scene || data.router?.scene_description || '',
-      charStatuses: Object.fromEntries(agents.map((n: string) => [n, get().charStatuses[n] || 'offline'])),
+      charStatuses: Object.fromEntries(agents.map((n: string) => [n, current.charStatuses[n] || 'offline'])),
       boundCharacterName: boundName,
     });
+    return data;
   },
 
   loadHistory: async () => {
     try {
       const state = get();
       const params: Record<string, string> = { limit: '200' };
+      if (state.sessionId) params.session_id = state.sessionId;
       // In werewolf/rules mode, filter by the user's character
       const wwModes = ['werewolf', 'rules'];  // script mode filtering handled on backend
       if (wwModes.includes(state.mode)) {
@@ -402,7 +419,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const data = await api.getHistory(params);
       const rawMessages = Array.isArray(data) ? data : (data.messages || []);
       set({ messages: rawMessages.map(normalizeMessage) });
-      await get().loadState();
+      await get().loadState(state.sessionId);
     } catch {
       set({ statusPhase: '历史加载失败' });
     }
@@ -429,7 +446,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         : { name, persona: `${name}，一个角色`, voice: '', background: '' };
     });
     const data = await api.startScene(sceneId, agentNames, currentPlayer, characterDetails);
-    const state = await api.getState();
+    const state = await api.getState(data.session_id);
     // P-0804-H 续：当前场景绑定地图（default_map 可能是字符串或对象 → 统一对象）
     const sc = storeState.scenes.find((s: any) => s.scene_id === sceneId);
     let sceneMap: any = null;
@@ -456,7 +473,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ isRunning: true, statusPhase: turns > 1 ? `自动运行 ${turns} 轮` : '正在生成本轮' });
     startPolling();
     try {
-      await api.startRound(turns);
+      await api.startRound(turns, get().sessionId);
     } catch (e: any) {
       set({ isRunning: false, statusPhase: e.message || '启动回合失败' });
       stopPolling();
@@ -467,10 +484,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ isRunning: true, statusPhase: '正在处理主控输入' });
     startPolling();
     try {
-      const result = await api.send(text, playerName);
+      const sessionId = get().sessionId;
+      const result = sessionId
+        ? await api.worldInput(text, playerName, sessionId)
+        : await api.send(text, playerName, sessionId);
       if (!result) {
         set({ isRunning: false, statusPhase: '服务器无响应，请重试' });
         stopPolling();
+        return;
+      }
+      if (sessionId && result.accepted) {
+        // 异步邮箱只确认接收；真正的回合完成与角色输出继续由定向 SSE/轮询收口。
+        set({ statusPhase: '输入已接收，主控正在后台推进世界' });
         return;
       }
       if (result.agent_outputs && Array.isArray(result.agent_outputs)) {
@@ -501,7 +526,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   stop: async () => {
     cancelAllRequests();
-    await api.stop();
+    await api.stop(get().sessionId);
     stopPolling();
     set({ isRunning: false, statusPhase: '已停止' });
   },
@@ -509,7 +534,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   forceReset: async () => {
     cancelAllRequests();
     stopPolling();
-    try { await api.stop(); } catch {}
+    try { await api.stop(get().sessionId); } catch {}
     set({
       isRunning: false, currentTasks: [], statusPhase: '已解除运行状态',
       werewolfPhase: 'day_discussion', werewolfRound: 1, werewolfPlayers: [],
@@ -520,17 +545,37 @@ export const useAppStore = create<AppState>((set, get) => ({
       scriptTrust: 5, scriptMyVote: '',
       streamingByAgent: {}, streamPaused: false,
     });
+    try {
+      localStorage.removeItem('werewolfSessionId');
+      localStorage.removeItem('werewolfRoleKey');
+      localStorage.removeItem('werewolfPlayer');
+      localStorage.removeItem('scriptSessionId');
+      localStorage.removeItem('scriptRoleKey');
+    } catch { /* ignore */ }
   },
 
   rollback: async (round) => {
-    await api.rollback(round);
+    await api.rollback(round, get().sessionId);
     set({ messages: [], currentRound: round, statusPhase: `已回滚到第 ${round} 轮` });
     await get().loadHistory();
   },
 
   setMode: async (mode, protagonist, directorCharacter) => {
     const prev = get().mode;
-    await api.setMode(mode, protagonist, directorCharacter);
+    await api.setMode(mode, protagonist, directorCharacter, get().sessionId);
+    if (mode !== prev) {
+      try {
+        if (prev === 'werewolf') {
+          localStorage.removeItem('werewolfSessionId');
+          localStorage.removeItem('werewolfRoleKey');
+          localStorage.removeItem('werewolfPlayer');
+        }
+        if (prev === 'script') {
+          localStorage.removeItem('scriptSessionId');
+          localStorage.removeItem('scriptRoleKey');
+        }
+      } catch { /* ignore */ }
+    }
     set({
       mode, protagonist: protagonist || '', directorCharacter: directorCharacter || '',
       ...(mode !== prev ? {
@@ -547,7 +592,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   setGoals: async (goals) => {
-    await api.setGoals(goals);
+    await api.setGoals(goals, get().sessionId);
     set({ goals });
   },
 
@@ -580,6 +625,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ isRunning: v, statusPhase: v ? '运行中' : '就绪' });
     if (v) startPolling(); else stopPolling();
   },
+  setSseHealthy: (v) => set({ sseHealthy: v }),
   clearMessages: () => set({ messages: [], currentTasks: [] }),
   setWerewolfWaitHuman: (v) => set({ werewolfWaitHuman: v }),
   setWerewolfPhase: (phase, round) => set({
@@ -593,7 +639,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       p.name === name ? { ...p, alive: false, role, roleRevealed: true } : p
     ),
   })),
-  setWerewolfSessionId: (v) => set({ werewolfSessionId: v }),
+  setWerewolfSessionId: (v) => {
+    try { localStorage.setItem('werewolfSessionId', v || ''); } catch { /* ignore */ }
+    set({ werewolfSessionId: v || '' });
+  },
   setWerewolfAlive: (v) => set({ werewolfAlive: v }),
   setWerewolfVisible: (v) => set({ werewolfVisible: v }),
   setWerewolfDiscussion: (v) => set({ werewolfDiscussion: v }),
@@ -604,7 +653,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   setWerewolfVoteCount: (v) => set({ werewolfVoteCount: v }),
   setWerewolfApproval: (v) => set({ werewolfApproval: v }),
   setWerewolfWitchVictim: (v) => set({ werewolfWitchVictim: v }),
-  setWerewolfRoleKey: (v) => set({ werewolfRoleKey: v }),
+  setWerewolfRoleKey: (v) => {
+    try { localStorage.setItem('werewolfRoleKey', v || ''); } catch { /* ignore */ }
+    set({ werewolfRoleKey: v || '' });
+  },
   setScriptState: (s) => set({
     scriptState: s,
     ...(s?.phase ? { scriptPhase: s.phase } : {}),
@@ -735,10 +787,13 @@ function startPolling() {
   stopPolling();
   pollingInterval = setInterval(async () => {
     try {
-      const data: any = await api.getState();
-
-      // Always refresh frontend state (current round, scene, mode, etc.)
-      await useAppStore.getState().loadState();
+      const before = useAppStore.getState();
+      // SSE 正常时由事件驱动；只有断线/未连接期间才轮询兜底。
+      if (before.sseHealthy) return;
+      // 剧本杀/狼人杀各自使用带身份的状态端点兜底，不能误拉通用 Router 状态。
+      if (before.mode === 'script' || before.mode === 'werewolf') return;
+      // loadState 返回本次响应，状态刷新和 idle 判定共用同一个 GET /api/state。
+      const data: any = await before.loadState(before.sessionId);
 
       // P0-2/E1：后端 /api/state 返回顶层 status（'running'/'idle'），原 data.router?.phase 是死代码永不命中；
       // SSE 断开时轮询必须能自行解除 isRunning，否则 send 前 stop 后永久停摆。

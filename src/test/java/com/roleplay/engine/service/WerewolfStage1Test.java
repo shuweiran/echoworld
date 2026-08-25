@@ -44,6 +44,7 @@ class WerewolfStage1Test {
     static class RecordingSse implements SseBroadcaster {
         final List<Map.Entry<String, Map<?, ?>>> events = new CopyOnWriteArrayList<>();
         final List<String> sessions = new CopyOnWriteArrayList<>();
+        final List<Map.Entry<String, List<String>>> privateTargets = new CopyOnWriteArrayList<>();
         @Override
         public void broadcast(String eventType, Object data) {
             events.add(Map.entry(eventType, data instanceof Map<?, ?> m ? m : Map.of()));
@@ -53,6 +54,11 @@ class WerewolfStage1Test {
         public void broadcastToSession(String sessionId, String eventType, Object data) {
             events.add(Map.entry(eventType, data instanceof Map<?, ?> m ? m : Map.of()));
             sessions.add(sessionId == null ? "" : sessionId);
+        }
+        @Override
+        public void broadcastToPlayers(String sessionId, String eventType, Object data, String... players) {
+            broadcastToSession(sessionId, eventType, data);
+            privateTargets.add(Map.entry(eventType, players == null ? List.of() : List.of(players)));
         }
         List<Map<?, ?>> of(String type) {
             return events.stream().filter(e -> e.getKey().equals(type)).map(Map.Entry::getValue).toList();
@@ -67,6 +73,9 @@ class WerewolfStage1Test {
                 if (events.get(i).getKey().equals(type)) out.add(sessions.get(i));
             }
             return out;
+        }
+        List<List<String>> playersOf(String type) {
+            return privateTargets.stream().filter(e -> e.getKey().equals(type)).map(Map.Entry::getValue).toList();
         }
     }
 
@@ -224,6 +233,8 @@ class WerewolfStage1Test {
         assertEquals(sid, infos.get(0).get("session_id"), "载荷带 session_id");
         assertEquals("night", infos.get(0).get("phase"));
         assertTrue(sse.sessionsOf("werewolf_witch_info").stream().allMatch(s -> sid.equals(s)), "获知事件定向本局");
+        assertTrue(sse.playersOf("werewolf_witch_info").stream().allMatch(p -> p.equals(List.of("D"))),
+            "女巫信息只定向到女巫本人");
 
         // 女巫已死 → 不推送获知事件（死人无需获知）
         RecordingSse sse2 = new RecordingSse();
@@ -474,12 +485,12 @@ class WerewolfStage1Test {
         ResponseEntity<Map<String, Object>> r4 = ctl.resume(Map.of("player", "F"));
         assertEquals("缺少对局标识（session_id / room_code 至少其一）", r4.getBody().get("error"));
 
-        // resume 后 status 可定位（玩家会话映射已登记）
-        ResponseEntity<Map<String, Object>> st = ctl.getStatus("F", "", "");
+        // status 读取角色私密视图同样必须显式携带 session + roleKey
+        ResponseEntity<Map<String, Object>> st = ctl.getStatus("F", "", sid, keyF);
         assertEquals(sid, st.getBody().get("session_id"), "resume 登记后 status 定位到本局");
 
-        // status 显式 session_id 优先
-        ResponseEntity<Map<String, Object>> st2 = ctl.getStatus("", "", sid);
+        // player_name 别名同样受 roleKey 约束
+        ResponseEntity<Map<String, Object>> st2 = ctl.getStatus("", "F", sid, keyF);
         assertEquals(sid, st2.getBody().get("session_id"));
     }
 }

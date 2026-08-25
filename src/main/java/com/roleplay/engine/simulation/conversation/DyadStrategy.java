@@ -83,7 +83,7 @@ public class DyadStrategy implements ConversationStrategy {
         if (agent == null) return "";
 
         StringBuilder sb = new StringBuilder();
-        sb.append(agent.getPersona().buildSystemPrompt());
+        sb.append(agent.getPersona().buildLightweightPrompt());
         sb.append("\n\n");
 
         String nar = worldNarrationSupplier.apply("dummy");

@@ -39,8 +39,14 @@ Thumbs.db
 *.log
 log/
 
+# Generated desktop release candidates
+release/
+
 # 临时工作目录（运行日志/临时脚本，不入库）
 tmp/
+
+# 本地审阅材料、录屏与个人面试准备，不进入公开仓库
+.local/
 
 # Env
 .env
@@ -60,10 +66,20 @@ mvn.zip
 roleplay-v4/
 demo/
 
+# v4 桌面安全入口与发布脚本属于当前 Java 桌面壳，必须纳入版本控制
+!roleplay-v4/
+roleplay-v4/*
+!roleplay-v4/frontend/
+roleplay-v4/frontend/*
+!roleplay-v4/frontend/desktop/
+roleplay-v4/frontend/desktop/*
+!roleplay-v4/frontend/desktop/*.cjs
+!roleplay-v4/frontend/desktop/*.ps1
+
 # Python 编译缓存
 __pycache__/
 *.pyc
 
-# ��ģ��/����ʱ���ﲻ���
+# 大模型/运行时产物不入库
 models/
 src/main/resources/static/ai-images/

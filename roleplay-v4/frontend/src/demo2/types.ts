@@ -46,6 +46,8 @@ export interface RoleCard {
   voice_mode?: string;
   /** P-0817-A：voice_data（basic=内置音色名 / clone=参考音频路径或 data URL / design=音色描述） */
   voice_data?: string;
+  /** P-0817-A：AI 生成的 TTS 音色描述（角色卡自动生成，voice_mode 为空时后端自动使用） */
+  ttsTone?: string;
   source: RoleSource;
   /** 归属剧本 id 列表（自由角色为空数组） */
   homeScripts: string[];
@@ -115,6 +117,10 @@ export interface Settings {
     temperature: number;
     maxTokens: number;
     contextLength: number;
+    /** 主控 LLM：仲裁、地图、角色与场景生成共用。 */
+    arbiterModel: string;
+    arbiterApiBase: string;
+    arbiterApiKey: string;
     /** 地图生成 LLM：空=复用主 LLM */
     mapModel: string;
     mapApiBase: string;
@@ -123,6 +129,7 @@ export interface Settings {
   };
   tts: {
     engine: string;
+    provider: string;
     /** 语音生成模型 API */
     model: string;
     apiBase: string;
@@ -135,6 +142,10 @@ export interface Settings {
   image: {
     provider: string;
     baseUrl: string;
+    externalBaseUrl: string;
+    externalApiKey: string;
+    externalModel: string;
+    externalEndpoint: string;
     loraName: string;
     rmbgEnabled: boolean;
     img2imgDenoise: number;

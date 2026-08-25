@@ -78,6 +78,14 @@ public class SimulationWorld {
         agents.remove(name);
     }
 
+    /** 非破坏性休眠恢复：把原 Agent 与原 AgentState 引用放回世界，完整保留内存与运行字段。 */
+    public void restoreAgent(Agent agent, AgentState state) {
+        if (agent == null || state == null) throw new IllegalArgumentException("agent/state required");
+        agents.put(agent.getName(), agent);
+        states.put(state.getAgentName(), state);
+        log.info("Restored suspended agent: {} at ({},{})", agent.getName(), state.getX(), state.getY());
+    }
+
     /**
      * P-0802-P3（改造方案 §4.2.2）：局中改名 —— agents/states 两个 map 换键 + persona/state 改名。
      * Agent 经 persona.setName 改名（Agent.getName 委托 persona，零 Agent 类改动）；

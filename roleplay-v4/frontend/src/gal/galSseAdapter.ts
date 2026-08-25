@@ -28,7 +28,7 @@ const GENERAL_MODES = new Set(['free', 'protagonist', 'multi_track', 'director']
  * 解析用户输入的对局标识：
  *  - 含连字符（后端 init 的 session_id 形如 UUID 前 12 位 "xxxxxxxx-xxx"）→ 直连；
  *  - 房间码 / 对局 ID（无连字符）→ 依次尝试 剧本杀 resume（需 player_key）→
- *    狼人杀 resume（需 player 名）反查 session_id；
+ *    狼人杀 resume（需 player 名 + roleKey）反查 session_id；
  *  - 全部失败 → 仍按 session_id 直连兜底（由 SSE 事件自证，未知则事件过滤后无污染）。
  */
 export async function resolveSessionId(
@@ -49,10 +49,10 @@ export async function resolveSessionId(
       } catch { /* 尝试下一种 */ }
     }
   }
-  // 狼人杀 resume（room_code + player 名）
-  if (playerName) {
+  // 狼人杀 resume（room_code + player + roleKey 身份校验）
+  if (playerName && playerKey) {
     try {
-      const r: any = await api.werewolfResume({ room_code: t, player: playerName });
+      const r: any = await api.werewolfResume({ room_code: t, player: playerName, player_key: playerKey });
       if (r?.session_id) return String(r.session_id);
     } catch { /* 忽略 */ }
   }
@@ -90,7 +90,9 @@ export function startLiveSync(sessionId: string, store?: GalStoreApi): () => voi
 
     // 狼人杀探测（显式 session_id，可靠）
     try {
-      const ww: any = await api.werewolfStatus(player, sessionId);
+      const playerKey = st.livePlayerKey || '';
+      if (!player || !playerKey) throw new Error('狼人杀身份凭据尚未就绪');
+      const ww: any = await api.werewolfStatus(sessionId, player, playerKey);
       if (ww && ww.phase && ww.phase !== 'idle' && !ww.game_over) {
         st.setLiveGameType('werewolf', ww.phase);
       }
@@ -252,7 +254,7 @@ export async function refreshSuggestions(sessionId: string): Promise<void> {
 /**
  * 玩家发言（底部输入框常驻，live 模式走这里）：
  *  剧本杀 SETUP/DISCUSSION → api.scriptDiscussionSay(player, text, playerKey)
- *  狼人杀 DAY_DISCUSS → api.werewolfDiscussionSay(player, text)
+ *  狼人杀 DAY_DISCUSS → api.werewolfDiscussionSay(sessionId, player, playerKey, text)
  *  其他（含未知/一般模式）→ api.send(text, playerName, sessionId)（P-0810-07：带 session_id
  *  定向到该一般会话实例，避免落到默认单例 router）
  * 本地回显入队（api.send 的 user_input SSE 回显经 isRecentPlayerEcho 去重；
@@ -272,12 +274,19 @@ export async function liveSay(text: string): Promise<void> {
     if (st.liveGameType === 'script' && (st.livePhase === 'SETUP' || st.livePhase === 'DISCUSSION')) {
       await api.scriptDiscussionSay(player, body, key || undefined);
     } else if (st.liveGameType === 'werewolf' && st.livePhase === 'DAY_DISCUSS') {
-      await api.werewolfDiscussionSay(player, body);
+      if (!key) throw new Error('缺少狼人杀玩家令牌，请重新进入或恢复对局');
+      await api.werewolfDiscussionSay(st.liveSessionId, player, key, body);
     } else {
-      // P-0811-G 修复：/api/send 同步返回 AI 发言（agent_outputs），必须消费——否则玩家发言后
-      // 只靠 SSE agent_output 事件（可能因连接时序错过）→ 「已连接·等待对局消息」卡死。
-      const resp: any = await api.send(body, player, st.liveSessionId);
-      agentOutputs = Array.isArray(resp?.agent_outputs) ? resp.agent_outputs : [];
+      // P-0824-L：一般模式改走异步输入邮箱，请求线程立即返回；同 session 后台顺序消费，
+      // AI 增量/结算继续走既有定向 SSE。旧/默认会话无 session_id 时保留同步 send 兼容。
+      if (st.liveSessionId) {
+        const queued: any = await api.worldInput(body, player, st.liveSessionId, undefined,
+          st.liveFocusedRoleId || undefined, st.liveFocusedRoleIds, st.liveConversationMembers);
+        useGalStore.setState({ livePendingInputId: String(queued?.input_id || '') });
+      } else {
+        const resp: any = await api.send(body, player, st.liveSessionId);
+        agentOutputs = Array.isArray(resp?.agent_outputs) ? resp.agent_outputs : [];
+      }
     }
     st.enqueuePlayerEcho(body);
     // 消费同步返回的 AI 回复（入队播放；SSE 若重复推送同一句由文本去重兜底）
@@ -303,7 +312,7 @@ export async function liveSay(text: string): Promise<void> {
     useGalStore.setState({ liveSending: false, liveSendError: '' });
   } catch (e: any) {
     const msg = e?.message || '未知错误';
-    useGalStore.setState({ liveSending: false, liveSendError: msg });
+    useGalStore.setState({ liveSending: false, livePendingInputId: '', liveSendError: msg });
     st.liveEnqueue({ kind: 'system', speakerId: 'system', name: '⚠️ 系统', text: `发言失败：${msg}` });
   }
 }

@@ -114,7 +114,7 @@ class ScriptMapSwitchTest {
         int dy = MapContract.intOf(zone.get("y"), -1);
         assertTrue(dx >= 0 && dy >= 0, "door 必须吸附到可通行格");
         // Alice 靠近 door → 触发切图（body 无 target → 从 zone.target 解析 map_1）
-        Map<String, Object> sw = svc.switchMap(sid, "Alice", "", "door_north", dx, dy, "");
+        Map<String, Object> sw = svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), "door_north", dx, dy, "");
         assertEquals(Boolean.TRUE, sw.get("switched"));
         assertEquals("map_2", sw.get("from_map_id"));
         assertEquals("map_1", sw.get("to_map_id"));
@@ -143,16 +143,16 @@ class ScriptMapSwitchTest {
         int dx = MapContract.intOf(zone.get("x"), -1);
         int dy = MapContract.intOf(zone.get("y"), -1);
         // 远离 door（坐标差 > radius+2）→ 拒绝
-        Map<String, Object> far = svc.switchMap(sid, "Alice", "", "door_east", dx + 10, dy + 10, "");
+        Map<String, Object> far = svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), "door_east", dx + 10, dy + 10, "");
         assertTrue(String.valueOf(far.get("error")).contains("未靠近"), "远离 door 必须拒绝: " + far);
         assertEquals("map_2", svc.getCurrentMapId(sid), "拒绝后当前图不变");
         // 直切模式（无 door_zone_id，显式 target_map_id）→ 成功
-        Map<String, Object> direct = svc.switchMap(sid, "Alice", "", null, null, null, "map_1");
+        Map<String, Object> direct = svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), null, null, null, "map_1");
         assertEquals(Boolean.TRUE, direct.get("switched"));
         assertEquals("map_1", svc.getCurrentMapId(sid));
         // 回 map_2（直切）→ body target 覆盖 zone target：door 指向 map_1，但 body 显式 map_new → 自动生成 map_new
-        assertEquals(Boolean.TRUE, svc.switchMap(sid, "Bob", "", null, null, null, "map_2").get("switched"));
-        Map<String, Object> override = svc.switchMap(sid, "Alice", "", "door_east", dx, dy, "map_new");
+        assertEquals(Boolean.TRUE, svc.switchMap(sid, "Bob", svc.getRoleKey(sid, "Bob"), null, null, null, "map_2").get("switched"));
+        Map<String, Object> override = svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), "door_east", dx, dy, "map_new");
         assertEquals(Boolean.TRUE, override.get("switched"));
         assertEquals("map_new", override.get("to_map_id"));
         assertTrue(svc.getRegisteredMapIds(sid).contains("map_new"), "未注册目标自动生成并注册");
@@ -169,18 +169,18 @@ class ScriptMapSwitchTest {
         String sid = "switch-k4";
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
         // a) door 不存在
-        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", "", "no_such_door", null, null, "").get("error"))
+        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), "no_such_door", null, null, "").get("error"))
                 .contains("door zone 不存在"));
         // b) 非 door 型 zone（取当前图任一 search zone）→ 不能触发切图
         Map<?, ?> searchZone = firstSearchZone(svc.getGame(sid).mapData);
-        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", "", String.valueOf(searchZone.get("id")), null, null, "map_2").get("error"))
+        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), String.valueOf(searchZone.get("id")), null, null, "map_2").get("error"))
                 .contains("不是 door 类型"));
         // c) 无目标 door（手工注入缺 target 字段的 door zone）→ 容错
         addRawZone(svc.getGame(sid).mapData, rawDoor("door_no_target"));
-        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", "", "door_no_target", null, null, "").get("error"))
+        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), "door_no_target", null, null, "").get("error"))
                 .contains("未配置目标地图"));
         // d) 目标 = 当前地图 → 拒绝
-        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", "", null, null, null, "map_1").get("error"))
+        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), null, null, null, "map_1").get("error"))
                 .contains("目标地图就是当前地图"));
         // e) 非本局玩家
         assertTrue(String.valueOf(svc.switchMap(sid, "Eve", "", null, null, null, "map_2").get("error"))
@@ -190,11 +190,11 @@ class ScriptMapSwitchTest {
                 .contains("缺少触发玩家名"));
         // h) door_zone_id 与 target_map_id 双缺（须在搜证阶段测——阶段守卫先于参数校验，
         //    投票后命中「当前阶段不能切换地图」，双缺分支不可达）
-        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", "", "", null, null, "").get("error"))
+        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), "", null, null, "").get("error"))
                 .contains("至少其一"));
         // g) 阶段不符（进投票后禁切图）
         svc.startVoting(sid);
-        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", "", null, null, null, "map_2").get("error"))
+        assertTrue(String.valueOf(svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), null, null, null, "map_2").get("error"))
                 .contains("当前阶段不能切换地图"));
     }
 
@@ -224,12 +224,12 @@ class ScriptMapSwitchTest {
         assertEquals(aliceAp, game.playerAp.get("Alice"), "AP 跨图保留");
         assertFalse(game.getSecretFor("Alice").isBlank(), "秘密跨图保留");
         // 切回 map_1 → 客厅足迹恢复（花园足迹留在地图_2）
-        Map<String, Object> sw = svc.switchMap(sid, "Alice", "", null, null, null, "map_1");
+        Map<String, Object> sw = svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), null, null, null, "map_1");
         assertEquals(Boolean.TRUE, sw.get("switched"));
         assertTrue(game.searchedLocations.contains("客厅"));
         assertFalse(game.searchedLocations.contains("花园"));
         // 再切 map_2 → 花园足迹恢复
-        svc.switchMap(sid, "Bob", "", null, null, null, "map_2");
+        svc.switchMap(sid, "Bob", svc.getRoleKey(sid, "Bob"), null, null, null, "map_2");
         assertTrue(game.searchedLocations.contains("花园"));
         assertFalse(game.searchedLocations.contains("客厅"));
         // 搜证联动：map_2 上搜过的地点不污染 map_1（searchedByMap 隔离）
@@ -250,10 +250,10 @@ class ScriptMapSwitchTest {
         svc.generateMap(sid, "", 0, true, 64, 64, "map_2");
         assertEquals(64, svc.getGame(sid).mapWidth);
         assertEquals(64, svc.getGame(sid).mapHeight);
-        svc.switchMap(sid, "Alice", "", null, null, null, "map_1");
+        svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), null, null, null, "map_1");
         assertEquals(40, svc.getGame(sid).mapWidth);
         assertEquals(24, svc.getGame(sid).mapHeight);
-        svc.switchMap(sid, "Alice", "", null, null, null, "map_2");
+        svc.switchMap(sid, "Alice", svc.getRoleKey(sid, "Alice"), null, null, null, "map_2");
         assertEquals(64, svc.getGame(sid).mapWidth);
         assertEquals(64, svc.getGame(sid).mapHeight);
     }
@@ -277,7 +277,8 @@ class ScriptMapSwitchTest {
         ((Map<String, Object>) door.get("zone")).put("width", 48);
         ((Map<String, Object>) door.get("zone")).put("height", 48);
         ResponseEntity<Map<String, Object>> resp = controller.mapSwitch(Map.of(
-                "session_id", sid, "player", "Alice", "door_zone_id", "door_out"));
+                "session_id", sid, "player", "Alice", "player_key", svc.getRoleKey(sid, "Alice"),
+                "door_zone_id", "door_out"));
         assertEquals(200, resp.getStatusCode().value());
         assertEquals(Boolean.TRUE, resp.getBody().get("switched"));
         assertEquals("map_new", resp.getBody().get("to_map_id"));

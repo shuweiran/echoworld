@@ -12,6 +12,7 @@ import com.roleplay.engine.simulation.structure.StructureValidator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -38,7 +39,7 @@ public class StructureMapService {
 
     private static final Logger log = LoggerFactory.getLogger(StructureMapService.class);
 
-    /** P-0818-B/E 修正：结构生成回主链路 DeepSeek（快）；视觉审核用 MapVisualAuditor（内部小米 MiMo 多模态） */
+    /** 结构蓝图使用主控 LLM；视觉审核用可选多模态 MapVisualAuditor。 */
     private final LLMClient llmClient;
     private final MapVisualAuditor auditor;
     private final boolean enabled;
@@ -48,7 +49,7 @@ public class StructureMapService {
 
     @Autowired
     public StructureMapService(
-            LLMClient llmClient, MapVisualAuditor auditor,
+            @Qualifier("arbiterLlmClient") LLMClient llmClient, MapVisualAuditor auditor,
             @Value("${roleplay.structure.enabled:true}") boolean enabled,
             @Value("${roleplay.structure.l0-source:template}") String l0Source,
             @Value("${roleplay.structure.max-single-map-width:128}") int maxSingleMapWidth,

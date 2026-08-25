@@ -227,4 +227,21 @@ class RouterRenameTest {
         assertTrue(hasAgentMessage(router, "老规矩"));
         assertEquals(1, capturedContexts.size());
     }
+
+    @Test
+    @DisplayName("自治世界文本角色休眠与恢复保留同一角色槽")
+    void worldAgentCanSuspendResumeAndExitWithoutUsingGlobalRosterEvents() {
+        RouterService router = newRouter(emptyRepo(), List.of("主角"));
+
+        router.addWorldAgent("旅店客人", new Persona("旅店客人", "谨慎的住客"));
+        assertTrue(router.hasAgent("旅店客人"));
+        assertTrue(router.suspendWorldAgent("旅店客人"));
+        assertFalse(router.hasAgent("旅店客人"));
+        assertTrue(router.isWorldSuspendedAgent("旅店客人"));
+        assertTrue(router.resumeWorldAgent("旅店客人"));
+        assertTrue(router.hasAgent("旅店客人"));
+        assertFalse(router.isWorldSuspendedAgent("旅店客人"));
+        assertTrue(router.removeWorldAgent("旅店客人"));
+        assertFalse(router.hasAgent("旅店客人"));
+    }
 }

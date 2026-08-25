@@ -348,7 +348,7 @@ class ScriptGameUiMvpTest {
         Map<String, Object> before = svc.voteStatus(SESSION);
         assertEquals(3, before.get("total"));
 
-        svc.leaveGame(SESSION, "Bob", "");
+        svc.leaveGame(SESSION, "Bob", svc.getRoleKey(SESSION, "Bob"));
         Map<String, Object> after = svc.voteStatus(SESSION);
         assertEquals(2, after.get("total"), "托管玩家不计入在线数");
         assertEquals(1, after.get("voted"));

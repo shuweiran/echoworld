@@ -11,6 +11,7 @@ import { GalCharacter } from './GalCharacter';
 import { GalDialogBox } from './GalDialogBox';
 import { GalChoiceBar } from './GalChoiceBar';
 import type { GalSpeaker } from './galDemoData';
+import { scenePortraitArt } from './sceneArt';
 
 /**
  * P-0810-03：取某角色当前应展示的立绘 URL。
@@ -27,13 +28,13 @@ export function portraitUrlFor(speaker: GalSpeaker, portraits: Record<string, Ga
     const match = Object.values(portraits).find(p => p.name === speaker.name);
     if (match) bid = match.backendId;
   }
-  if (!bid) return undefined;
+  if (!bid) return scenePortraitArt(speaker.name);
   let p: GalPortraitState | undefined = portraits[bid];
   // P-0818-F：bid 找不到 portrait 时，按 name 模糊匹配（后端 recoverOrphan 的 name 可能等于 id）
   if (!p) {
     p = Object.values(portraits).find(pt => pt.name === speaker.name || pt.backendId === speaker.name);
   }
-  if (!p) return undefined;
+  if (!p) return scenePortraitArt(speaker.name);
   const sel = p.selectedFrame;
   const fullbody = p.frames['fullbody_t'] || p.frames['fullbody'];
   // 用户显式选了表情帧（非 avatar）→ 展示该表情；缺帧时回退全身立绘 → 头像
@@ -41,7 +42,7 @@ export function portraitUrlFor(speaker: GalSpeaker, portraits: Record<string, Ga
     return p.frames[`${sel}_t`] || p.frames[sel] || fullbody || p.frames['avatar_t'] || p.frames['avatar'];
   }
   // 默认/头像选中 → 优先全身立绘（透明版），其次头像
-  return fullbody || p.frames['avatar_t'] || p.frames['avatar'];
+  return fullbody || p.frames['avatar_t'] || p.frames['avatar'] || scenePortraitArt(speaker.name);
 }
 
 /** 聊天模式：左立绘区 + 右对话框列 */

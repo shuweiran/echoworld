@@ -1,32 +1,16 @@
-# React + TypeScript + Vite
+# Frontend structure
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+This directory is the active EchoWorld client. It is built with TypeScript, React and Phaser, then copied into Spring Boot static resources for the integrated application.
 
-Currently, two official plugins are available:
+| Directory | Status | Responsibility |
+|---|---|---|
+| `src/demo2` | active application shell | navigation, application state and primary user flow; the historical name remains temporarily for import compatibility |
+| `src/phaser` | active renderer | 2D world rendering and player input bridge |
+| `src/gal` | active presentation | narrative conversation view |
+| `src/api`, `src/services`, `src/store` | active client layer | API/SSE adapters and client state |
+| `src/components`, `src/styles`, `src/utils`, `src/types` | shared UI | reusable UI, styling, utilities and types |
+| `src/social`, `src/assets` | supporting | social/visual resources, not the core simulation runtime |
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+The client does not own authoritative world state. It renders snapshots and sends user intent; the backend validates movement, perception, conversation membership and context visibility.
 
-## React Compiler
-
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the Oxlint configuration
-
-If you are developing a production application, we recommend enabling type-aware lint rules by installing `oxlint-tsgolint` and editing `.oxlintrc.json`:
-
-```json
-{
-  "$schema": "./node_modules/oxlint/configuration_schema.json",
-  "plugins": ["react", "typescript", "oxc"],
-  "options": {
-    "typeAware": true
-  },
-  "rules": {
-    "react/rules-of-hooks": "error",
-    "react/only-export-components": ["warn", { "allowConstantExport": true }]
-  }
-}
-```
-
-See the [Oxlint rules documentation](https://oxc.rs/docs/guide/usage/linter/rules) for the full list of rules and categories.
+`demo2` is not a disposable demo despite its name. A future rename will be done together with import and route migration, rather than by a misleading mechanical directory move.

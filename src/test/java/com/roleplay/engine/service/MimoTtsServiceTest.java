@@ -78,6 +78,12 @@ class MimoTtsServiceTest {
                 os.write(resp);
             }
         });
+        server.createContext("/audio/speech", exchange -> {
+            lastRequest.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
+            lastAuth.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            exchange.sendResponseHeaders(200, WAV_BYTES.length);
+            try (OutputStream os = exchange.getResponseBody()) { os.write(WAV_BYTES); }
+        });
         server.start();
 
         appConfig = new AppConfig();
@@ -130,6 +136,24 @@ class MimoTtsServiceTest {
         assertEquals("wav", req.get("audio").get("format").asText());
         assertEquals("mimo_default", req.get("audio").get("voice").asText());
         assertTrue(req.get("audio").get("voice").isTextual());
+    }
+
+    @Test
+    @DisplayName("OpenAI-compatible provider：/audio/speech 二进制响应可接入不同 TTS 模型")
+    void externalOpenAiCompatibleProviderReturnsBinaryAudio() throws Exception {
+        appConfig.getTts().getMimo().setProvider("openai-compatible");
+        appConfig.getTts().getMimo().setModelBasic("external-tts-model");
+        appConfig.getTts().getMimo().setDefaultVoice("alloy");
+        MimoTtsService.TtsResult r = service.synthesize("外部模型测试", MimoTtsService.VoiceSpec.basic(null));
+
+        assertArrayEquals(WAV_BYTES, r.audio());
+        assertEquals("external-tts-model", r.model());
+        assertEquals("Bearer test-key", lastAuth.get());
+        JsonNode req = parse(lastRequest.get());
+        assertEquals("external-tts-model", req.path("model").asText());
+        assertEquals("外部模型测试", req.path("input").asText());
+        assertEquals("alloy", req.path("voice").asText());
+        assertEquals("wav", req.path("response_format").asText());
     }
 
     @Test

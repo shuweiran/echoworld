@@ -94,6 +94,69 @@ class ScriptControllerBugBatchTest {
     }
 
     // ═══════════════════════════════════════════════════════════
+    //  D-078：restart 必须先认证旧局身份，且按认证主体收敛新局视图
+    // ═══════════════════════════════════════════════════════════
+
+    @Test
+    @DisplayName("D-078: /restart 拒绝缺 key、错 key 与跨玩家 key，且不得触发重置")
+    void restartRejectsMissingWrongAndCrossPlayerKeys() {
+        ScriptGameService svc = mock(ScriptGameService.class);
+        when(svc.checkPlayerAccess("sessionA", "Alice", ""))
+                .thenReturn(Map.of("error", "身份校验失败：缺少 player_key"));
+        when(svc.checkPlayerAccess("sessionA", "Alice", "wrong-key"))
+                .thenReturn(Map.of("error", "身份校验失败：player_key 与玩家不匹配"));
+        when(svc.checkPlayerAccess("sessionA", "Alice", "bob-key"))
+                .thenReturn(Map.of("error", "身份校验失败：player_key 与玩家不匹配"));
+        ScriptController ctl = newScriptController(svc);
+        ReflectionTestUtils.setField(ctl, "dmKey", "dm-test-key");
+
+        ResponseEntity<Map<String, Object>> missing = ctl.restart(
+                new LinkedHashMap<>(Map.of("session_id", "sessionA", "player", "Alice")), "");
+        ResponseEntity<Map<String, Object>> wrong = ctl.restart(
+                new LinkedHashMap<>(Map.of("session_id", "sessionA", "player", "Alice",
+                        "player_key", "wrong-key")), "");
+        ResponseEntity<Map<String, Object>> crossPlayer = ctl.restart(
+                new LinkedHashMap<>(Map.of("session_id", "sessionA", "player", "Alice",
+                        "player_key", "bob-key")), "");
+
+        assertEquals(403, missing.getStatusCode().value());
+        assertEquals(403, wrong.getStatusCode().value());
+        assertEquals(403, crossPlayer.getStatusCode().value());
+        verify(svc, never()).restartGame(anyString());
+    }
+
+    @Test
+    @DisplayName("D-078: /restart 正确玩家 key 返回本人新视图，正确 DM key 仅返回公共视图")
+    void restartReturnsOnlyAuthenticatedPlayerOrPublicView() {
+        ScriptGameService svc = mock(ScriptGameService.class);
+        when(svc.checkPlayerAccess("sessionA", "Alice", "alice-old-key")).thenReturn(null);
+        when(svc.restartGame("sessionA")).thenReturn(Map.of("phase", "investigation"));
+        ScriptGameService.ScriptGame restarted = mock(ScriptGameService.ScriptGame.class);
+        when(restarted.toMap("Alice")).thenReturn(Map.of(
+                "phase", "investigation", "session_id", "sessionA",
+                "your_role", "侦探", "role_key", "alice-new-key"));
+        when(restarted.toMap("")).thenReturn(Map.of(
+                "phase", "investigation", "session_id", "sessionA",
+                "your_role", ""));
+        when(svc.getGame("sessionA")).thenReturn(restarted);
+        ScriptController ctl = newScriptController(svc);
+        ReflectionTestUtils.setField(ctl, "dmKey", "dm-test-key");
+
+        ResponseEntity<Map<String, Object>> playerResp = ctl.restart(
+                new LinkedHashMap<>(Map.of("session_id", "sessionA", "player", "Alice",
+                        "player_key", "alice-old-key")), "");
+        assertEquals(200, playerResp.getStatusCode().value());
+        assertEquals("alice-new-key", playerResp.getBody().get("role_key"));
+        verify(restarted).toMap("Alice");
+
+        ResponseEntity<Map<String, Object>> dmResp = ctl.restart(
+                new LinkedHashMap<>(Map.of("session_id", "sessionA")), "dm-test-key");
+        assertEquals(200, dmResp.getStatusCode().value());
+        assertFalse(dmResp.getBody().containsKey("role_key"), "DM 重开响应不得泄露任何玩家新 roleKey");
+        verify(restarted).toMap("");
+    }
+
+    // ═══════════════════════════════════════════════════════════
     //  B4：WerewolfController.discussionSay 500 修复
     // ═══════════════════════════════════════════════════════════
 
@@ -146,12 +209,15 @@ class ScriptControllerBugBatchTest {
         // 抛 UnsupportedOperationException → HTTP 500（P-0810-06 真机复现）。本用例让 mock service
         // 返回不可变 Map.of（模拟旧行为），验证 controller 防御性拷贝后 200。
         WerewolfService svc = mock(WerewolfService.class);
+        when(svc.isPlayerKeyValid("ww-test", "F", "keyF")).thenReturn(true);
         when(svc.discussionSay(anyString(), anyString(), anyString()))
                 .thenReturn(Map.of("ok", true, "player", "F", "message", "我认为 A 就是狼人"));
         WerewolfController ctl = new WerewolfController(svc);
 
         Map<String, String> body = new LinkedHashMap<>();
+        body.put("session_id", "ww-test");
         body.put("player", "F");
+        body.put("player_key", "keyF");
         body.put("message", "我认为 A 就是狼人");
         ResponseEntity<Map<String, Object>> resp = ctl.discussionSay(body);
         assertEquals(200, resp.getStatusCode().value(), "B4: 不可变 map 不再 500（controller 防御性拷贝）");

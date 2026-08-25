@@ -8,6 +8,7 @@ import com.roleplay.engine.db.service.DatabaseService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -167,7 +168,7 @@ class WerewolfRoleKeyTest {
     }
 
     @Test
-    @DisplayName("R-4: GET /api/werewolf/keys 主持人分发端点 —— 全员 roleKey 一览")
+    @DisplayName("R-4: GET /api/werewolf/keys 仅通过 X-DM-Key 向主持人分发")
     void keysEndpointListsAllPlayerKeys() {
         WerewolfService svc = newService();
         WerewolfController ctl = new WerewolfController(svc);
@@ -178,7 +179,11 @@ class WerewolfRoleKeyTest {
         ResponseEntity<Map<String, Object>> initResp = ctl.init("F", "", "", body);
         String sid = (String) initResp.getBody().get("session_id");
 
-        ResponseEntity<Map<String, Object>> resp = ctl.getKeys(sid);
+        assertEquals(403, ctl.getKeys(sid, "").getStatusCode().value(), "空 DM key 必须拒绝");
+        ReflectionTestUtils.setField(ctl, "dmKey", "dm-test-key");
+        assertEquals(403, ctl.getKeys(sid, "wrong-key").getStatusCode().value(), "错误 DM key 必须拒绝");
+
+        ResponseEntity<Map<String, Object>> resp = ctl.getKeys(sid, "dm-test-key");
         assertEquals(200, resp.getStatusCode().value());
         assertEquals(sid, resp.getBody().get("session_id"));
         @SuppressWarnings("unchecked")
@@ -188,8 +193,8 @@ class WerewolfRoleKeyTest {
         assertEquals(svc.getRoleKey(sid, "F"), keys.get("F"), "keys 与 service 侧一致");
 
         // 缺 session_id → 报错（用无当前会话的新 controller：currentSessionId 未被 init 占用）
-        WerewolfController fresh = new WerewolfController(svc);
-        ResponseEntity<Map<String, Object>> noSid = fresh.getKeys("");
+        ResponseEntity<Map<String, Object>> noSid = ctl.getKeys("", "dm-test-key");
+        assertEquals(400, noSid.getStatusCode().value());
         assertEquals("缺少 session_id", noSid.getBody().get("error"));
     }
 }

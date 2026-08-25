@@ -1,5 +1,5 @@
 name: Feature request
-description: Suggest an idea for AI roleplay, 2D interaction, or game modes.
+description: Suggest an idea for EchoWorld, spatial interaction, or game modes.
 title: "[Feature] "
 labels: [enhancement]
 body:
@@ -21,7 +21,7 @@ body:
     attributes:
       label: Area
       options:
-        - AI roleplay / chat
+        - AI agents / chat
         - Script Murder
         - Werewolf
         - 2D map / Phaser

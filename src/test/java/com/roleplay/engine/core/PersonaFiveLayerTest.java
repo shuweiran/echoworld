@@ -69,9 +69,9 @@ class PersonaFiveLayerTest {
         assertTrue(prompt.contains("咖啡馆店主"), "Layer1 身份内容");
         assertTrue(prompt.contains("外观：silver long hair"), "Layer1 外观锚点");
         assertTrue(prompt.contains("【Layer 2 表达风格】"), "Layer2 表达风格段");
-        assertTrue(prompt.contains("口头禅与高频词"), "Layer2 口头禅标签");
-        assertTrue(prompt.contains("「欢迎回来」"), "Layer2 口头禅内容");
-        assertTrue(prompt.contains("原话示例"), "Layer2 原话示例");
+        assertTrue(prompt.contains("可变表达倾向"), "Layer2 可变表达规则");
+        assertFalse(prompt.contains("「欢迎回来」"), "Layer2 不透出口头禅原句");
+        assertFalse(prompt.contains("原话示例"), "Layer2 不透出原话示例");
         assertTrue(prompt.contains("【Layer 3 情感模式】"), "Layer3 情感模式段");
         assertTrue(prompt.contains("用行动表达"), "Layer3 在乎内容");
         assertTrue(prompt.contains("【Layer 4 冲突链与雷区】"), "Layer4 冲突链段");
@@ -137,7 +137,8 @@ class PersonaFiveLayerTest {
 
         String light = p.buildLightweightPrompt();
         assertTrue(light.contains("【说话风格】"), "Layer2 风格在轻量提示中");
-        assertTrue(light.contains("「我看到了…」"), "口头禅内容");
+        assertTrue(light.contains("可变风格线索"), "口头禅降级为可变线索");
+        assertFalse(light.contains("「我看到了…」"), "不透出口头禅内容");
         assertTrue(light.contains("【行为要点】"), "Layer0 摘要段");
         assertTrue(light.contains("只说三分"), "Layer0 首条规则");
         assertFalse(light.contains("【Layer 4 冲突链与雷区】"), "轻量不含完整冲突链");

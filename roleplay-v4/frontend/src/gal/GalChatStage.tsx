@@ -12,7 +12,9 @@
  * 输入区可用 inputSlot 覆盖（剧本杀按阶段门控输入区 / 锁定提示）。
  */
 import type { CSSProperties, ReactNode } from 'react';
+import { useState } from 'react';
 import { useGalStore } from './GalStore';
+import { liveSay } from './galSseAdapter';
 import { GalDialogBox } from './GalDialogBox';
 import { GalChoicesArea, GalInputArea } from './GalChoiceBar';
 import { GalCharacter } from './GalCharacter';
@@ -87,6 +89,32 @@ function renderSlot(sp: GalSpeaker | undefined, slotCls: string, activeId: strin
         masked={!hasTransparent}
         imageUrl={url}
       />
+    </div>
+  );
+}
+
+/** 导演模式输入框（无玩家时显示，与主控对话） */
+function DirectorInput() {
+  const [draft, setDraft] = useState('');
+  const override = useGalStore(s => s.liveSayOverride);
+  const send = () => {
+    const text = draft.trim();
+    if (!text) return;
+    if (override) override(text); else liveSay(text);
+    setDraft('');
+  };
+  return (
+    <div className="galg-input-slot">
+      <div className="galg-input-wrap">
+        <input
+          className="galg-input"
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+          placeholder="与主控对话…"
+        />
+        <button className="galg-send" onClick={send} disabled={!draft.trim()}>发送</button>
+      </div>
     </div>
   );
 }
@@ -173,6 +201,7 @@ export function GalChatStage({
         )}
         <GalDialogBox />
         {hasPlayer && <div className="galg-input-slot">{inputSlot ?? <GalInputArea />}</div>}
+        {!hasPlayer && <DirectorInput />}
       </div>
     </div>
   );

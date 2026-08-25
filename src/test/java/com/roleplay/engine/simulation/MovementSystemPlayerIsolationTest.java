@@ -98,6 +98,22 @@ class MovementSystemPlayerIsolationTest {
                 + player.getX() + "," + player.getY() + ")");
     }
 
+    @Test
+    @DisplayName("③b 玩家方向输入：速度方向与输入一致，连续换向不反弹不打转")
+    void playerManualDirection_isDeterministic() {
+        MovementSystem movement = ms(List.of());
+        AgentState player = agent(300, 300);
+        player.setPlayerControlled(true);
+        player.setManualDirection(1, 0);
+        player.setManualTarget(true);
+        movement.update(List.of(player), DT);
+        assertTrue(player.getX() > 300 && Math.abs(player.getY() - 300) < 1e-9);
+        player.setManualDirection(-1, 0);
+        for (int i = 0; i < 4; i++) movement.update(List.of(player), DT);
+        assertTrue(player.getX() < 300, "换向后应向左，不应沿旧惯性继续向右或原地打转：x=" + player.getX());
+        assertEquals(0.0, player.getVy(), 1e-9);
+    }
+
     // ── ④ AI 行为不受影响（仍 wander / 仍 flocking）────────────
 
     @Test

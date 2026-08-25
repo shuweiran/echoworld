@@ -1,0 +1,83 @@
+name: Desktop release preflight
+
+on:
+  workflow_dispatch:
+    inputs:
+      update_url:
+        description: HTTPS directory that will host latest.yml and the Windows artifacts
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build unsigned Windows candidate
+    runs-on: windows-latest
+    timeout-minutes: 35
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build executable backend jar
+        run: mvn -DskipTests package
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: roleplay-v4/frontend/package-lock.json
+
+      - name: Prepare desktop inputs
+        working-directory: roleplay-v4/frontend
+        run: |
+          npm ci
+          ./desktop/build-runtime.ps1 -Output ./desktop/runtime-release
+          $finalName = (& mvn -q -f ../../pom.xml help:evaluate -Dexpression=project.build.finalName -DforceStdout).Trim()
+          if (-not $finalName) { throw '无法读取 Maven project.build.finalName' }
+          $engineJar = (Resolve-Path -LiteralPath "../../target/$finalName.jar").Path
+          ./desktop/prepare-release.ps1 -EngineJar $engineJar -UpdateUrl '${{ inputs.update_url }}'
+
+      - name: Build unsigned candidate and update manifest
+        working-directory: roleplay-v4/frontend
+        run: |
+          npm run desktop:dist
+          npm run desktop:update-manifest -- -BaseUrl '${{ inputs.update_url }}'
+
+      - name: Reject certificates and private keys in candidate
+        working-directory: roleplay-v4/frontend
+        run: |
+          $sensitivePattern = '\.(pfx|p12|p8|pem|key|keystore)$'
+          $sourceLeaks = Get-ChildItem -LiteralPath desktop -Recurse -File |
+            Where-Object { $_.Name -match $sensitivePattern }
+          $releaseLeaks = Get-ChildItem -LiteralPath release -Recurse -File |
+            Where-Object { $_.Name -match $sensitivePattern }
+          $asarLeaks = @()
+          Get-ChildItem -LiteralPath release -Recurse -File -Filter app.asar | ForEach-Object {
+            $entries = & npx --no-install asar list $_.FullName
+            if ($LASTEXITCODE -ne 0) { throw "无法检查 ASAR: $($_.FullName)" }
+            $asarLeaks += $entries | Where-Object { $_ -match $sensitivePattern }
+          }
+          if ($sourceLeaks -or $releaseLeaks -or $asarLeaks) {
+            $names = @($sourceLeaks.FullName) + @($releaseLeaks.FullName) + @($asarLeaks)
+            throw "候选包包含证书或私钥文件：$($names -join ', ')"
+          }
+
+      - name: Upload candidate only
+        uses: actions/upload-artifact@v4
+        with:
+          name: huanjingbook-windows-candidate
+          path: roleplay-v4/frontend/release/
+          if-no-files-found: error

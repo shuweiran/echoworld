@@ -183,6 +183,10 @@ export async function startVoice(setText: (t: string) => void) {
       formData.append('audio', audioBlob, 'voice.webm');
       try {
         const res = await fetch('/api/voice/transcribe', { method: 'POST', body: formData });
+        if (!res.ok) {
+          const err = await res.json().catch(() => null);
+          throw new Error(err?.error || err?.detail || `HTTP ${res.status}`);
+        }
         const data = await res.json();
         if (data.text) setText(data.text);
       } catch (err) {

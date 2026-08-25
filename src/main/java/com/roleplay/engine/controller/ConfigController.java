@@ -8,6 +8,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Configuration endpoints — API Key, language, models, voice config.
@@ -23,7 +24,7 @@ public class ConfigController {
     private final ImageGenService imageService;
 
     // In-memory config overrides (replaces api_key.json)
-    private final Map<String, Object> runtimeConfig = new HashMap<>();
+    private final Map<String, Object> runtimeConfig = new ConcurrentHashMap<>();
 
     public ConfigController(AppConfig appConfig) {
         this(appConfig, null, null);
@@ -100,15 +101,20 @@ public class ConfigController {
         Map<String, Object> out = new LinkedHashMap<>();
         AppConfig.LLMConfig llm = appConfig.getLlm();
         AppConfig.MapLlmConfig map = appConfig.getMapLlm();
+        AppConfig.ArbiterLlmConfig arbiter = appConfig.getArbiterLlm();
         out.put("llm", providerView(llm.getApiBase(), llm.getModel(), llm.getApiKey()));
+        out.put("arbiter_llm", providerView(arbiter.getApiBase(), arbiter.getModel(), arbiter.getApiKey()));
         out.put("map_llm", providerView(map.getBaseUrl(), map.getModel(), map.getApiKey()));
         if (ttsService != null) out.put("tts", ttsService.statusMap());
         else out.put("tts", providerView(appConfig.getTts().getMimo().getBaseUrl(),
                 appConfig.getTts().getMimo().getModelBasic(), appConfig.getTts().getMimo().getApiKey()));
         if (imageProperties != null) {
             Map<String, Object> image = new LinkedHashMap<>();
-            image.put("provider", "comfyui");
+            image.put("provider", imageProperties.getProvider());
             image.put("base_url", imageProperties.getComfyuiBaseUrl());
+            image.put("external_base_url", imageProperties.getExternalBaseUrl());
+            image.put("external_model", imageProperties.getExternalModel());
+            image.put("external_endpoint", imageProperties.getExternalEndpoint());
             image.put("lora_name", imageProperties.getLoraName());
             image.put("rmbg_enabled", imageProperties.isRmbgEnabled());
             image.put("img2img_denoise", imageProperties.getImg2imgDenoise());
@@ -121,10 +127,12 @@ public class ConfigController {
     @PostMapping("/integrations")
     public ResponseEntity<Void> setIntegrations(@RequestBody Map<String, Object> body) {
         updateLlm(body.get("llm"), appConfig.getLlm());
+        updateArbiterLlm(body.get("arbiter_llm"), appConfig.getArbiterLlm());
         updateMapLlm(body.get("map_llm"), appConfig.getMapLlm());
         Object tts = body.get("tts");
         if (tts instanceof Map<?, ?> m) {
             AppConfig.TtsConfig.MimoConfig cfg = appConfig.getTts().getMimo();
+            setString(m, "provider", cfg::setProvider, false);
             setString(m, "api_key", cfg::setApiKey, true);
             setString(m, "base_url", cfg::setBaseUrl, false);
             setString(m, "model", cfg::setModelBasic, false);
@@ -133,7 +141,12 @@ public class ConfigController {
         }
         Object image = body.get("image");
         if (image instanceof Map<?, ?> m && imageProperties != null) {
+            setString(m, "provider", imageProperties::setProvider, false);
             setString(m, "base_url", imageProperties::setComfyuiBaseUrl, false);
+            setString(m, "external_base_url", imageProperties::setExternalBaseUrl, false);
+            setString(m, "external_api_key", imageProperties::setExternalApiKey, true);
+            setString(m, "external_model", imageProperties::setExternalModel, false);
+            setString(m, "external_endpoint", imageProperties::setExternalEndpoint, false);
             setString(m, "lora_name", imageProperties::setLoraName, false);
             if (m.containsKey("rmbg_enabled")) imageProperties.setRmbgEnabled(bool(m.get("rmbg_enabled"), imageProperties.isRmbgEnabled()));
             if (m.containsKey("img2img_denoise")) {
@@ -167,6 +180,13 @@ public class ConfigController {
         if (!(raw instanceof Map<?, ?> m)) return;
         setString(m, "api_key", cfg::setApiKey, true);
         setString(m, "base_url", cfg::setBaseUrl, false);
+        setString(m, "model", cfg::setModel, false);
+    }
+
+    private void updateArbiterLlm(Object raw, AppConfig.ArbiterLlmConfig cfg) {
+        if (!(raw instanceof Map<?, ?> m)) return;
+        setString(m, "api_key", cfg::setApiKey, true);
+        setString(m, "base_url", cfg::setApiBase, false);
         setString(m, "model", cfg::setModel, false);
     }
 

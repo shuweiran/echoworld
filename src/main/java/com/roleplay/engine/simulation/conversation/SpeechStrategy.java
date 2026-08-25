@@ -180,7 +180,7 @@ public class SpeechStrategy implements ConversationStrategy {
         AgentState self = group.getParticipant(speaker);
 
         StringBuilder sb = new StringBuilder();
-        sb.append(agent.getPersona().buildSystemPrompt()).append("\n\n");
+        sb.append(agent.getPersona().buildLightweightPrompt()).append("\n\n");
         sb.append("【演讲模式】你是演讲者。面前有 ").append(audience.size()).append(" 个人在听你说话。\n");
         sb.append("请发表一段简短的演讲（3-5句话，80字内）。\n\n");
 
@@ -211,7 +211,7 @@ public class SpeechStrategy implements ConversationStrategy {
         if (agent == null) return "";
 
         StringBuilder sb = new StringBuilder();
-        sb.append(agent.getPersona().buildSystemPrompt()).append("\n\n");
+        sb.append(agent.getPersona().buildLightweightPrompt()).append("\n\n");
         sb.append("【听众模式】你正在听 ").append(speaker).append(" 演讲。\n");
         sb.append("你的注意力：").append(Math.round(self.getAttention() * 100)).append("%\n");
 

@@ -1,5 +1,7 @@
 package com.roleplay.engine.interrupt;
 
+import org.junit.jupiter.api.Test;
+
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -9,34 +11,21 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
 /**
- * D1 中断系统逻辑自测（独立运行，不经 Spring/mvn）。
+ * D1 中断系统 JUnit 5 回归测试（由 Maven 标准门禁执行）。
  * 覆盖：三种停止类型、状态机、协作式检查点、事件发布、TrackChange 事件驱动取消、线程中断。
  */
-public class D1InterruptSelfTest {
+class D1InterruptSelfTest {
 
-    static int passed = 0;
-    static int failed = 0;
-
-    public static void main(String[] args) throws Exception {
-        testHardCancel();
-        testSoftCancelSavesPartial();
-        testStateInvalid();
-        testTrackChangeEvent();
-        testEventBusTypedPublish();
-        testCooperativeCheckpointInLoop();
-        System.out.println("==============================================");
-        System.out.println("D1 self-test result: " + passed + " passed, " + failed + " failed");
-        if (failed > 0) System.exit(1);
-    }
-
-    static void check(String name, boolean cond) {
-        if (cond) { passed++; System.out.println("  [PASS] " + name); }
-        else { failed++; System.out.println("  [FAIL] " + name); }
+    void check(String name, boolean cond) {
+        assertTrue(cond, name);
     }
 
     /** HARD 硬停止：token 置位 + 状态 CANCELLED + 线程中断 + TASK_CANCELLED 事件。 */
-    static void testHardCancel() throws Exception {
+    @Test
+    void testHardCancel() throws Exception {
         System.out.println("== testHardCancel ==");
         WorldEventBus bus = new WorldEventBus();
         InterruptManager im = new InterruptManager(bus);
@@ -96,7 +85,8 @@ public class D1InterruptSelfTest {
     }
 
     /** SOFT 软停止：不中断线程，检查点抛异常，partial 保存未完成内容。 */
-    static void testSoftCancelSavesPartial() throws Exception {
+    @Test
+    void testSoftCancelSavesPartial() throws Exception {
         System.out.println("== testSoftCancelSavesPartial ==");
         WorldEventBus bus = new WorldEventBus();
         InterruptManager im = new InterruptManager(bus);
@@ -125,7 +115,8 @@ public class D1InterruptSelfTest {
     }
 
     /** STATE_INVALID 状态停止：状态落到 INTERRUPTED。 */
-    static void testStateInvalid() throws Exception {
+    @Test
+    void testStateInvalid() throws Exception {
         System.out.println("== testStateInvalid ==");
         WorldEventBus bus = new WorldEventBus();
         InterruptManager im = new InterruptManager(bus);
@@ -143,7 +134,8 @@ public class D1InterruptSelfTest {
     }
 
     /** TrackChangeEvent：不在新轨道集合的任务被 STATE_INVALID 取消，仍属新轨道的保留。 */
-    static void testTrackChangeEvent() throws Exception {
+    @Test
+    void testTrackChangeEvent() throws Exception {
         System.out.println("== testTrackChangeEvent ==");
         WorldEventBus bus = new WorldEventBus();
         InterruptManager im = new InterruptManager(bus);
@@ -167,7 +159,8 @@ public class D1InterruptSelfTest {
     }
 
     /** 事件总线：类型过滤订阅 + 载荷。 */
-    static void testEventBusTypedPublish() throws Exception {
+    @Test
+    void testEventBusTypedPublish() throws Exception {
         System.out.println("== testEventBusTypedPublish ==");
         WorldEventBus bus = new WorldEventBus();
         AtomicReference<GameEvent> got = new AtomicReference<>();
@@ -179,7 +172,8 @@ public class D1InterruptSelfTest {
     }
 
     /** 协作式循环：模拟需求文档 §五 while(stream.hasNext()) 检查点退出。 */
-    static void testCooperativeCheckpointInLoop() {
+    @Test
+    void testCooperativeCheckpointInLoop() {
         System.out.println("== testCooperativeCheckpointInLoop ==");
         CancellationToken token = new CancellationToken();
         StringBuilder stream = new StringBuilder();

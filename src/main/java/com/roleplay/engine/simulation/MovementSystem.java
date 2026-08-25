@@ -50,8 +50,12 @@ public class MovementSystem {
                     self.clearTarget();
                 }
                 if (self.isManualTarget()) {
-                    double[] force = computeForce(self);
-                    applyForce(self, force, dt);
+                    if (self.isPlayerControlled() && self.hasManualDirection()) {
+                        applyManualDirection(self, dt);
+                    } else {
+                        double[] force = computeForce(self);
+                        applyForce(self, force, dt);
+                    }
                     clampToWorld(self);
                 } else {
                     self.setVx(0);
@@ -71,6 +75,14 @@ public class MovementSystem {
                 }
                 self.setVx(0);
                 self.setVy(0);
+                clampToWorld(self);
+                continue;
+            }
+
+            // P-0820-R：WASD/方向键走确定性方向，不经过 AI 惯性、群体力和障碍斥力。
+            // 碰撞只会把位置推出/停在边界，不反向改写输入，避免偏航、反向和原地打转。
+            if (self.isPlayerControlled() && self.isManualTarget() && self.hasManualDirection()) {
+                applyManualDirection(self, dt);
                 clampToWorld(self);
                 continue;
             }
@@ -215,6 +227,14 @@ public class MovementSystem {
         self.setVx(targetVx * damping);
         self.setVy(targetVy * damping);
 
+        self.setX(self.getX() + self.getVx() * dt);
+        self.setY(self.getY() + self.getVy() * dt);
+    }
+
+    private void applyManualDirection(AgentState self, double dt) {
+        double speed = Math.max(0.0, self.getMoveSpeed());
+        self.setVx(self.getManualDirectionX() * speed);
+        self.setVy(self.getManualDirectionY() * speed);
         self.setX(self.getX() + self.getVx() * dt);
         self.setY(self.getY() + self.getVy() * dt);
     }

@@ -38,6 +38,13 @@ public class WerewolfController {
     @Value("${roleplay.game.werewolf.auto-play:false}")
     private boolean autoPlay = false;
 
+    /**
+     * 主持人管理口令。狼人杀与剧本杀共用同一配置，避免出现一套功能安全、一套功能默认公开的分裂边界。
+     * 空配置同样拒绝访问：管理接口不能以“未配置”为匿名放行条件。
+     */
+    @Value("${roleplay.game.dm.key:}")
+    private String dmKey = "";
+
     /** P-0802-P3：测试钩子 —— 玩家 → 对局映射（局中改名后断言键已换名）。 */
     Map<String, String> playerSessions() {
         return playerSessions;
@@ -75,7 +82,7 @@ public class WerewolfController {
                                                      @RequestBody(required = false) Map<String, Object> body) {
         // Support both query param and JSON body formats
         List<String> players = new ArrayList<>();
-        String playerName = player_name;
+        String playerName = trim(player_name);
         if (body != null && body.containsKey("players")) {
             @SuppressWarnings("unchecked")
             List<String> bodyPlayers = (List<String>) body.get("players");
@@ -83,13 +90,36 @@ public class WerewolfController {
         } else if (!human_players.isEmpty()) {
             players.addAll(Arrays.asList(human_players.split(",")));
         }
-        if (!playerName.isEmpty() && !players.contains(playerName)) {
-            players.add(0, playerName);
+
+        // P-0824-C：initGame 固定按 players[0] 生成私密视图，因此必须先解析真正的人类身份，
+        // 再把它规范到首位。旧逻辑只在 player_name 不在列表时置顶，真人在后位会收到首个 AI 的
+        // your_role/role_key；player_id 解析到改名后的角色时还会把一个不存在于本局的名字登记为真人。
+        String pid = !trim(player_id).isBlank() ? trim(player_id)
+                : (body != null ? trim(body.get("player_id")) : "");
+        String resolvedName = (!pid.isBlank() && identityService != null)
+                ? identityService.resolveCharacterName(pid).map(String::trim).filter(n -> !n.isBlank()).orElse(null)
+                : null;
+        String humanPlayerName = resolvedName != null ? resolvedName : playerName;
+
+        if (!humanPlayerName.isBlank()) {
+            // player_id 解析名优先：从名单移除旧名，防止改名前后两个身份同时进入同一局。
+            if (resolvedName != null && !playerName.isBlank() && !playerName.equals(resolvedName)) {
+                players.removeIf(playerName::equals);
+            }
+            // 已在列表后位也必须移动到首位；同时消除重复项，保证令牌只归属一个玩家身份。
+            players.removeIf(humanPlayerName::equals);
+            players.add(0, humanPlayerName);
         }
 
         @SuppressWarnings("unchecked")
-        Map<String, String> customRoles = body != null
+        Map<String, String> requestedRoles = body != null
             ? (Map<String, String>) body.get("roles") : null;
+        Map<String, String> customRoles = requestedRoles == null ? null : new LinkedHashMap<>(requestedRoles);
+        if (customRoles != null && resolvedName != null && !playerName.isBlank()
+                && !playerName.equals(resolvedName)) {
+            String oldRole = customRoles.remove(playerName);
+            if (oldRole != null) customRoles.putIfAbsent(resolvedName, oldRole);
+        }
 
         String sessionId = UUID.randomUUID().toString().substring(0, 12);
         currentSessionId = sessionId;
@@ -102,19 +132,8 @@ public class WerewolfController {
 
         Map<String, Object> state = werewolfService.initGame(sessionId, players, customRoles);
         // P-0802-F：登记人类玩家（AI = 存活玩家中非人类）→ 注册 router（身份进上下文）→ 自动推进
-        // P-0802-P2：加收 player_id —— 有 player_id 且能解析出当前角色名时 humans=Set.of(解析名)
-        //（角色库改名后即使前端仍传旧名 player_name 也按新名登记，防 AI 行动器接管玩家角色）；
-        // 无 player_id / 未绑定 / identityService 缺失 → 现状逻辑（Set.of(player_name)），零行为变化。
-        String pid = !player_id.isBlank() ? player_id
-                : (body != null && body.get("player_id") != null ? String.valueOf(body.get("player_id")) : "");
-        Set<String> humans;
-        String resolvedName = (!pid.isBlank() && identityService != null)
-                ? identityService.resolveCharacterName(pid).orElse(null) : null;
-        if (resolvedName != null) {
-            humans = Set.of(resolvedName);
-        } else {
-            humans = playerName.isEmpty() ? Set.of() : Set.of(playerName);
-        }
+        // 无 player_id / 未绑定 / identityService 缺失时仍回退 player_name；解析成功时名单和视图均使用当前名。
+        Set<String> humans = humanPlayerName.isBlank() ? Set.of() : Set.of(humanPlayerName);
         werewolfService.setHumanPlayers(sessionId, humans);
         WerewolfService.GameState game = werewolfService.getGame(sessionId);
         if (router != null) {
@@ -122,7 +141,7 @@ public class WerewolfController {
             logRouter(sessionId);
         }
         werewolfService.setAutoPlay(sessionId, autoPlay);
-        werewolfService.notifyGameInit(sessionId, playerName);
+        werewolfService.notifyGameInit(sessionId, humanPlayerName);
         // G0-1：响应携带 session_id（前端可拿到）
         state.put("session_id", sessionId);
         // P-0802-I：响应回显 room_code（若绑定）
@@ -173,28 +192,41 @@ public class WerewolfController {
 
     /** P-0802-J: 全员 roleKey 一览（主持人/DM 分发令牌用，对齐剧本杀 GET /api/script/keys）。 */
     @GetMapping("/keys")
-    public ResponseEntity<Map<String, Object>> getKeys(@RequestParam(defaultValue = "") String session_id) {
-        String sid = session_id.isBlank() ? currentSessionId : session_id;
-        if (sid.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+    public ResponseEntity<Map<String, Object>> getKeys(
+            @RequestParam(defaultValue = "") String session_id,
+            @RequestHeader(value = "X-DM-Key", defaultValue = "") String dmKeyHeader) {
+        if (!dmKeyOk(dmKeyHeader)) return dmDenied();
+        String sid = trim(session_id);
+        if (sid.isBlank()) return badRequest("缺少 session_id");
         Map<String, String> keys = werewolfService.getPlayerKeys(sid);
         return ResponseEntity.ok(Map.of("session_id", sid, "player_keys", keys));
     }
 
+    /** 仅保留给旧的直接控制器测试编译；HTTP 路由始终进入带 X-DM-Key 的重载。 */
+    @Deprecated
+    public ResponseEntity<Map<String, Object>> getKeys(String sessionId) {
+        return getKeys(sessionId, "");
+    }
+
     @PostMapping("/night_action")
     public ResponseEntity<Map<String, Object>> nightAction(@RequestBody Map<String, String> body) {
-        String player = body.getOrDefault("player", "");
-        String action = body.getOrDefault("action", "");
-        String target = body.getOrDefault("target", "");
-        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
+        ResponseEntity<Map<String, Object>> denied = requirePlayer(body);
+        if (denied != null) return denied;
+        String player = trim(body.get("player"));
+        String action = trim(body.get("action"));
+        String target = trim(body.get("target"));
+        String sessionId = trim(body.get("session_id"));
         String result = werewolfService.recordNightAction(sessionId, player, action, target);
         return ResponseEntity.ok(Map.of("result", result));
     }
 
     @PostMapping("/hunter_shoot")
     public ResponseEntity<Map<String, Object>> hunterShoot(@RequestBody Map<String, String> body) {
-        String player = body.getOrDefault("player", "");
-        String target = body.getOrDefault("target", "");
-        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
+        ResponseEntity<Map<String, Object>> denied = requirePlayer(body);
+        if (denied != null) return denied;
+        String player = trim(body.get("player"));
+        String target = trim(body.get("target"));
+        String sessionId = trim(body.get("session_id"));
         String result = werewolfService.hunterShoot(sessionId, player, target);
         return ResponseEntity.ok(Map.of("result", result));
     }
@@ -204,9 +236,11 @@ public class WerewolfController {
      *  再 put 会 500（service 侧已改 LinkedHashMap 根治，此处兜底防其他返回路径/未来回归）。 */
     @PostMapping("/discussion_say")
     public ResponseEntity<Map<String, Object>> discussionSay(@RequestBody Map<String, String> body) {
-        String player = body.getOrDefault("player", "");
+        ResponseEntity<Map<String, Object>> denied = requirePlayer(body);
+        if (denied != null) return denied;
+        String player = trim(body.get("player"));
         String message = body.getOrDefault("message", "");
-        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
+        String sessionId = trim(body.get("session_id"));
         Map<String, Object> result = new LinkedHashMap<>(werewolfService.discussionSay(sessionId, player, message));
         result.put("session_id", sessionId);
         return ResponseEntity.ok(result);
@@ -214,49 +248,101 @@ public class WerewolfController {
 
     /** Admin: resolve night phase and transition to day. */
     @PostMapping("/resolve_night")
-    public ResponseEntity<Map<String, Object>> resolveNight(@RequestBody Map<String, String> body) {
-        String sessionId = body.getOrDefault("session_id", currentSessionId);
+    public ResponseEntity<Map<String, Object>> resolveNight(
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-DM-Key", defaultValue = "") String dmKeyHeader) {
+        if (!dmKeyOk(dmKeyHeader)) return dmDenied();
+        String sessionId = trim(body.get("session_id"));
+        if (sessionId.isBlank()) return badRequest("缺少 session_id");
         return ResponseEntity.ok(werewolfService.resolveNight(sessionId));
     }
 
     @PostMapping("/vote")
     public ResponseEntity<Map<String, Object>> vote(@RequestBody Map<String, Object> body) {
-        String player = (String) body.getOrDefault("player", "");
-        String target = (String) body.getOrDefault("target", "");
-        String sessionId = playerSessions.getOrDefault(player, currentSessionId);
+        Map<String, String> credentials = stringMap(body);
+        ResponseEntity<Map<String, Object>> denied = requirePlayer(credentials);
+        if (denied != null) return denied;
+        String player = credentials.get("player");
+        String target = trim(body.get("target"));
+        String sessionId = credentials.get("session_id");
         String result = werewolfService.castVote(sessionId, player, target);
         return ResponseEntity.ok(Map.of("result", result, "phase", "day_vote"));
     }
 
     /** Admin: resolve votes and transition to night. */
     @PostMapping("/resolve_vote")
-    public ResponseEntity<Map<String, Object>> resolveVote(@RequestBody Map<String, String> body) {
-        String sessionId = body.getOrDefault("session_id", currentSessionId);
+    public ResponseEntity<Map<String, Object>> resolveVote(
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-DM-Key", defaultValue = "") String dmKeyHeader) {
+        if (!dmKeyOk(dmKeyHeader)) return dmDenied();
+        String sessionId = trim(body.get("session_id"));
+        if (sessionId.isBlank()) return badRequest("缺少 session_id");
         return ResponseEntity.ok(werewolfService.resolveVote(sessionId));
     }
 
     @PostMapping("/start_voting")
-    public ResponseEntity<Map<String, Object>> startVoting(@RequestBody Map<String, String> body) {
-        String sessionId = body.getOrDefault("session_id", currentSessionId);
+    public ResponseEntity<Map<String, Object>> startVoting(
+            @RequestBody Map<String, String> body,
+            @RequestHeader(value = "X-DM-Key", defaultValue = "") String dmKeyHeader) {
+        if (!dmKeyOk(dmKeyHeader)) return dmDenied();
+        String sessionId = trim(body.get("session_id"));
+        if (sessionId.isBlank()) return badRequest("缺少 session_id");
         werewolfService.startVoting(sessionId);
         return ResponseEntity.ok(Map.of("phase", "day_vote"));
     }
 
-    /** 向后兼容重载：不传 session_id（旧测试/旧客户端）。 */
-    public ResponseEntity<Map<String, Object>> getStatus(String player, String player_name) {
-        return getStatus(player, player_name, "");
+    /**
+     * HTTP 玩家状态视图：角色、夜间可见信息等均属私密数据，因此与行动接口使用同一 roleKey 边界。
+     */
+    @GetMapping("/status")
+    public ResponseEntity<Map<String, Object>> getStatus(
+            @RequestParam(defaultValue = "") String player,
+            @RequestParam(defaultValue = "") String player_name,
+            @RequestParam(defaultValue = "") String session_id,
+            @RequestParam(defaultValue = "") String player_key) {
+        String p = !trim(player).isBlank() ? trim(player) : trim(player_name);
+        Map<String, String> credentials = Map.of(
+                "session_id", trim(session_id), "player", p, "player_key", trim(player_key));
+        ResponseEntity<Map<String, Object>> denied = requirePlayer(credentials);
+        if (denied != null) return denied;
+        return ResponseEntity.ok(werewolfService.statusMap(trim(session_id), p));
     }
 
-    @GetMapping("/status")
-    public ResponseEntity<Map<String, Object>> getStatus(@RequestParam(defaultValue = "") String player,
-                                                          @RequestParam(defaultValue = "") String player_name,
-                                                          @RequestParam(defaultValue = "") String session_id) {
-        String p = !player.isEmpty() ? player : player_name;
-        // P-0802-I：显式 session_id 优先（重连/多局场景前端可直接按对局定位）
-        String sid = !session_id.isBlank() ? session_id.trim() : playerSessions.getOrDefault(p, currentSessionId);
-        if (sid.isEmpty()) {
-            return ResponseEntity.ok(Map.of("game_over", true, "phase", "idle"));
+    private ResponseEntity<Map<String, Object>> requirePlayer(Map<String, String> body) {
+        String sessionId = trim(body.get("session_id"));
+        String player = trim(body.get("player"));
+        String playerKey = trim(body.get("player_key"));
+        if (sessionId.isBlank() || player.isBlank() || playerKey.isBlank()) {
+            return badRequest("缺少身份字段：session_id、player、player_key 均为必填");
         }
-        return ResponseEntity.ok(werewolfService.statusMap(sid, p));
+        if (!werewolfService.isPlayerKeyValid(sessionId, player, playerKey)) {
+            return ResponseEntity.status(403).body(Map.of("error", "身份校验失败：player_key 与对局玩家不匹配"));
+        }
+        playerSessions.put(player, sessionId);
+        return null;
+    }
+
+    private boolean dmKeyOk(String providedKey) {
+        return dmKey != null && !dmKey.isBlank() && providedKey != null && dmKey.equals(providedKey);
+    }
+
+    private ResponseEntity<Map<String, Object>> dmDenied() {
+        return ResponseEntity.status(403).body(Map.of("error", "DM 权限校验失败：请配置并提供 X-DM-Key"));
+    }
+
+    private ResponseEntity<Map<String, Object>> badRequest(String message) {
+        return ResponseEntity.badRequest().body(Map.of("error", message));
+    }
+
+    private Map<String, String> stringMap(Map<String, Object> body) {
+        Map<String, String> result = new HashMap<>();
+        result.put("session_id", trim(body.get("session_id")));
+        result.put("player", trim(body.get("player")));
+        result.put("player_key", trim(body.get("player_key")));
+        return result;
+    }
+
+    private static String trim(Object value) {
+        return value == null ? "" : String.valueOf(value).trim();
     }
 }

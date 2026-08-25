@@ -1,5 +1,6 @@
 package com.roleplay.engine.agent;
 
+import jakarta.annotation.PreDestroy;
 import com.roleplay.engine.core.Message;
 import com.roleplay.engine.core.Track;
 import com.roleplay.engine.core.TrackConfig;
@@ -59,6 +60,11 @@ public class AgentExecutor {
     public AgentExecutor(InterruptManager interruptManager, AgentTaskManager agentTaskManager) {
         this.interruptManager = interruptManager;
         this.agentTaskManager = agentTaskManager;
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        executor.shutdownNow();
     }
 
     // ── Priority enum ──────────────────────────────────────────

@@ -3,8 +3,12 @@ package com.roleplay.engine.controller;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.roleplay.engine.broadcast.SseBroadcaster;
 import com.roleplay.engine.debug.TraceContext;
+import com.roleplay.engine.service.ScriptGameService;
+import com.roleplay.engine.service.WerewolfService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -48,16 +52,43 @@ public class SSEController implements SseBroadcaster {
     private static final long SSE_TIMEOUT_MS = 300_000; // 5 min
 
     private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
-    /** P-0802-I：emitter → 会话过滤（stream 带 ?session_id= 时注册；null = 不过滤，收全部全局广播）。 */
+    /** emitter → 会话订阅（stream 带 ?session_id= 时注册；null = 仅接收真正的全局广播）。 */
     private final ConcurrentHashMap<SseEmitter, String> emitterSessions = new ConcurrentHashMap<>();
+    /** 私聊订阅身份；仅保存已通过剧本 roleKey 校验的连接，并在每次投递前复验。 */
+    private final ConcurrentHashMap<SseEmitter, PlayerSubscription> emitterPlayers = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "sse-heartbeat");
         t.setDaemon(true);
         return t;
     });
     private final ObjectMapper mapper = new ObjectMapper();
+    private final PlayerAccessVerifier playerAccessVerifier;
 
     public SSEController() {
+        this((sessionId, player, playerKey, eventType) -> false);
+    }
+
+    /** 延迟取得游戏服务，避免它们反向依赖 SSEController 时形成构造器循环。 */
+    @Autowired
+    public SSEController(ObjectProvider<ScriptGameService> scriptGames,
+                         ObjectProvider<WerewolfService> werewolfGames) {
+        this((sessionId, player, playerKey, eventType) -> {
+            boolean werewolfEvent = eventType != null && eventType.startsWith("werewolf_");
+            boolean scriptEvent = eventType != null && eventType.startsWith("script_");
+            if (werewolfEvent) {
+                WerewolfService werewolves = werewolfGames.getIfAvailable();
+                return werewolves != null && werewolves.isPlayerKeyValid(sessionId, player, playerKey);
+            }
+            ScriptGameService games = scriptGames.getIfAvailable();
+            if (scriptEvent) return games != null && games.isPlayerKeyValid(sessionId, player, playerKey);
+            if (games != null && games.isPlayerKeyValid(sessionId, player, playerKey)) return true;
+            WerewolfService werewolves = werewolfGames.getIfAvailable();
+            return werewolves != null && werewolves.isPlayerKeyValid(sessionId, player, playerKey);
+        });
+    }
+
+    SSEController(PlayerAccessVerifier playerAccessVerifier) {
+        this.playerAccessVerifier = playerAccessVerifier;
         // Start heartbeat
         scheduler.scheduleAtFixedRate(this::sendHeartbeat, HEARTBEAT_INTERVAL_MS, HEARTBEAT_INTERVAL_MS, TimeUnit.MILLISECONDS);
     }
@@ -65,32 +96,56 @@ public class SSEController implements SseBroadcaster {
     /**
      * SSE event stream — the frontend's long-lived connection for real-time updates.
      *
-     * <p>P-0802-I：可选 {@code session_id} 查询参数 —— 带会话标识的连接只接收该对局的
-     * {@link #broadcastToSession} 定向事件（同时仍接收全部全局广播，如 agent_output/announcement）；
-     * 不带时与旧版一致（全局广播全覆盖）。多客户端/多对局并发互不串扰。
+     * <p>可选 {@code session_id} 查询参数 —— 带会话标识的连接接收该对局的公开事件和真正的
+     * 全局事件；不带时只接收全局事件。载荷本身含 {@code session_id} 时也会强制定向，不再依赖前端过滤。
+     * 剧本杀/狼人杀私密事件另需同时提供 {@code player + player_key}，校验通过后才建立玩家级订阅；
+     * 省略身份参数仍可接收该局公开事件，但默认收不到任何私密事件。
      */
     @GetMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public SseEmitter stream(@RequestParam(name = "session_id", required = false) String sessionId) {
+    public SseEmitter stream(@RequestParam(name = "session_id", required = false) String sessionId,
+                             @RequestParam(name = "player", required = false) String player,
+                             @RequestParam(name = "player_key", required = false) String playerKey) {
+        String normalizedSession = normalize(sessionId);
+        String normalizedPlayer = normalize(player);
+        String normalizedKey = normalize(playerKey);
+        boolean identityRequested = normalizedPlayer != null || normalizedKey != null;
+        if (identityRequested && (normalizedSession == null || normalizedPlayer == null || normalizedKey == null
+                || !playerAccessVerifier.isValid(normalizedSession, normalizedPlayer, normalizedKey, null))) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.FORBIDDEN, "无效的游戏玩家 SSE 凭证");
+        }
+
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MS);
         emitters.add(emitter);
-        if (sessionId != null && !sessionId.isBlank()) {
-            emitterSessions.put(emitter, sessionId.trim());
+        if (normalizedSession != null) {
+            emitterSessions.put(emitter, normalizedSession);
+        }
+        if (identityRequested) {
+            emitterPlayers.put(emitter, new PlayerSubscription(normalizedSession, normalizedPlayer, normalizedKey));
         }
 
         emitter.onCompletion(() -> {
             emitters.remove(emitter);
             emitterSessions.remove(emitter);
+            emitterPlayers.remove(emitter);
         });
         emitter.onTimeout(() -> {
             emitters.remove(emitter);
             emitterSessions.remove(emitter);
+            emitterPlayers.remove(emitter);
         });
         emitter.onError(e -> {
             emitters.remove(emitter);
             emitterSessions.remove(emitter);
+            emitterPlayers.remove(emitter);
         });
 
         return emitter;
+    }
+
+    /** Java 调用/既有单测兼容重载。 */
+    public SseEmitter stream(String sessionId) {
+        return stream(sessionId, null, null);
     }
 
     private void sendHeartbeat() {
@@ -106,17 +161,23 @@ public class SSEController implements SseBroadcaster {
     }
 
     /**
-     * Broadcast an event to all connected SSE clients.
+     * Broadcast an event to connected SSE clients. If the payload has a non-blank
+     * {@code session_id}, it is forcibly delivered only to that session.
      * {@code data} is serialized to a JSON string (Jackson handles escaping).
      */
     public void broadcast(String eventType, Object data) {
         // P-0809-B（API 逻辑链追踪）：SSE 事件打点——关联到当前请求链路（同一请求线程内
         // 触发的广播可关联；后台线程触发时 ThreadLocal 为空，自动跳过，属已知限制）
-        TraceContext.recordSse(eventType, null);
+        String payloadSession = sessionIdFrom(data);
+        TraceContext.recordSse(eventType, payloadSession);
         String json = serialize(eventType, data);
         if (json == null) return;
-        for (SseEmitter emitter : emitters) {
-            send(emitter, eventType, json);
+        if (payloadSession != null) {
+            deliverToSession(payloadSession, eventType, json);
+        } else {
+            for (SseEmitter emitter : emitters) {
+                send(emitter, eventType, json);
+            }
         }
     }
 
@@ -125,14 +186,19 @@ public class SSEController implements SseBroadcaster {
      * 无匹配连接时静默丢弃（事件本就是该对局专属，无人收听不广播）；sessionId 为空回退全局广播。
      */
     public void broadcastToSession(String sessionId, String eventType, Object data) {
-        if (sessionId == null || sessionId.isBlank()) {
+        String normalizedSession = normalize(sessionId);
+        if (normalizedSession == null) {
             broadcast(eventType, data);
             return;
         }
         // P-0809-B（API 逻辑链追踪）：定向广播同样打点（会话定向分支不经 broadcast()）
-        TraceContext.recordSse(eventType, sessionId);
+        TraceContext.recordSse(eventType, normalizedSession);
         String json = serialize(eventType, data);
         if (json == null) return;
+        deliverToSession(normalizedSession, eventType, json);
+    }
+
+    private void deliverToSession(String sessionId, String eventType, String json) {
         boolean delivered = false;
         for (Map.Entry<SseEmitter, String> e : emitterSessions.entrySet()) {
             if (sessionId.equals(e.getValue())) {
@@ -142,6 +208,53 @@ public class SSEController implements SseBroadcaster {
         if (!delivered) {
             log.debug("SSE targeted event {} for session {} dropped: no matching emitter", eventType, sessionId);
         }
+    }
+
+    /** 私聊只投递给同局且身份为发送方/接收方的连接；每次投递复验令牌，重开后旧连接立即失权。 */
+    @Override
+    public void broadcastToPlayers(String sessionId, String eventType, Object data, String... players) {
+        String normalizedSession = normalize(sessionId);
+        if (normalizedSession == null) {
+            log.warn("SSE private event {} dropped: missing session id", eventType);
+            return;
+        }
+        TraceContext.recordSse(eventType, normalizedSession);
+        String json = serialize(eventType, data);
+        if (json == null) return;
+        java.util.Set<String> allowedPlayers = new java.util.HashSet<>();
+        if (players != null) {
+            for (String player : players) {
+                String normalized = normalize(player);
+                if (normalized != null) allowedPlayers.add(normalized);
+            }
+        }
+        if (allowedPlayers.isEmpty()) {
+            log.warn("SSE private event {} for session {} dropped: missing participants", eventType, normalizedSession);
+            return;
+        }
+        for (Map.Entry<SseEmitter, PlayerSubscription> entry : emitterPlayers.entrySet()) {
+            PlayerSubscription subscription = entry.getValue();
+            if (!normalizedSession.equals(subscription.sessionId())
+                    || !allowedPlayers.contains(subscription.player())) continue;
+            if (!playerAccessVerifier.isValid(
+                    subscription.sessionId(), subscription.player(), subscription.playerKey(), eventType)) {
+                emitterPlayers.remove(entry.getKey(), subscription);
+                continue;
+            }
+            send(entry.getKey(), eventType, json);
+        }
+    }
+
+    private static String sessionIdFrom(Object data) {
+        if (!(data instanceof Map<?, ?> map)) return null;
+        Object value = map.get("session_id");
+        return value == null ? null : normalize(String.valueOf(value));
+    }
+
+    private static String normalize(String value) {
+        if (value == null) return null;
+        String normalized = value.trim();
+        return normalized.isEmpty() ? null : normalized;
     }
 
     /** 序列化载荷；失败返回 null（调用方跳过发送）。 */
@@ -166,6 +279,7 @@ public class SSEController implements SseBroadcaster {
             // completed），宽捕获：移除死连接，避免中断整个广播循环（否则后续 emitter 收不到事件）
             emitters.remove(emitter);
             emitterSessions.remove(emitter);
+            emitterPlayers.remove(emitter);
             return false;
         }
     }
@@ -189,8 +303,7 @@ public class SSEController implements SseBroadcaster {
     }
 
     /**
-     * P-0811-G(B-2)：带会话标识的 agent_output —— 载荷含 session_id（前端可按当前会话过滤，
-     * 多会话并存时不串扰）。全局广播语义不变（仍广播给所有连接）；仅当 sessionId 非空时写入载荷。
+     * 带会话标识的 agent_output 会由 broadcast() 强制定向，仅当 sessionId 非空时写入载荷。
      */
     public void broadcastAgentOutput(String sessionId, String agentName, String content, String trackId,
                                      String trackLabel, String trackMode, List<String> visibleTo) {
@@ -243,7 +356,7 @@ public class SSEController implements SseBroadcaster {
         broadcastRoundComplete(null, round);
     }
 
-    /** P-0811-G(B-2)：带会话标识的 round_complete（多会话并存时前端按 session_id 过滤）。 */
+    /** 带会话标识的 round_complete（由服务端会话定向，不依赖前端过滤）。 */
     public void broadcastRoundComplete(String sessionId, int round) {
         Map<String, Object> payload = new java.util.LinkedHashMap<>();
         if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
@@ -261,7 +374,7 @@ public class SSEController implements SseBroadcaster {
         broadcastUserInput(null, content, category, character, round);
     }
 
-    /** P-0811-G(B-2)：带会话标识的 user_input（多会话并存时前端按 session_id 过滤）。 */
+    /** 带会话标识的 user_input（由服务端会话定向，不依赖前端过滤）。 */
     public void broadcastUserInput(String sessionId, String content, String category, String character, int round) {
         Map<String, Object> payload = new java.util.LinkedHashMap<>();
         if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
@@ -340,13 +453,15 @@ public class SSEController implements SseBroadcaster {
         broadcastToSession(sessionId, "script_reveal", payload);
     }
 
-    /** P-0805-C（私聊 SSE）：script_private → {session_id, from, to, message, reply, guarded, ts}
-     *  会话定向推送（该对局所有连接收到，前端按本人 player 过滤——私聊双方才展示，对齐 script_status 通道）。 */
+    /** script_private → {session_id, from, to, message, reply, guarded, ts}
+     *  仅推送给通过 roleKey 认证的发送方和接收方连接，服务端执行私聊隔离。 */
     public void broadcastScriptPrivate(String sessionId, Map<String, Object> data) {
         Map<String, Object> payload = new java.util.LinkedHashMap<>();
         if (data != null) payload.putAll(data);
         payload.put("session_id", sessionId == null ? "" : sessionId);
-        broadcastToSession(sessionId, "script_private", payload);
+        String from = data == null ? null : String.valueOf(data.getOrDefault("from", ""));
+        String to = data == null ? null : String.valueOf(data.getOrDefault("to", ""));
+        broadcastToPlayers(sessionId, "script_private", payload, from, to);
     }
 
     /**
@@ -451,4 +566,11 @@ public class SSEController implements SseBroadcaster {
         }
         return n;
     }
+
+    @FunctionalInterface
+    interface PlayerAccessVerifier {
+        boolean isValid(String sessionId, String player, String playerKey, String eventType);
+    }
+
+    private record PlayerSubscription(String sessionId, String player, String playerKey) {}
 }

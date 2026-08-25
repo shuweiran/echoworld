@@ -118,7 +118,7 @@ class ScriptGameResumeTest {
     }
 
     @Test
-    @DisplayName("C3-2: player_key 校验 —— 匹配通过 / 错误 key 拒绝 / 空 key 向后兼容")
+    @DisplayName("C3-2: player_key 校验 —— 匹配通过 / 错误、跨玩家与空 key 均拒绝")
     void playerKeyValidation() {
         mockLlm();
         String sid = "r-c32";
@@ -138,9 +138,10 @@ class ScriptGameResumeTest {
         // 跨玩家 key 也拒绝（Bob 的 key 不能冒充 Alice）
         assertNotNull(svc.checkPlayerAccess(sid, "Alice", svc.getRoleKey(sid, "Bob")), "跨玩家 key 拒绝");
 
-        // 空 key 向后兼容：仍按玩家名放行（现状不变）
-        assertNull(svc.checkPlayerAccess(sid, "Alice", ""), "无 key 兼容放行");
-        assertNull(svc.checkPlayerAccess(sid, "Alice", null), "null key 兼容放行");
+        // D-078：空 key 不得再凭玩家名冒充本人
+        assertNotNull(svc.checkPlayerAccess(sid, "Alice", ""), "空 key 必须拒绝");
+        assertNotNull(svc.checkPlayerAccess(sid, "Alice", null), "null key 必须拒绝");
+        assertFalse(svc.isPlayerKeyValid(sid, "Alice", ""), "空 key 不是有效玩家凭证");
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -343,7 +344,15 @@ class ScriptGameResumeTest {
         assertEquals("Alice", resumeResp.get("player"), "房间码 + key 恢复出玩家视图");
         assertEquals("investigation", resumeResp.get("phase"));
 
-        // status：错误 key → 403；正确 key → 200 且含 role_key
+        // status：匿名公共视图可读但不含本人秘密/令牌；指定玩家必须持正确 key
+        ResponseEntity<Map<String, Object>> publicStatus = ctl.getStatus("", "");
+        assertEquals(200, publicStatus.getStatusCode().value(), "匿名公共状态保持可用");
+        assertFalse(publicStatus.getBody().containsKey("role_key"), "公共状态不得暴露 role_key");
+        assertEquals("", publicStatus.getBody().get("your_secret"), "公共状态不得暴露玩家秘密");
+
+        ResponseEntity<Map<String, Object>> missingKeyStatus = ctl.getStatus("Alice", "");
+        assertEquals(403, missingKeyStatus.getStatusCode().value(), "指定玩家但缺少 key 必须拒绝");
+
         ResponseEntity<Map<String, Object>> deniedStatus = ctl.getStatus("Alice", "bad-key");
         assertEquals(403, deniedStatus.getStatusCode().value(), "错误 key 状态查询拒绝");
         assertTrue(deniedStatus.getBody().get("error").toString().contains("身份校验失败"));
@@ -360,9 +369,9 @@ class ScriptGameResumeTest {
         assertEquals(200, okSearch.getStatusCode().value(), "正确 key 搜证放行");
         assertEquals(List.of("c1"), okSearch.getBody().get("found"), "正确 key 搜证正常出线索");
 
-        // 无 key 向后兼容：仍可搜证（现状不变）
-        ResponseEntity<Map<String, Object>> legacySearch = ctl.search(Map.of("player", "Alice", "location", "书房"));
-        assertEquals(200, legacySearch.getStatusCode().value(), "无 key 兼容放行");
+        // D-078：玩家动作缺少 key 时拒绝，不能仅凭玩家名搜证
+        ResponseEntity<Map<String, Object>> missingKeySearch = ctl.search(Map.of("player", "Alice", "location", "书房"));
+        assertEquals(403, missingKeySearch.getStatusCode().value(), "无 key 搜证必须拒绝");
 
         // DM keys 端点：未配置/未携带 DM key 时不能泄露全员令牌。
         ResponseEntity<Map<String, Object>> keysResp = ctl.getKeys(sessionId, "");

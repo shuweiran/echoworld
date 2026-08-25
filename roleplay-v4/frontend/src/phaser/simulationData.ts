@@ -10,6 +10,11 @@
 /** 后端 AgentState.toMap() 的子集（渲染需要的最小字段，宽容解析） */
 export interface SimAgent {
   agentName: string;
+  /** P-0824-L：轻量群演投影标识；点击后可按 roleId 请求晋升为完整 Agent。 */
+  roleId?: string;
+  ambient?: boolean;
+  roleTier?: string;
+  lifecycleStatus?: string;
   x: number;
   y: number;
   emotion?: string;
@@ -195,6 +200,10 @@ export function normalizeAgent(raw: unknown): SimAgent | null {
   if (!name) return null;
   return {
     agentName: name,
+    roleId: typeof a.roleId === 'string' ? a.roleId : undefined,
+    ambient: Boolean(a.ambient),
+    roleTier: typeof a.roleTier === 'string' ? a.roleTier : undefined,
+    lifecycleStatus: typeof a.lifecycleStatus === 'string' ? a.lifecycleStatus : undefined,
     x: Number(a.x ?? 0),
     y: Number(a.y ?? 0),
     emotion: String(a.emotion ?? ''),

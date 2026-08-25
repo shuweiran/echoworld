@@ -75,9 +75,9 @@ export function ChatTopbar({ drawers }: { drawers: TopbarDrawers }) {
   return (
     <header className="topbar game-topbar">
       <div className="brand">
-        <div className="brand-mark">R</div>
+        <div className="brand-mark">E</div>
         <div style={{ minWidth: 0 }}>
-          <div className="brand-title">Roleplay v4</div>
+          <div className="brand-title">EchoWorld</div>
           <div className="brand-subtitle">{store.sceneDescription || '未加载场景描述'}</div>
         </div>
       </div>

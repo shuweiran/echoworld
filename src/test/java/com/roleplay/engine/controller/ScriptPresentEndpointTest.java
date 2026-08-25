@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -109,10 +110,9 @@ class ScriptPresentEndpointTest {
         assertNotNull(init.get("session_id"), "init 返回 session_id");
         String sid = init.get("session_id").asText();
 
-        // 取林深的 role_key（本人视图）
-        String statusRes = getJson("/api/script/status?player=林深");
-        JsonNode st = mapper.readTree(statusRes);
-        String key = st.has("role_key") ? st.get("role_key").asText() : "";
+        // init 只向首位真人玩家发放其 role_key；后续本人视图必须携带该凭证，不能按玩家名匿名领取。
+        String key = init.has("role_key") ? init.get("role_key").asText() : "";
+        assertFalse(key.isBlank(), "init 应向首位真人玩家发放非空 role_key");
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("session_id", sid);
         out.put("player", "林深");
@@ -190,7 +190,9 @@ class ScriptPresentEndpointTest {
         // 讨论自动收束进 VOTE（mock LLM 极快）；等至非 discussion 态
         String phase = "";
         for (int i = 0; i < 30; i++) {
-            String stRes = getJson("/api/script/status?player=" + java.net.URLEncoder.encode(player, java.nio.charset.StandardCharsets.UTF_8));
+            String stRes = getJson("/api/script/status?player="
+                    + java.net.URLEncoder.encode(player, java.nio.charset.StandardCharsets.UTF_8)
+                    + "&player_key=" + java.net.URLEncoder.encode(key, java.nio.charset.StandardCharsets.UTF_8));
             phase = mapper.readTree(stRes).path("phase").asText();
             if (!"discussion".equals(phase)) break;
             Thread.sleep(100);

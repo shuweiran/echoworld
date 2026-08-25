@@ -318,4 +318,25 @@ class RouterServiceCalibrationTest {
         assertTrue(ctx.stream().anyMatch(m -> "今天也要加油哦".equals(m.getContent())),
                 "普通对话消息不受影响");
     }
+
+    @Test
+    @DisplayName("⑩ Agent：首轮和校准轮用完整五层提示，其余轮用轻量提示")
+    void agentUsesFullPersonaOnlyOnFirstAndCalibrationRounds() {
+        Agent agent = new Agent(fiveLayerPersona("小铃"), "agent", mock(LLMClient.class));
+
+        String first = agent.buildContext("", List.of(), "merged", List.of(), "", null, "")
+                .get(0).getContent();
+        String normal = agent.buildContext("", List.of(
+                new Message(Message.Role.AGENT, "凯尔", "普通对话")), "merged", List.of(), "", null, "")
+                .get(0).getContent();
+        String calibration = agent.buildContext("", List.of(
+                new Message(Message.Role.SYSTEM, "系统", "【校准提醒】保持身份"),
+                new Message(Message.Role.AGENT, "凯尔", "普通对话")), "merged", List.of(), "", null, "")
+                .get(0).getContent();
+
+        assertTrue(first.contains("【Layer 2 表达风格】"), "首轮应使用完整五层提示");
+        assertFalse(normal.contains("【Layer 2 表达风格】"), "普通轮应使用轻量提示");
+        assertTrue(normal.contains("【行为要点】"), "普通轮仍保留轻量行为要点");
+        assertTrue(calibration.contains("【Layer 2 表达风格】"), "校准轮应恢复完整五层提示");
+    }
 }

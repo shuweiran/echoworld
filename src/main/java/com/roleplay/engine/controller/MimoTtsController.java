@@ -1,5 +1,7 @@
 package com.roleplay.engine.controller;
 
+import jakarta.annotation.PreDestroy;
+import com.roleplay.engine.core.PersonaCardLoader;
 import com.roleplay.engine.db.service.DatabaseService;
 import com.roleplay.engine.service.MimoTtsService;
 import org.slf4j.Logger;
@@ -24,6 +26,7 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedDeque;
+import java.util.concurrent.Semaphore;
 
 /**
  * MiMo TTS 端点（P-0817-A）：角色语音合成 —— 同步合成 / 异步任务 / 内置音色清单 /
@@ -44,6 +47,8 @@ public class MimoTtsController {
     private final Map<String, CompletableFuture<MimoTtsService.TtsResult>> jobs = new ConcurrentHashMap<>();
     /** 与 jobs 同步维护的 FIFO；ConcurrentHashMap 本身没有插入顺序。 */
     private final ConcurrentLinkedDeque<String> jobOrder = new ConcurrentLinkedDeque<>();
+    /** 实际执行槽位；记录淘汰不能替代外部 API 工作量背压。 */
+    private final Semaphore asyncSlots = new Semaphore(MAX_JOBS);
 
     public MimoTtsController(MimoTtsService tts, DatabaseService databaseService) {
         this.tts = tts;
@@ -117,23 +122,45 @@ public class MimoTtsController {
         if (!tts.isEnabled()) {
             return ResponseEntity.status(503).body(Map.of("error", "MiMo TTS 未启用（roleplay.tts.mimo.enabled=false）"));
         }
+        if (!asyncSlots.tryAcquire()) {
+            return ResponseEntity.status(429).body(Map.of("error", "异步 TTS 任务已达上限，请稍后重试"));
+        }
         try {
             MimoTtsService.VoiceSpec spec = resolveSpec(b);
             String jobId = UUID.randomUUID().toString();
             CompletableFuture<MimoTtsService.TtsResult> future = tts.synthesizeAsync(text, spec);
-            while (jobs.size() >= MAX_JOBS) {
-                String eldest = jobOrder.pollFirst();
-                if (eldest == null) break;
-                jobs.remove(eldest);
+            synchronized (jobOrder) {
+                while (jobs.size() >= MAX_JOBS) {
+                    String eldest = jobOrder.pollFirst();
+                    if (eldest == null) break;
+                    CompletableFuture<MimoTtsService.TtsResult> evicted = jobs.remove(eldest);
+                    if (evicted != null && !evicted.isDone()) {
+                        evicted.cancel(true);
+                    }
+                }
+                jobs.put(jobId, future);
+                jobOrder.addLast(jobId);
             }
-            jobs.put(jobId, future);
-            jobOrder.addLast(jobId);
-            future.whenComplete((r, ex) -> log.debug("MiMo TTS 异步任务 {} 完成: {}", jobId,
-                    ex == null ? r.audio().length + " bytes" : "error " + ex));
+            future.whenComplete((r, ex) -> {
+                asyncSlots.release();
+                log.debug("MiMo TTS 异步任务 {} 完成: {}", jobId,
+                        ex == null ? r.audio().length + " bytes" : "error " + ex);
+            });
             return ResponseEntity.ok(Map.of("job_id", jobId, "status", "pending"));
         } catch (IllegalArgumentException e) {
+            asyncSlots.release();
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (RuntimeException e) {
+            asyncSlots.release();
+            throw e;
         }
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        jobs.values().forEach(future -> future.cancel(true));
+        jobs.clear();
+        jobOrder.clear();
     }
 
     /** GET /api/tts/mimo/result/{jobId} —— {status: pending|done|error, audio_base64?, ...}。 */
@@ -235,6 +262,10 @@ public class MimoTtsController {
                 // 角色不存在且未显式指定 mode → 降级 basic（前端对局消息无显式声线时的兜底）
                 mode = "basic";
             }
+            // P-0817-A：从角色卡读取 TTS 音色描述（tone 未显式指定时）
+            if (tone == null) {
+                tone = readTtsToneFromCard(character);
+            }
         }
         if (mode == null) {
             mode = "basic";
@@ -279,5 +310,17 @@ public class MimoTtsController {
         if (o == null) return def;
         String s = String.valueOf(o);
         return s.isEmpty() ? def : s;
+    }
+
+    /** P-0817-A：从角色卡读取 TTS 音色描述（内存卡优先，回退加载器）。 */
+    private String readTtsToneFromCard(String characterName) {
+        Map<String, Object> card = PersonaCardLoader.cardFor(characterName);
+        if (card != null) {
+            Object tone = card.get("ttsTone");
+            if (tone != null && !String.valueOf(tone).isBlank()) {
+                return String.valueOf(tone);
+            }
+        }
+        return null;
     }
 }

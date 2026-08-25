@@ -41,21 +41,27 @@ public class LLMClient {
     private final AppConfig appConfig;
     private final int timeoutSeconds;
     private final String fallbackModel;
-    /** P-0818-B：地图生成专用 provider（true=读 roleplay.map-llm.*，小米 MiMo；false=主链路 DeepSeek） */
-    private final boolean mapProvider;
+    /** 调用职责决定 provider；角色对话、主控和视觉审核可独立配置。 */
+    protected enum Provider { DIALOGUE, MAP, ARBITER }
+    private final Provider provider;
 
     private final HttpClient httpClient;
     private final ObjectMapper mapper = new ObjectMapper();
 
     @Autowired
     public LLMClient(AppConfig appConfig) {
-        this(appConfig, false);
+        this(appConfig, Provider.DIALOGUE);
     }
 
-    /** 地图专用构造（MapLlmClient 使用）：端点/模型/key 分流到 roleplay.map-llm.*。 */
+    /** 兼容旧地图子类构造。 */
     protected LLMClient(AppConfig appConfig, boolean mapProvider) {
+        this(appConfig, mapProvider ? Provider.MAP : Provider.DIALOGUE);
+    }
+
+    /** 专用构造：端点/模型/key 按职责分流，均支持运行时热更新。 */
+    protected LLMClient(AppConfig appConfig, Provider provider) {
         this.appConfig = appConfig;
-        this.mapProvider = mapProvider;
+        this.provider = provider;
         // D20: api_base / model 不再构造期固定 —— 每次请求时读取 AppConfig（
         // 运行时 POST /api/config/apikey 设置的 api_base/model 立即生效，重启丢失）
         this.timeoutSeconds = appConfig.getMonitor().getTimeoutSeconds();
@@ -68,7 +74,12 @@ public class LLMClient {
 
     /** 运行时 api_base（D20：支持运行时配置热更新，见 ConfigController）。 */
     private String apiBase() {
-        if (mapProvider && appConfig.getMapLlm() != null
+        if (provider == Provider.ARBITER && appConfig.getArbiterLlm() != null
+                && appConfig.getArbiterLlm().getApiBase() != null
+                && !appConfig.getArbiterLlm().getApiBase().isBlank()) {
+            return appConfig.getArbiterLlm().getApiBase();
+        }
+        if (provider == Provider.MAP && appConfig.getMapLlm() != null
                 && appConfig.getMapLlm().getBaseUrl() != null
                 && !appConfig.getMapLlm().getBaseUrl().isBlank()) {
             return appConfig.getMapLlm().getBaseUrl();
@@ -78,7 +89,12 @@ public class LLMClient {
 
     /** 运行时默认模型（D20）。 */
     private String defaultModel() {
-        if (mapProvider && appConfig.getMapLlm() != null
+        if (provider == Provider.ARBITER && appConfig.getArbiterLlm() != null
+                && appConfig.getArbiterLlm().getModel() != null
+                && !appConfig.getArbiterLlm().getModel().isBlank()) {
+            return appConfig.getArbiterLlm().getModel();
+        }
+        if (provider == Provider.MAP && appConfig.getMapLlm() != null
                 && appConfig.getMapLlm().getModel() != null
                 && !appConfig.getMapLlm().getModel().isBlank()) {
             return appConfig.getMapLlm().getModel();
@@ -88,7 +104,12 @@ public class LLMClient {
 
     /** P-0818-B：鉴权 key（地图专用 provider → roleplay.map-llm.api-key，否则主链路 key）。 */
     private String authKey() {
-        if (mapProvider && appConfig.getMapLlm() != null
+        if (provider == Provider.ARBITER && appConfig.getArbiterLlm() != null
+                && appConfig.getArbiterLlm().getApiKey() != null
+                && !appConfig.getArbiterLlm().getApiKey().isBlank()) {
+            return appConfig.getArbiterLlm().getApiKey();
+        }
+        if (provider == Provider.MAP && appConfig.getMapLlm() != null
                 && appConfig.getMapLlm().getApiKey() != null
                 && !appConfig.getMapLlm().getApiKey().isBlank()) {
             return appConfig.getMapLlm().getApiKey();

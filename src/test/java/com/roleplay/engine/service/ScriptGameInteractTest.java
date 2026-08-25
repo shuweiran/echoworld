@@ -136,7 +136,7 @@ class ScriptGameInteractTest {
         injectCustomMap(svc, sid);
 
         // Alice 靠近箱子（4,4）→ 交互（站在 3,4 相邻格）
-        Map<String, Object> r = svc.interact(sid, "Alice", "", "map_1", "chest_1", "", 3, 4);
+        Map<String, Object> r = svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "chest_1", "", 3, 4);
         assertEquals(Boolean.TRUE, r.get("handled"));
         assertEquals(Boolean.TRUE, r.get("processed"), "once 交互标记 processed");
         assertEquals(List.of("箱子打开了，里面有一片碎玻璃！"), r.get("dialog"));
@@ -158,10 +158,10 @@ class ScriptGameInteractTest {
         String sid = SESSION + "-s2-" + System.nanoTime();
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
         injectCustomMap(svc, sid);
-        svc.interact(sid, "Alice", "", "map_1", "chest_1", "", 3, 4);
+        svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "chest_1", "", 3, 4);
         assertEquals(1, svc.getGame(sid).playerClues.getOrDefault("Alice", List.of()).size());
         // 重复交互
-        Map<String, Object> again = svc.interact(sid, "Alice", "", "map_1", "chest_1", "", 3, 4);
+        Map<String, Object> again = svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "chest_1", "", 3, 4);
         assertEquals(Boolean.FALSE, again.get("handled"));
         assertEquals(Boolean.TRUE, again.get("processed"));
         assertTrue(String.valueOf(again.get("result")).contains("已处理过"));
@@ -180,12 +180,12 @@ class ScriptGameInteractTest {
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
         injectCustomMap(svc, sid);
         // Alice 在 (9,7) 距箱子 (4,4) 远超半径 1 → 拒绝
-        Map<String, Object> far = svc.interact(sid, "Alice", "", "map_1", "chest_1", "", 9, 7);
+        Map<String, Object> far = svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "chest_1", "", 9, 7);
         assertEquals(Boolean.FALSE, far.get("handled"));
         assertTrue(String.valueOf(far.get("error")).contains("够不着"), String.valueOf(far.get("error")));
         assertTrue(svc.getGame(sid).playerClues.getOrDefault("Alice", List.of()).isEmpty(), "拒绝时线索不授予");
         // 缺坐标 → 跳过靠近校验（尽力而为）
-        Map<String, Object> noCoord = svc.interact(sid, "Bob", "", "map_1", "chest_1", "", null, null);
+        Map<String, Object> noCoord = svc.interact(sid, "Bob", svc.getRoleKey(sid, "Bob"), "map_1", "chest_1", "", null, null);
         assertEquals(Boolean.TRUE, noCoord.get("handled"), "缺坐标跳过半径校验");
     }
 
@@ -201,14 +201,14 @@ class ScriptGameInteractTest {
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
         injectCustomMap(svc, sid);
         // 未满足 → 拦截
-        Map<String, Object> blocked = svc.interact(sid, "Alice", "", "map_1", "note_1", "", 2, 2);
+        Map<String, Object> blocked = svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "note_1", "", 2, 2);
         assertEquals(Boolean.FALSE, blocked.get("handled"));
         assertEquals(Boolean.TRUE, blocked.get("blocked"));
         assertEquals(List.of("门锁着…"), blocked.get("dialog"));
         assertFalse(svc.getGame(sid).decorFlags.contains("note_read"), "拦截时不写 flag");
         // 写入 key_room（同批 flag 动作/测试注入）→ 放行
         svc.getGame(sid).decorFlags.add("key_room");
-        Map<String, Object> open = svc.interact(sid, "Alice", "", "map_1", "note_1", "", 2, 3);
+        Map<String, Object> open = svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "note_1", "", 2, 3);
         assertEquals(Boolean.TRUE, open.get("handled"));
         assertEquals(List.of("便条：凶手是管家。"), open.get("dialog"));
         assertTrue(svc.getGame(sid).decorFlags.contains("note_read"), "flag 动作写一次性标记");
@@ -228,14 +228,14 @@ class ScriptGameInteractTest {
         String sid = SESSION + "-s5-" + System.nanoTime();
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
         injectCustomMap(svc, sid);
-        Map<String, Object> d1 = svc.interact(sid, "Alice", "", "map_1", "", "8,2", 8, 3);
+        Map<String, Object> d1 = svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "", "8,2", 8, 3);
         assertEquals(Boolean.TRUE, d1.get("handled"));
         assertEquals(List.of("墙上的画框很沉。"), d1.get("dialog"));
-        Map<String, Object> d2 = svc.interact(sid, "Bob", "", "map_1", "", "8,3", 8, 3);
+        Map<String, Object> d2 = svc.interact(sid, "Bob", svc.getRoleKey(sid, "Bob"), "map_1", "", "8,3", 8, 3);
         assertEquals(Boolean.TRUE, d2.get("handled"));
         assertTrue(svc.getGame(sid).playerClues.getOrDefault("Bob", List.of()).contains("c2"));
         // 环境占位
-        Map<String, Object> empty = svc.interact(sid, "Carol", "", "map_1", "", "9,7", 9, 7);
+        Map<String, Object> empty = svc.interact(sid, "Carol", svc.getRoleKey(sid, "Carol"), "map_1", "", "9,7", 9, 7);
         assertEquals(Boolean.FALSE, empty.get("handled"));
         assertTrue(String.valueOf(empty.get("result")).contains("这里没有什么特别的"));
     }
@@ -251,7 +251,7 @@ class ScriptGameInteractTest {
         String sid = SESSION + "-s6-" + System.nanoTime();
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
         injectCustomMap(svc, sid);
-        Map<String, Object> r = svc.interact(sid, "Alice", "", "map_1", "lamp_1", "", 6, 3);
+        Map<String, Object> r = svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "lamp_1", "", 6, 3);
         assertEquals(Boolean.TRUE, r.get("handled"));
         assertEquals(Boolean.TRUE, ((Map<?, ?>) r.get("state")).get("lit"), "state 动作合并 lit=true");
         assertEquals(List.of("switch"), r.get("sounds"), "sound 占位返回");
@@ -272,10 +272,10 @@ class ScriptGameInteractTest {
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
         injectCustomMap(svc, sid);
         assertTrue(String.valueOf(svc.interact("no-such-game", "Alice", "", "", "", "", 3, 4).get("error")).contains("游戏不存在"));
-        assertTrue(String.valueOf(svc.interact(sid, "Alice", "", "map_99", "chest_1", "", 3, 4).get("error")).contains("地图不存在"));
+        assertTrue(String.valueOf(svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_99", "chest_1", "", 3, 4).get("error")).contains("地图不存在"));
         assertTrue(String.valueOf(svc.interact(sid, "Ghost", "", "map_1", "chest_1", "", 3, 4).get("error")).contains("玩家不在本局"));
-        assertTrue(String.valueOf(svc.interact(sid, "Alice", "", "map_1", "nope", "", 3, 4).get("error")).contains("decor 不存在"));
-        assertTrue(String.valueOf(svc.interact(sid, "Alice", "", "map_1", "", "", 3, 4).get("error")).contains("缺少交互目标"));
+        assertTrue(String.valueOf(svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "nope", "", 3, 4).get("error")).contains("decor 不存在"));
+        assertTrue(String.valueOf(svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "", "", 3, 4).get("error")).contains("缺少交互目标"));
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -293,17 +293,20 @@ class ScriptGameInteractTest {
         setCurrentSession(controller, sid);
         // happy path
         ResponseEntity<Map<String, Object>> resp = controller.interact(Map.of(
-                "session_id", sid, "player", "Alice", "decor_id", "chest_1", "x", "3", "y", "4"));
+                "session_id", sid, "player", "Alice", "player_key", svc.getRoleKey(sid, "Alice"),
+                "decor_id", "chest_1", "x", "3", "y", "4"));
         assertEquals(200, resp.getStatusCode().value());
         assertEquals(Boolean.TRUE, resp.getBody().get("handled"));
         assertEquals("chest_1", resp.getBody().get("decor_id"));
         // tile 坐标路径
         ResponseEntity<Map<String, Object>> tile = controller.interact(Map.of(
-                "session_id", sid, "player", "Bob", "tile", "8,2", "x", "8", "y", "3"));
+                "session_id", sid, "player", "Bob", "player_key", svc.getRoleKey(sid, "Bob"),
+                "tile", "8,2", "x", "8", "y", "3"));
         assertEquals(Boolean.TRUE, tile.getBody().get("handled"));
-        // 缺 player → 服务层容错
+        // 缺 player 无法建立身份绑定 → 403，不再以匿名玩家名调用服务层。
         ResponseEntity<Map<String, Object>> noPlayer = controller.interact(Map.of("session_id", sid, "decor_id", "chest_1"));
-        assertTrue(String.valueOf(noPlayer.getBody().get("error")).contains("缺少玩家名"));
+        assertEquals(403, noPlayer.getStatusCode().value());
+        assertTrue(String.valueOf(noPlayer.getBody().get("error")).contains("身份校验失败"));
         // 非法 player_key → 403（C3 身份认证）
         ResponseEntity<Map<String, Object>> badKey = controller.interact(Map.of(
                 "session_id", sid, "player", "Alice", "player_key", "wrong", "decor_id", "chest_1", "x", "3", "y", "4"));
@@ -328,9 +331,9 @@ class ScriptGameInteractTest {
         svc.initGame(sid, "庄园", List.of("Alice", "Bob", "Carol"));
         injectCustomMap(svc, sid);
         // Alice 交互 once 箱子（授予 c1 + processed）；Bob 满足条件后读便条（note_read flag）
-        svc.interact(sid, "Alice", "", "map_1", "chest_1", "", 3, 4);
+        svc.interact(sid, "Alice", svc.getRoleKey(sid, "Alice"), "map_1", "chest_1", "", 3, 4);
         svc.getGame(sid).decorFlags.add("key_room");
-        svc.interact(sid, "Bob", "", "map_1", "note_1", "", 2, 3);
+        svc.interact(sid, "Bob", svc.getRoleKey(sid, "Bob"), "map_1", "note_1", "", 2, 3);
         String aliceKey = svc.getGame(sid).playerKeys.get("Alice");
 
         // 重启模拟：新实例不经过 initGame，从快照重建

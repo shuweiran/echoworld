@@ -45,7 +45,15 @@ public class WebSearchController {
         if (url.isEmpty()) {
             return ResponseEntity.badRequest().body(Map.of("content", ""));
         }
-        String content = webSearch.fetchContent(url);
-        return ResponseEntity.ok(Map.of("url", url, "content", content));
+        try {
+            String content = webSearch.fetchContent(url);
+            return ResponseEntity.ok(Map.of("url", url, "content", content));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of(
+                "url", url,
+                "content", "",
+                "error", e.getMessage()
+            ));
+        }
     }
 }

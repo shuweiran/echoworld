@@ -155,6 +155,22 @@ public class SessionController {
         return ResponseEntity.ok(Map.of("status", "stopped"));
     }
 
+    /**
+     * 显式关闭独立会话并释放其 Router/MemoryStore 引用。与 /stop 不同，close 后该 session_id
+     * 再访问会明确返回 404；未传 session_id 的兼容默认单例不能被删除。
+     */
+    @PostMapping("/session/close")
+    public ResponseEntity<Map<String, Object>> closeSession(@RequestBody(required = false) Map<String, String> body) {
+        String sessionId = body == null ? "" : String.valueOf(body.getOrDefault("session_id", "")).trim();
+        if (sessionId.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "缺少 session_id"));
+        }
+        if (!sessions.remove(sessionId)) {
+            return ResponseEntity.status(404).body(Map.of("error", "会话不存在或已关闭", "session_id", sessionId));
+        }
+        return ResponseEntity.ok(Map.of("status", "closed", "session_id", sessionId));
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  D1: 中断系统 API（需求文档第八条：按 Task ID 取消 / 查询任务状态）
     // ═══════════════════════════════════════════════════════════
@@ -292,6 +308,9 @@ public class SessionController {
         String persona = body.getOrDefault("persona", "");
         String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
         RouterService r = sessions.get(sessionId);
+        if (r.isWorldOwnedAgent(name)) {
+            return ResponseEntity.status(409).body(Map.of("status", "rejected", "error", "世界角色由生命周期管理器维护", "name", name));
+        }
         r.addAgent(name, new Persona(name, persona));
         return ResponseEntity.ok(Map.of("status", "added", "name", name));
     }
@@ -299,7 +318,11 @@ public class SessionController {
     @DeleteMapping("/agents/{name}")
     public ResponseEntity<Map<String, Object>> removeAgent(@PathVariable String name,
                                                            @RequestParam(required = false) String session_id) {
-        sessions.get(session_id).removeAgent(name);
+        RouterService r = sessions.get(session_id);
+        if (r.isWorldOwnedAgent(name)) {
+            return ResponseEntity.status(409).body(Map.of("status", "rejected", "error", "世界角色由生命周期管理器维护", "name", name));
+        }
+        r.removeAgent(name);
         return ResponseEntity.ok(Map.of("status", "removed", "name", name));
     }
 

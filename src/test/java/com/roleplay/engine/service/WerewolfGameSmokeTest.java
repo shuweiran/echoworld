@@ -117,11 +117,13 @@ class WerewolfGameSmokeTest {
         assertEquals(6, alive.size(), "body.players 全量进局（不再退化为 1 人局）");
         assertTrue(alive.contains("苏哲") && alive.contains("林诗"), "AI 角色已进入 GameState");
 
-        // controller 生成的 sessionId 为随机 12 位且不返回（G0-1 缺口，禁动未修）；经 status 端点按玩家名定位取局
-        ResponseEntity<Map<String, Object>> status = ctl.getStatus("", "苏哲");
+        String sid = (String) state.get("session_id");
+        ResponseEntity<Map<String, Object>> status = ctl.getStatus(
+                "", "苏哲", sid, svc.getRoleKey(sid, "苏哲"));
         assertEquals(200, status.getStatusCode().value());
         assertEquals("werewolf", status.getBody().get("your_role"), "自定义角色 werewolf 生效");
-        ResponseEntity<Map<String, Object>> seerStatus = ctl.getStatus("", "林诗");
+        ResponseEntity<Map<String, Object>> seerStatus = ctl.getStatus(
+                "", "林诗", sid, svc.getRoleKey(sid, "林诗"));
         assertEquals("seer", seerStatus.getBody().get("your_role"), "自定义角色 seer 生效");
     }
 

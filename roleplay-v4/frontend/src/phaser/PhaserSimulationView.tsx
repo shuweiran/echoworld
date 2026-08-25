@@ -74,6 +74,20 @@ export interface SimChatMsg {
 /** recentConversations 拍平时跳过的元数据键 */
 const SKIP_CONV_KEYS = new Set(['pair', 'group', 'mode', 'tick', 'elapsedMs', 'round']);
 
+async function simulationRequest(url: string, init?: RequestInit): Promise<Response> {
+  const response = await fetch(url, init);
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.error || payload?.detail || `HTTP ${response.status}`);
+  }
+  return response;
+}
+
+async function simulationJson<T = any>(url: string, init?: RequestInit): Promise<T> {
+  const response = await simulationRequest(url, init);
+  return response.json() as Promise<T>;
+}
+
 export function PhaserSimulationView({ characters, scene = 'park', map, height, autoStart = true, playerName, galChat = false }: PhaserSimulationViewProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const gameRef = useRef<Phaser.Game | null>(null);
@@ -86,6 +100,9 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   };
   const esRef = useRef<EventSource | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  /** 当前轻量群演投影；普通点击只关注，实际发言才登记为有效互动。 */
+  const ambientByNameRef = useRef<Map<string, { roleId: string }>>(new Map());
+  const focusedAmbientRef = useRef<{ roleId: string; name: string } | null>(null);
   const [status, setStatus] = useState('初始化中...');
   const [currentScene, setCurrentScene] = useState(scene);
   const [running, setRunning] = useState(false);
@@ -132,6 +149,8 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   const worldAgentsRef = useRef<string[]>([]);
   /** 加入/离开结果角标提示（ok=绿 / error=红，4.5s 自消；后端错误message 可见）*/
   const [joinMsg, setJoinMsg] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  /** 导演旁听已为某一批组内消息回传过的播放确认，防止渲染刷新重复推进。 */
+  const observerAdvanceKeysRef = useRef<Set<string>>(new Set());
   // P-0813-D：自动打招呼防抖表（NPC 名 → 上次问候时间戳）
   const galChatRef = useRef(galChat);
   galChatRef.current = galChat;
@@ -158,14 +177,17 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   const revealRef = useRef<Map<string, number>>(new Map());         // 消息 id → 已揭示字数
   const typingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const nextTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const observerAdvanceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pauseStartRef = useRef<number | null>(null);                // 暂停起始时间戳（输入框有字）
   const pausedRef = useRef(false);                                  // 暂停镜像（异步回调读最新值）
   const lastSpeakerRef = useRef<string | null>(null);               // 最近播放者（气泡单例：在场时只显示它）
   const [bubbleTick, setBubbleTick] = useState(0);                  // 播放者变化 → 同步气泡过滤
+  /** 方向键请求串行化，避免网络乱序让旧方向覆盖最新停止/换向。 */
+  const moveRequestChainRef = useRef<Promise<void>>(Promise.resolve());
 
   // 点击设目标 → 直接 POST（与 simulation.html 相同端点击
   const onSetTarget: SceneCallbacks['onSetTarget'] = (agentName, x, y) => {
-    fetch(`/api/simulation/target/${encodeURIComponent(agentName)}`, {
+    void simulationRequest(`/api/simulation/target/${encodeURIComponent(agentName)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ x, y }),
@@ -175,11 +197,16 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   /** P-0814-I：WASD/方向键持续移动 → POST /api/simulation/move-dir（服务端权威坐标 + 方向×步长，按住高频 120ms）
    *  P-0816-C：dx/dy 均为 0 → 停止移动（后端清除 manualTarget，防止松开后角色继续滑向最后目标点） */
   const onMoveDir: SceneCallbacks['onMoveDir'] = (agentName, dx, dy) => {
-    fetch(`/api/simulation/move-dir/${encodeURIComponent(agentName)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ dx, dy }),
-    }).catch(() => {});
+    // 方向指令必须按用户产生顺序到达；并发 fetch 在网络抖动时会让“停止”先于旧方向抵达。
+    moveRequestChainRef.current = moveRequestChainRef.current
+      .catch(() => {})
+      .then(() => simulationRequest(`/api/simulation/move-dir/${encodeURIComponent(agentName)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dx, dy }),
+      }))
+      .then(() => undefined)
+      .catch(() => {});
   };
 
   // ── P-0813-D：玩家角色加入对话触发 ──
@@ -202,11 +229,19 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
       return;
     }
     try {
-      await fetch(`/api/simulation/send/${encodeURIComponent(me)}`, {
+      const focusedAmbient = focusedAmbientRef.current;
+      await simulationRequest(`/api/simulation/send/${encodeURIComponent(me)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: msg }),
+        body: JSON.stringify({
+          message: msg,
+          focused_role_id: focusedAmbient?.roleId || '',
+          interaction_id: focusedAmbient
+            ? (globalThis.crypto?.randomUUID?.() ?? `interaction-${Date.now()}`)
+            : '',
+        }),
       });
+      focusedAmbientRef.current = null;
       // 本地回显（玩家气泡在 Gal 区可见；2D 世界 AI 回应经 recentConversations 回流入队）
       useGalStore.getState().enqueuePlayerEcho(msg);
     } catch (e: any) {
@@ -214,10 +249,54 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     }
   }, [resolveMeName]);
 
-  /** 点角色只做地图定位：不能以一次观察操作把所有人并入主控对话轨道。 */
+  /**
+   * 点击 NPC 打开真实对话入口：只打开面板并放入一条系统提示，玩家随后
+   * 通过输入框发言；不自动伪造一条玩家消息，避免把点击观察误变成后端 DYAD。
+   * 已加入多人组时保留当前组上下文，不把点击另一个 NPC 误当成退组/换组。
+   */
   const handleAgentClick: SceneCallbacks['onAgentClick'] = useCallback((agentName: string) => {
-    setJoinMsg({ kind: 'ok', text: `已聚焦 ${agentName}；点击地图上的会话组可加入旁听或发言。` });
-  }, []);
+    const me = resolveMeName();
+    const ambient = ambientByNameRef.current.get(agentName);
+    setChatOpen(true);
+    if (galChatRef.current) {
+      setGalView(true);
+      setGalOpen(true);
+    }
+    if (agentName === me) {
+      focusedAmbientRef.current = null;
+      setJoinMsg({ kind: 'ok', text: '已打开你的对话区，可以直接发言。' });
+      return;
+    }
+    if (ambient?.roleId) {
+      focusedAmbientRef.current = { roleId: ambient.roleId, name: agentName };
+      // 点击仅登记 ATTENTION（0 晋升分）；玩家真的提交发言后才登记 DIALOGUE。
+      void simulationRequest(
+        `/api/world/extras/${encodeURIComponent(ambient.roleId)}/interact?session_id=simulation`,
+        { method: 'POST' },
+      ).then(() => {
+        setPendingLines(prev => [
+          ...prev.slice(-3),
+          { kind: 'system', text: `你注意到了 ${agentName}；输入并发送消息后，才会建立正式互动。` },
+        ]);
+        setJoinMsg({ kind: 'ok', text: `已关注 ${agentName}` });
+      }).catch((e: any) => {
+        setJoinMsg({ kind: 'error', text: `唤醒 ${agentName} 失败：${e?.message || ''}` });
+      });
+      return;
+    }
+    focusedAmbientRef.current = null;
+    // 已登记真实角色（尤其 PASSIVE）由普通点击刷新互动时间；404 表示旧后端或未托管角色，
+    // 不影响既有打开对话面板行为。
+    void simulationRequest(
+      `/api/world/roles/by-name/${encodeURIComponent(agentName)}/interact`,
+      { method: 'POST' },
+    ).catch(() => {});
+    setPendingLines(prev => [
+      ...prev.slice(-3),
+      { kind: 'system', text: `你靠近了 ${agentName}，可以在下方输入消息开始对话。` },
+    ]);
+    setJoinMsg({ kind: 'ok', text: `已打开与 ${agentName} 的对话入口` });
+  }, [resolveMeName]);
 
 
   /** P-0813-G：SimulationScene 上抛的接近 NPC 名单变化 → DOM 层叠提示 */
@@ -237,6 +316,7 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     let cancelled = false;
     const blobUrls: string[] = [];
     let groupPoll: ReturnType<typeof setInterval> | null = null;
+    let ambientPoll: ReturnType<typeof setInterval> | null = null;
     // P-0804-C：素材库角色动画（CHARACTER_ANIMATION 登记，按 character_name 关联 2D 世界角色名）
     const agentAnims: Record<string, AgentAnim> = {};
 
@@ -261,15 +341,39 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
 
     const scene = () => game.scene.getScene('SimulationScene') as SimulationScene;
 
+    // P-0824-L：群演是轻量世界投影，不进入后端完整 Agent/轨道/记忆列表。
+    // 每次权威世界快照都在渲染前合并最近的群演投影，避免 SSE 高频快照把群演移除。
+    let lastWorldSnapshot: Record<string, any> | null = null;
+    let ambientAgents: Array<Record<string, any>> = [];
+    const applyWorldSnapshot = (snapshot: Record<string, any>) => {
+      lastWorldSnapshot = snapshot;
+      const realAgents = Array.isArray(snapshot.agents) ? snapshot.agents : [];
+      scene().applySnapshot({ ...snapshot, agents: [...realAgents, ...ambientAgents] });
+    };
+    const fetchAmbient = async () => {
+      try {
+        const state = await simulationJson('/api/world/state?session_id=simulation');
+        ambientAgents = Array.isArray(state.ambient_agents) ? state.ambient_agents : [];
+        ambientByNameRef.current = new Map(
+          ambientAgents
+            .filter(a => typeof a?.agentName === 'string' && typeof a?.roleId === 'string')
+            .map(a => [a.agentName, { roleId: a.roleId }]),
+        );
+        if (lastWorldSnapshot) applyWorldSnapshot(lastWorldSnapshot);
+      } catch { /* 新后端未部署或自治世界关闭时保持原 2D 行为 */ }
+    };
+
     // ── 数据流：SSE world_snapshot 增量 ──
+    let sseHealthy = false;
   const es = new EventSource('/api/simulation/events');
     esRef.current = es;
-    es.onopen = () => setStatus('SSE 已连接');
-    es.onerror = () => setStatus('SSE 断开（重连中）');
+    es.onopen = () => { sseHealthy = true; setStatus('SSE 已连接'); };
+    es.onerror = () => { sseHealthy = false; setStatus('SSE 断开（重连中）'); };
     es.addEventListener('world_snapshot', (e: MessageEvent) => {
       try {
         const d = JSON.parse(e.data);
-        scene().applySnapshot(d);
+        sseHealthy = true;
+        applyWorldSnapshot(d);
         // P-0815-E 需求3：SSE 事件已附 recentConversations → 世界对话即时入列
         //（不再等 3s 轮询，消「刷新太慢」）；重复消息由 C-2 队列 sig 去重 /
         // SimGalChatPanel seen 去重兜底，与 3s 轮询双通道并存不重复入队。
@@ -291,9 +395,8 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     // ── 数据流：GET state 轮询兜底（对局simulation.html fetchState 双通道，──
   const fetchState = async () => {
       try {
-        const r = await fetch('/api/simulation/state');
-        const d = await r.json();
-        scene().applySnapshot(d);
+        const d = await simulationJson('/api/simulation/state');
+        applyWorldSnapshot(d);
         setRunning(Boolean(d.running));
         if (d.scene) setCurrentScene(d.scene);
         // P0-3：内嵌视图消息展示（recerecentConversations）
@@ -318,7 +421,11 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
       } catch { /* 后端未就绪时忽略 */ }
     };
     fetchState();
-    pollRef.current = setInterval(fetchState, 3000);
+    void fetchAmbient();
+    ambientPoll = setInterval(() => { void fetchAmbient(); }, 2500);
+    pollRef.current = setInterval(() => {
+      if (!sseHealthy) void fetchState();
+    }, 3000);
 
     // ── 数据流：加载角色 → 自动开始 ──
   const loadCharacters = async () => {
@@ -330,7 +437,7 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
           setStatus('没有可加载的角色（≥2 个）');
           return;
         }
-        const r = await fetch('/api/simulation/load-characters', {
+        const d = await simulationJson('/api/simulation/load-characters', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -348,10 +455,9 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
             ...(map ? { map } : {}),
           }),
         });
-        const d = await r.json();
         setStatus(d.message || '角色已加载');
         if (autoStart) {
-          await fetch('/api/simulation/start', { method: 'POST' });
+          await simulationRequest('/api/simulation/start', { method: 'POST' });
           setRunning(true);
         }
         await fetchState();
@@ -373,6 +479,13 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
         const list = await api.assetList({ type: 'CHARACTER_ANIMATION' });
         for (const a of list || []) {
           if (!a || !a.character_name || !a.file_path) continue;
+          const rawMeta = typeof a.meta_json === 'string' ? a.meta_json.trim() : '';
+          if (rawMeta) {
+            try {
+              const parsed = JSON.parse(rawMeta);
+              if (!parsed || typeof parsed !== 'object' || !(parsed as any).frames) continue;
+            } catch { continue; }
+          }
           const j = asepriteJsonUrl(a.meta_json, a.file_path);
           if (j.isBlob) blobUrls.push(j.url);
           agentAnims[a.character_name] = { pngUrl: assetFileUrl(a.file_path), jsonUrl: j.url };
@@ -387,6 +500,8 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
       blobUrls.forEach(u => URL.revokeObjectURL(u));
       blobUrls.length = 0;
       if (groupPoll) clearInterval(groupPoll);
+      if (ambientPoll) clearInterval(ambientPoll);
+      ambientByNameRef.current.clear();
       if (pollRef.current) clearInterval(pollRef.current);
       if (esRef.current) { esRef.current.close(); esRef.current = null; }
       timersRef.current.forEach(t => clearTimeout(t));
@@ -423,6 +538,9 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     const now = Date.now();
     for (const c of conversations) {
       if (!c || typeof c !== 'object') continue;
+      // 离场审计事件与对话文本共用 recentConversations 流，但不是任何角色的发言；
+      // 不把 event/agent/reason 三个字段误渲染成“系统在说话”。
+      if (typeof (c as Record<string, unknown>).event === 'string') continue;
       // P-0815-H：保留群归属（方案 A）——group 键是元数据（群 id），不能当消息拍平，
       // 单独取出挂到每条消息上，供 SimGalChatPanel 在群聊模式下按群过滤入队。
       const gid = typeof c.group === 'string' && c.group.trim() ? c.group : undefined;
@@ -454,13 +572,15 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   const clearPlaybackTimers = () => {
     if (typingTimerRef.current) { clearInterval(typingTimerRef.current); typingTimerRef.current = null; }
     if (nextTimerRef.current) { clearTimeout(nextTimerRef.current); nextTimerRef.current = null; }
+    if (observerAdvanceTimerRef.current) { clearTimeout(observerAdvanceTimerRef.current); observerAdvanceTimerRef.current = null; }
   };
 
   /** 播完当前段："done，清除打字机进度（下一段由句间停顿定时器接续） */
   const finishPlaying = () => {
     const cur = playingRef.current;
     if (!cur) return;
-    worldSigRef.current.set(cur.id, 'done');
+    // worldSigRef 的键是 recentConversations 原始签名（不带 w- 前缀）。
+    worldSigRef.current.set(cur.id.slice(2), 'done');
     revealRef.current.delete(cur.id);
     playingRef.current = null;
     clearPlaybackTimers();
@@ -471,7 +591,7 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   const startTyping = (msg: SimChatMsg) => {
     playingRef.current = msg;
     lastSpeakerRef.current = msg.who;
-    worldSigRef.current.set(msg.id, 'playing');
+    worldSigRef.current.set(msg.id.slice(2), 'playing');
     revealRef.current.set(msg.id, 0);
     setBubbleTick(t => t + 1); // 播放者变化 → 同步世界气泡（单例）
     bump(v => v + 1);
@@ -518,14 +638,9 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   const paused = inputPaused || pageHidden;
   useEffect(() => {
     const syncVisibility = () => setPageHidden(document.hidden);
-    const markHidden = () => setPageHidden(true);
     document.addEventListener('visibilitychange', syncVisibility);
-    window.addEventListener('blur', markHidden);
-    window.addEventListener('focus', syncVisibility);
     return () => {
       document.removeEventListener('visibilitychange', syncVisibility);
-      window.removeEventListener('blur', markHidden);
-      window.removeEventListener('focus', syncVisibility);
     };
   }, []);
   useEffect(() => {
@@ -609,6 +724,69 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     }
     return [...buckets.entries()];
   }, [allMsgs]);
+
+  /**
+   * 旁听是一个明确的聚焦动作：不能让其它组的历史消息占满全局串行队列，
+   * 否则当前组一直“待播放”，到后端等待超时也不会进入下一轮。
+   */
+  useEffect(() => {
+    const groupId = joinedGroup?.id;
+    if (!isObserverPlayback || !groupId) return;
+    const current = playingRef.current;
+    let changed = false;
+    // 旁听的关键路径不再依赖全局打字机队列。此前队列会被其它会话占用，
+    // 使本组一直停在“播放中”而永远无法回传 playback_done。
+    if (current) {
+      clearPlaybackTimers();
+      worldSigRef.current.set(current.id.slice(2), 'done');
+      revealRef.current.delete(current.id);
+      playingRef.current = null;
+      changed = true;
+    }
+    if (queueRef.current.length) {
+      queueRef.current = [];
+      changed = true;
+    }
+    for (const msg of activeMsgs) {
+      if (msg.kind === 'world' && msg.status !== 'done') {
+        worldSigRef.current.set(msg.id.slice(2), 'done');
+        revealRef.current.delete(msg.id);
+        changed = true;
+      }
+    }
+    if (changed) bump(v => v + 1);
+    // activeMsgs 状态稳定后本 effect 不再更新，避免旁听模式触发渲染循环。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isObserverPlayback, joinedGroup?.id, activeMsgs]);
+
+  /**
+   * 导演旁听也必须驱动 playback-driven 会话：经典面板此前只播放两句、不回传
+   * playback_done，后端便一直 awaitPlayback，30 秒后解散。只在当前观察组全部
+   * 展示完成后确认一次；旁听直接完整展示文本，短暂停留后确认，避免打字机
+   * 定时器被浏览器节流或其它会话抢占而卡死。下一轮新消息会形成新 key，继续自然循环。
+   */
+  useEffect(() => {
+    const groupId = joinedGroup?.id;
+    if (!isObserverPlayback || !groupId || activeMsgs.length === 0 || pageHidden) return;
+    if (activeMsgs.some(m => m.status !== 'done')) return;
+    const last = activeMsgs[activeMsgs.length - 1];
+    const key = `${groupId}:${last.id}`;
+    if (observerAdvanceKeysRef.current.has(key)) return;
+    observerAdvanceTimerRef.current = setTimeout(() => {
+      observerAdvanceTimerRef.current = null;
+      observerAdvanceKeysRef.current.add(key);
+      void api.simPlaybackDone({ group_id: groupId }).catch(() => {
+        // 网络瞬断时允许下次渲染/消息更新重试，旁听不显示错误打断画面。
+        observerAdvanceKeysRef.current.delete(key);
+      });
+    }, 900);
+    return () => {
+      if (observerAdvanceTimerRef.current) {
+        clearTimeout(observerAdvanceTimerRef.current);
+        observerAdvanceTimerRef.current = null;
+      }
+    };
+  }, [activeMsgs, isObserverPlayback, joinedGroup?.id, pageHidden]);
   /** 每个未旁听会话组只保留最早一句作为地图预览，点击旁听后该组预览收起，避免气泡刷屏。 */
   const conversationPreviews = useMemo(() => {
     const selectedId = joinedGroup?.id;
@@ -641,10 +819,9 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
 
   const control = async (path: string, label: string) => {
     try {
-      await fetch('/api/simulation/' + path, { method: 'POST' });
+      await simulationRequest('/api/simulation/' + path, { method: 'POST' });
       setStatus(label + ' 成功');
-      const r = await fetch('/api/simulation/state');
-      const d = await r.json();
+      const d = await simulationJson('/api/simulation/state');
       const sc = gameRef.current?.scene.getScene('SimulationScene') as SimulationScene | null;
       sc?.applySnapshot(d);
       setRunning(Boolean(d.running));
@@ -656,10 +833,9 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   const changeScene = async (name: string) => {
     setCurrentScene(name);
     try {
-      await fetch('/api/simulation/scene/' + name, { method: 'POST' });
+      await simulationRequest('/api/simulation/scene/' + encodeURIComponent(name), { method: 'POST' });
       setStatus('场景切换: ' + name);
-      const r = await fetch('/api/simulation/state');
-      const d = await r.json();
+      const d = await simulationJson('/api/simulation/state');
       const sc = gameRef.current?.scene.getScene('SimulationScene') as SimulationScene | null;
       sc?.applySnapshot(d);
     } catch (e: any) {
@@ -670,8 +846,7 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   // ── P-0803-G：群组状态轮询（conveconversation-status → 群组加入/离开入口；join/leave 后手动触发即时刷新） ──
   const fetchGroups = useCallback(async () => {
     try {
-      const r = await fetch('/api/simulation/conversation-status');
-      const d = await r.json();
+      const d = await simulationJson('/api/simulation/conversation-status');
       const list = (d.groups || []) as SimGroup[];
       setGroups(list);
       // currentTrack 只对真正加入世界的玩家有意义。导演旁听没有 currentTrack；此前每 4 秒
@@ -797,17 +972,17 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     let meName = playerName && names.includes(playerName) ? playerName : '';
     if (!meName) meName = names.find(n => n === 'me' || n === '我' || n === '主人') || '';
     if (!meName && names.length > 0) meName = names[0];
-    pushLocal({ who: '系统', text: msg, kind: 'player' });
     if (!meName) {
       pushLocal({ who: '系统', text: '没有可发言的角色', kind: 'system' });
       return;
     }
     try {
-      await fetch('/api/simulation/send/' + encodeURIComponent(meName), {
+      await simulationRequest('/api/simulation/send/' + encodeURIComponent(meName), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: msg }),
       });
+      pushLocal({ who: '系统', text: msg, kind: 'player' });
     } catch (e: any) {
       pushLocal({ who: '系统', text: '发送失败 ' + (e?.message || ''), kind: 'system' });
     }
@@ -1061,10 +1236,12 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
                     <div key={m.id} className={`sim-chat-msg kind-${m.kind} status-${m.status}${isSilenceText(m.text) ? ' silence' : ''}`}>
                       <strong className="who">{m.who}：</strong>
                       {/* C-2：播放中的消息按打字机进度逐字显示（revealRef 驱动，3 字/秒）；静默占位（……（沉默））渲染为静默样式。*/}
-                      {m.status === 'playing'
+                      {isObserverPlayback
+                        ? (isSilenceText(m.text) ? <SilenceTurn /> : m.text)
+                        : m.status === 'playing'
                         ? <>{m.text.slice(0, revealRef.current.get(m.id) ?? 0)}<span className="typewriter-caret">▌</span></>
                         : (isSilenceText(m.text) ? <SilenceTurn /> : m.text)}
-                      {statusTag(m)}
+                      {!isObserverPlayback && statusTag(m)}
                     </div>
                   ))}
                 </div>

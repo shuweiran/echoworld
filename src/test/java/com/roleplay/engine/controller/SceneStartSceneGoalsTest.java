@@ -32,12 +32,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.time.Duration;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
@@ -45,6 +47,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anySet;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.when;
 
 /**
@@ -71,7 +74,9 @@ class SceneStartSceneGoalsTest {
     /** 捕获 scene_target_update 的 SSE 假实现（定向广播重载）。 */
     static class CaptureSSE extends SSEController {
         final CountDownLatch latch = new CountDownLatch(1);
+        final CountDownLatch goalsReadyLatch = new CountDownLatch(1);
         final List<Map<String, Object>> events = new ArrayList<>();
+        final List<Map<String, Object>> goalsReadyEvents = new ArrayList<>();
 
         @Override
         public void broadcastToSession(String sessionId, String eventType, Object data) {
@@ -80,6 +85,11 @@ class SceneStartSceneGoalsTest {
                 Map<String, Object> m = (Map<String, Object>) data;
                 events.add(m);
                 latch.countDown();
+            } else if ("scene_goals_ready".equals(eventType)) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> m = (Map<String, Object>) data;
+                goalsReadyEvents.add(m);
+                goalsReadyLatch.countDown();
             }
             // 其余定向事件（script_*/werewolf_*）测试无消费，忽略
         }
@@ -153,10 +163,11 @@ class SceneStartSceneGoalsTest {
 
         SceneController ctrl = new SceneController(mock(GeneratorService.class), defaultRouter,
                 mock(CharacterController.class), mock(DatabaseService.class), null, registry);
-        return new Harness(ctrl, registry, defaultRouter, sse);
+        return new Harness(ctrl, registry, defaultRouter, sse, llm);
     }
 
-    record Harness(SceneController ctrl, SessionRegistry registry, RouterService defaultRouter, CaptureSSE sse) {}
+    record Harness(SceneController ctrl, SessionRegistry registry, RouterService defaultRouter, CaptureSSE sse,
+                   LLMClient llm) {}
 
     // ── ① startScene 响应 goals.enabled=true + 会话注册独立实例 ──
 
@@ -181,7 +192,8 @@ class SceneStartSceneGoalsTest {
         @SuppressWarnings("unchecked")
         Map<String, Object> playerGoal = (Map<String, Object>) goals.get("player_goal");
         assertNotNull(playerGoal);
-        assertEquals("查明怀表的去向", playerGoal.get("desc"), "player_goal 明文展示");
+        assertEquals("与场景中的角色互动，推动故事发展，达成自己的目标", playerGoal.get("desc"),
+                "起局响应先返回规则玩家目标，避免等待后台 LLM");
 
         // AI 目标 ?? 占位 + 数量
         assertEquals(2, ((Number) goals.get("ai_goal_count")).intValue(), "ai_goal_count=2（小铃/凯尔）");
@@ -197,6 +209,37 @@ class SceneStartSceneGoalsTest {
         assertTrue(sessionRouter.hasSceneGoals(), "独立实例应已生成场景目标集");
         // P-0810-25：无 me → 导演模式（AI 角色们自己对话；旧实现硬编码 free）
         assertEquals("director", sessionRouter.getMode());
+    }
+
+    @Test
+    @DisplayName("起局不等待场景目标 LLM：先返回规则目标，后台完成后推送正式目标")
+    void startScene_returnsBeforeBackgroundGoalGenerationCompletes() throws Exception {
+        Harness h = build();
+        CountDownLatch llmStarted = new CountDownLatch(1);
+        CountDownLatch allowLlm = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            llmStarted.countDown();
+            assertTrue(allowLlm.await(5, TimeUnit.SECONDS), "test must release background LLM");
+            return generationJson();
+        }).when(h.llm()).callJson(anyString(), anyInt());
+
+        final ResponseEntity<Map<String, Object>>[] response = new ResponseEntity[1];
+        assertTimeoutPreemptively(Duration.ofMillis(500),
+                () -> response[0] = h.ctrl().startScene(SCENE_ID, "小铃,凯尔", "", null));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> initialGoals = (Map<String, Object>) response[0].getBody().get("goals");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> initialPlayerGoal = (Map<String, Object>) initialGoals.get("player_goal");
+        assertEquals("与场景中的角色互动，推动故事发展，达成自己的目标", initialPlayerGoal.get("desc"));
+        assertTrue(llmStarted.await(1, TimeUnit.SECONDS), "LLM 应已转入后台任务");
+
+        allowLlm.countDown();
+        assertTrue(h.sse().goalsReadyLatch.await(5, TimeUnit.SECONDS), "后台目标完成应定向通知前端");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> readyGoals = (Map<String, Object>) h.sse().goalsReadyEvents.get(0).get("goals");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> readyPlayerGoal = (Map<String, Object>) readyGoals.get("player_goal");
+        assertEquals("查明怀表的去向", readyPlayerGoal.get("desc"));
     }
 
     // ── ② 对话轮后 scene_target_update SSE 广播（revealed 揭示全文） ──

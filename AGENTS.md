@@ -1,4 +1,4 @@
-# AGENTS.md — Roleplay-Java 项目协作规则（所有 agent 强制）
+# AGENTS.md — EchoWorld 项目协作规则（所有 agent 强制）
 
 > ⚠️ **本文件优先级高于一般任务描述**。任何 agent（主 agent / coder / researcher / writer / analyst / weixun）在此项目工作，必须遵守。
 

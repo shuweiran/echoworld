@@ -15,6 +15,8 @@ export function WerewolfActionPanel() {
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const player = store.currentPlayer;
+  const sessionId = store.werewolfSessionId;
+  const playerKey = store.werewolfRoleKey;
   const p = normalizePhase(store.werewolfPhase);
   const role = store.werewolfMyRole;
   const alive = store.werewolfAlive;
@@ -29,7 +31,7 @@ export function WerewolfActionPanel() {
     if (!target) return;
     setBusy(true);
     try {
-      const res = await api.werewolfNightAction(player, action, target);
+      const res = await api.werewolfNightAction(sessionId, player, playerKey, action, target);
       toast(res?.result || `行动完成（${action} → ${target}）`);
     } catch (e: any) { toast('⚠️ ' + (e.message || '夜间行动失败')); }
     afterAction();
@@ -40,7 +42,7 @@ export function WerewolfActionPanel() {
     if (!victim) return;
     setBusy(true);
     try {
-      const res = await api.werewolfNightAction(player, 'save', victim);
+      const res = await api.werewolfNightAction(sessionId, player, playerKey, 'save', victim);
       toast(res?.result || `已使用解药救 ${victim}`);
     } catch (e: any) { toast('⚠️ ' + (e.message || '救失败')); }
     setBusy(false);
@@ -48,7 +50,7 @@ export function WerewolfActionPanel() {
   const declineWitchSave = async () => {
     setBusy(true);
     try {
-      const res = await api.werewolfNightAction(player, 'nosave', '');
+      const res = await api.werewolfNightAction(sessionId, player, playerKey, 'nosave', '');
       toast(res?.result || '已选择不使用解药（保留解药）');
     } catch (e: any) { toast('⚠️ ' + (e.message || '操作失败')); }
     setBusy(false);
@@ -56,7 +58,7 @@ export function WerewolfActionPanel() {
   const declineWitchPoison = async () => {
     setBusy(true);
     try {
-      const res = await api.werewolfNightAction(player, 'nopoison', '');
+      const res = await api.werewolfNightAction(sessionId, player, playerKey, 'nopoison', '');
       toast(res?.result || '已选择不使用毒药（保留毒药）');
     } catch (e: any) { toast('⚠️ ' + (e.message || '操作失败')); }
     setBusy(false);
@@ -65,7 +67,7 @@ export function WerewolfActionPanel() {
     if (!target) return;
     setBusy(true);
     try {
-      const res = await api.werewolfVote(player, target);
+      const res = await api.werewolfVote(sessionId, player, playerKey, target);
       toast(res?.result || `已投票给 ${target}`);
     } catch (e: any) { toast('⚠️ ' + (e.message || '投票失败')); }
     afterAction();
@@ -74,7 +76,7 @@ export function WerewolfActionPanel() {
     if (!target) return;
     setBusy(true);
     try {
-      const res = await api.werewolfHunterShoot(player, target);
+      const res = await api.werewolfHunterShoot(sessionId, player, playerKey, target);
       toast(res?.result || `已开枪击杀 ${target}`);
     } catch (e: any) { toast('⚠️ ' + (e.message || '开枪失败')); }
     afterAction();
@@ -83,7 +85,7 @@ export function WerewolfActionPanel() {
     if (!msg.trim()) return;
     setBusy(true);
     try {
-      const res = await api.werewolfDiscussionSay(player, msg.trim());
+      const res = await api.werewolfDiscussionSay(sessionId, player, playerKey, msg.trim());
       if (res?.ok) { toast(`🗣️ 你发言：${msg.trim()}`); setMsg(''); }
       else toast('⚠️ ' + (res?.error || '发言失败'));
     } catch (e: any) { toast('⚠️ ' + (e.message || '发言失败')); }

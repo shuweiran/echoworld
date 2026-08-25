@@ -125,6 +125,41 @@ class TrackStrategyTest {
     }
 
     @Test
+    @DisplayName("信息泄漏不变量：WEAK 与 ISOLATED 均不得收到私密设施位置原文")
+    void privateInfrastructureSecretNeverLeaksToWeakOrIsolatedAgents() {
+        AgentState alice = agent("Alice", 0, 0);
+        AgentState bob = agent("Bob", 3, 0);
+        AgentState charlie = agent("Charlie", 50, 0);
+        AgentState diana = agent("Diana", 500, 0);
+
+        ConversationGroup group = new ConversationGroup(
+                "infrastructure-secret",
+                ConversationMode.GROUP_DISCUSSION,
+                List.of(alice, bob, charlie, diana));
+        group.setTrackAssignments(new SpatialTrackResolver(CONVERSATION_DISTANCE)
+                .resolve(List.of(alice, bob, charlie, diana)));
+        group.setCurrentSpeaker("Alice");
+        group.recordTurn("Alice", "闸门密钥在北侧控制柜");
+
+        TrackStrategy strategy = strategy(agentLookup(alice, bob, charlie, diana));
+        Map<String, Map<String, String>> contexts = new HashMap<>();
+        strategy.prepareContext(group, contexts);
+
+        String merged = contexts.get("Bob").get("context");
+        String weak = contexts.get("Charlie").get("context");
+        String isolated = contexts.get("Diana").get("context");
+
+        assertTrue(merged.contains("闸门密钥在北侧控制柜"),
+                "MERGED participant should receive the full authorized context");
+        for (String sensitiveFragment : List.of("闸门密钥", "北侧", "控制柜")) {
+            assertFalse(weak.contains(sensitiveFragment),
+                    "WEAK listener must not receive sensitive fragment: " + sensitiveFragment);
+            assertFalse(isolated.contains(sensitiveFragment),
+                    "ISOLATED agent must not receive sensitive fragment: " + sensitiveFragment);
+        }
+    }
+
+    @Test
     @DisplayName("混合轨道：role 标注正确（active/listener/isolated）")
     void mixedTrackRoles() {
         ConversationGroup group = mixedGroup();

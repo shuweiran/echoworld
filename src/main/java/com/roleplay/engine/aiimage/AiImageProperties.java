@@ -45,7 +45,13 @@ public class AiImageProperties {
         public void setStyle(String style) { this.style = style; }
     }
 
+    /** comfyui 保持本地默认；openai-compatible 使用 /images/generations。 */
+    private String provider = "comfyui";
     private String comfyuiBaseUrl = "http://127.0.0.1:8188";
+    private String externalBaseUrl = "";
+    private String externalApiKey = "";
+    private String externalModel = "gpt-image-1";
+    private String externalEndpoint = "/images/generations";
     private String outputDir = "src/main/resources/static/ai-images";
     private int poolSize = 2;
     private int timeoutSeconds = 300;
@@ -61,6 +67,17 @@ public class AiImageProperties {
 
     public String getComfyuiBaseUrl() { return comfyuiBaseUrl; }
     public void setComfyuiBaseUrl(String comfyuiBaseUrl) { this.comfyuiBaseUrl = comfyuiBaseUrl; }
+
+    public String getProvider() { return provider; }
+    public void setProvider(String provider) { this.provider = provider; }
+    public String getExternalBaseUrl() { return externalBaseUrl; }
+    public void setExternalBaseUrl(String externalBaseUrl) { this.externalBaseUrl = externalBaseUrl; }
+    public String getExternalApiKey() { return externalApiKey; }
+    public void setExternalApiKey(String externalApiKey) { this.externalApiKey = externalApiKey; }
+    public String getExternalModel() { return externalModel; }
+    public void setExternalModel(String externalModel) { this.externalModel = externalModel; }
+    public String getExternalEndpoint() { return externalEndpoint; }
+    public void setExternalEndpoint(String externalEndpoint) { this.externalEndpoint = externalEndpoint; }
 
     public String getOutputDir() { return outputDir; }
     public void setOutputDir(String outputDir) { this.outputDir = outputDir; }

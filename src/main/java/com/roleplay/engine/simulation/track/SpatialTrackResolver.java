@@ -27,10 +27,11 @@ import java.util.*;
  */
 public class SpatialTrackResolver {
 
-    /** P-0815-A：会话距离默认值修正——需求文档「两两距离 < 5 格 → 可对话」中的「格」与世界
-     *  像素坐标（1000×600 px）混用（5.0 实为「格」注释但按 px 用，5px≈贴脸，导致近距离对话
-     *  MERGED 几乎永不触发）。统一为 px 语义：默认 70px（调研报告 2.4 #5 建议 60-80px 区间），
-     *  可由 roleplay.track.conversation-distance 配置覆盖（AppConfig.TrackConfig）。 */
+    /**
+     * Maximum distance for direct conversation. Coordinates use pixels throughout the
+     * runtime; keeping the unit explicit prevents tile and pixel distances from drifting.
+     * The value is configurable through {@code roleplay.track.conversation-distance}.
+     */
     public static final double DEFAULT_CONVERSATION_DISTANCE = 70.0;
 
     private final double conversationDistance;
@@ -46,8 +47,7 @@ public class SpatialTrackResolver {
 
     /**
      * @param conversationDistance max distance (px) for two agents to be in a
-     *                             direct conversation (MERGED)；P-0815-A：单位修正为 px，
-     *                             默认 {@link #DEFAULT_CONVERSATION_DISTANCE}=70px
+     *                             direct conversation (MERGED), in pixels
      * @param privateRoomAgents    agents inside a private room; any pair where one
      *                             side is inside and the other outside is always
      *                             ISOLATED (私密房间外 → 隔离)

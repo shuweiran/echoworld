@@ -24,6 +24,9 @@ public class AgentState {
     private volatile boolean hasTarget = false;
     /** Phase 4: 手动指定的目标（/target 端点）——MovementConstraint 不得覆盖。 */
     private volatile boolean manualTarget = false;
+    /** P-0820-R：方向键输入的归一化方向；与点击目标分开，避免惯性/避障力改写玩家意图。 */
+    private volatile double manualDirectionX = 0.0;
+    private volatile double manualDirectionY = 0.0;
     /** P-0813-E：manualTarget 置位时间戳（ms）——导演轮跳过期判定用；-1 = 无手动目标。 */
     private volatile long manualTargetSince = -1L;
     private volatile Stance stance = Stance.NEUTRAL;
@@ -102,6 +105,19 @@ public class AgentState {
         this.manualTargetSince = manualTarget ? System.currentTimeMillis() : -1L;
     }
 
+    public boolean hasManualDirection() {
+        return Math.abs(manualDirectionX) > 0.001 || Math.abs(manualDirectionY) > 0.001;
+    }
+
+    public double getManualDirectionX() { return manualDirectionX; }
+    public double getManualDirectionY() { return manualDirectionY; }
+
+    /** 设置方向键方向；调用方应传入已归一化向量。 */
+    public void setManualDirection(double dx, double dy) {
+        this.manualDirectionX = dx;
+        this.manualDirectionY = dy;
+    }
+
     /** P-0813-E：手动目标置位时间戳（-1 = 无手动目标）。 */
     public long getManualTargetSince() { return manualTargetSince; }
 
@@ -134,6 +150,8 @@ public class AgentState {
         this.targetY = -1;
         this.manualTarget = false;
         this.manualTargetSince = -1L;
+        this.manualDirectionX = 0.0;
+        this.manualDirectionY = 0.0;
     }
 
     public double distanceTo(AgentState other) {

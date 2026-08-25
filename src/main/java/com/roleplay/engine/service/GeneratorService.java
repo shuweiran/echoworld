@@ -2,6 +2,7 @@ package com.roleplay.engine.service;
 
 import com.roleplay.engine.core.PersonaCardLoader;
 import com.roleplay.engine.llm.LLMClient;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -19,7 +20,7 @@ public class GeneratorService {
 
     private final LLMClient llmClient;
 
-    public GeneratorService(LLMClient llmClient) {
+    public GeneratorService(@Qualifier("arbiterLlmClient") LLMClient llmClient) {
         this.llmClient = llmClient;
     }
 
@@ -238,5 +239,58 @@ public class GeneratorService {
         if (o == null) return def;
         String s = String.valueOf(o);
         return s.isEmpty() ? def : s;
+    }
+
+    /**
+     * P-0817-A：根据角色卡信息生成 TTS 音色描述（ttsTone）。
+     * 在角色卡生成完成后调用，用角色的 name/persona/voice/appearance 作为上下文，
+     * 让 LLM 生成适合 MiMo TTS 的音色描述（语气、语速、音色特征等）。
+     *
+     * @param name      角色名
+     * @param persona   人格设定
+     * @param voice     说话风格
+     * @param appearance 外观描述（可选，辅助判断年龄/性别）
+     * @return TTS 音色描述（20-40字），失败返回 null
+     */
+    public String generateTtsTone(String name, String persona, String voice, String appearance) {
+        StringBuilder ctx = new StringBuilder();
+        ctx.append("角色「").append(name).append("」的信息：\n");
+        if (persona != null && !persona.isBlank()) ctx.append("- 人格：").append(persona).append("\n");
+        if (voice != null && !voice.isBlank()) ctx.append("- 说话风格：").append(voice).append("\n");
+        if (appearance != null && !appearance.isBlank()) ctx.append("- 外观：").append(appearance).append("\n");
+
+        String prompt = String.format("""
+            你是一个 TTS 音色设计师。根据以下角色信息，生成一段简短的音色描述，用于指导语音合成系统。
+
+            %s
+            要求：
+            - 开头必须标明性别声线（如“青年女声”“中年男声”“少年音”等）
+            - 描述语气、语速、音色特征（如磁性/清脆/沙哑/甜美等）
+            - 可包含情绪基调（如冷淡/温柔/活泼/慵懒等）
+            - 20-40字，简洁精准
+            - 只返回描述文本，不要其他文字
+
+            示例：
+            - 青年女声，清脆干练，语速偏快，语气理性克制
+            - 中年男声，低沉沙哑，语速缓慢沉稳，偶尔带冷笑感
+            - 少年音，活泼清脆，语速快，语气夸张多变
+            - 老年男声，浑厚庄重，语速缓慢，语气威严
+            """, ctx.toString());
+
+        try {
+            Map<String, Object> result = llmClient.callJson(prompt, 200);
+            if (result != null && result.containsKey("ttsTone")) {
+                String tone = str(result.get("ttsTone"), null);
+                if (tone != null && !tone.isBlank()) return tone;
+            }
+            // 兼容 LLM 直接返回字符串（非 JSON）
+            if (result != null && result.containsKey("text")) {
+                String tone = str(result.get("text"), null);
+                if (tone != null && !tone.isBlank()) return tone;
+            }
+        } catch (Exception e) {
+            // ttsTone 生成失败不阻塞角色生成流程
+        }
+        return null;
     }
 }

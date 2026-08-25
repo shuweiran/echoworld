@@ -151,4 +151,26 @@ class ScriptGamePerGameIsolationTest {
         assertEquals("", svc.getDiscussionGoal(SESSION_B, secretPlayerA),
                 "B 局导演不含 A 局玩家目标（导演实例独立）");
     }
+
+    @Test
+    @DisplayName("I-3: 显式淘汰统一清理 games/讨论三件套/player_id 绑定")
+    void evictionClearsAllPerGameAttachments() {
+        ScriptGameService svc = newService();
+        svc.initGame(SESSION_A, "庄园A", List.of("Alice", "Bob", "Carol"));
+        svc.registerPlayerBinding(SESSION_A, "player-a", "Alice");
+        assertTrue(svc.startDiscussion(SESSION_A));
+
+        assertNotNull(svc.getDiscussionConversation(SESSION_A));
+        assertNotNull(svc.getDiscussionWorld(SESSION_A));
+        assertNotNull(svc.getDiscussionDirector(SESSION_A));
+        assertEquals("Alice", svc.getPlayerBindings(SESSION_A).get("player-a"));
+
+        assertTrue(svc.evictGame(SESSION_A));
+        assertNull(svc.getGame(SESSION_A));
+        assertNull(svc.getDiscussionConversation(SESSION_A));
+        assertNull(svc.getDiscussionWorld(SESSION_A));
+        assertNull(svc.getDiscussionDirector(SESSION_A));
+        assertTrue(svc.getPlayerBindings(SESSION_A).isEmpty());
+        assertFalse(svc.evictGame(SESSION_A), "重复淘汰应幂等返回 false");
+    }
 }

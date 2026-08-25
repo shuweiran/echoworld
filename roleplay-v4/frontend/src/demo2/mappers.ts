@@ -41,6 +41,9 @@ export function v1RoleToRoleCard(role: any, i = 0, homeScripts: string[] = []): 
     hasSecret: !!role?.secret || !!role?.is_hidden,
     source: 'ai',
     homeScripts,
+    voice_mode: role?.voice_mode ? String(role.voice_mode) : undefined,
+    voice_data: role?.voice_data ? String(role.voice_data) : undefined,
+    ttsTone: role?.ttsTone ? String(role.ttsTone) : undefined,
   };
 }
 

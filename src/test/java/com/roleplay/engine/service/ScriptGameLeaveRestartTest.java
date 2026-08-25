@@ -88,7 +88,7 @@ class ScriptGameLeaveRestartTest {
         ScriptGameService.ScriptGame game = svc.getGame(SESSION);
 
         svc.castVote(SESSION, "Alice", "Bob");
-        Map<String, Object> left = svc.leaveGame(SESSION, "Alice", "");
+        Map<String, Object> left = svc.leaveGame(SESSION, "Alice", svc.getRoleKey(SESSION, "Alice"));
 
         assertEquals(Boolean.TRUE, left.get("trusted"), "退出应返回托管标记");
         assertTrue(String.valueOf(left.get("result")).contains("托管"), "应提示转为托管");
@@ -109,8 +109,8 @@ class ScriptGameLeaveRestartTest {
         svc.startVoting(SESSION);
         ScriptGameService.ScriptGame game = svc.getGame(SESSION);
 
-        svc.leaveGame(SESSION, "Bob", "");
-        svc.leaveGame(SESSION, "Carol", "");
+        svc.leaveGame(SESSION, "Bob", svc.getRoleKey(SESSION, "Bob"));
+        svc.leaveGame(SESSION, "Carol", svc.getRoleKey(SESSION, "Carol"));
         // 在线=Alice 1 人，quorum=ceil(1/2)=1；Alice 1 票即满足 → 正常揭晓
         svc.castVote(SESSION, "Alice", "Bob");
         Map<String, Object> res = svc.resolveVote(SESSION);
@@ -224,7 +224,7 @@ class ScriptGameLeaveRestartTest {
         DatabaseService db = mock(DatabaseService.class);
         ScriptGameService svc = new ScriptGameService(mockLlm(), autoApprove(), db, null);
         svc.initGame(SESSION, "庄园", List.of("Alice", "Bob", "Carol"));
-        svc.leaveGame(SESSION, "Alice", "");
+        svc.leaveGame(SESSION, "Alice", svc.getRoleKey(SESSION, "Alice"));
 
         ArgumentCaptor<String> nameCap = ArgumentCaptor.forClass(String.class);
         @SuppressWarnings({"unchecked", "rawtypes"})

@@ -17,6 +17,7 @@ export type View =
   | 'scripts'       // 剧本选择（A）
   | 'roles'         // 角色选择（B，按 selectCtx.kind 区分 剧本杀/一般/狼人杀 变体）
   | 'gen'           // 剧本生成
+  | 'manual'        // 说明书
   | 'settings'      // 设置
   | 'roles-lib'     // 角色库（主页面：角色卡管理，剧本杀/一般互通）
   // 子视图
@@ -91,13 +92,16 @@ function defaultSettings(): Settings {
       temperature: 0.7,
       maxTokens: 4000,
       contextLength: 8192,
+      arbiterModel: 'deepseek-v4-flash',
+      arbiterApiBase: 'https://api.deepseek.com',
+      arbiterApiKey: '',
       mapModel: '',
       mapApiBase: '',
       mapApiKey: '',
       multimodal: false,
     },
-    tts: { engine: '浏览器内置', model: 'edge-tts', apiBase: 'https://tts.example.com/v1', apiKey: '', voice: '默认女声', speed: 1, pitch: 1, emotion: 0.5 },
-    image: { provider: 'comfyui', baseUrl: 'http://127.0.0.1:8188', loraName: '', rmbgEnabled: true, img2imgDenoise: 0.5 },
+    tts: { engine: '浏览器内置', provider: 'xiaomimimo', model: 'edge-tts', apiBase: 'https://tts.example.com/v1', apiKey: '', voice: '默认女声', speed: 1, pitch: 1, emotion: 0.5 },
+    image: { provider: 'comfyui', baseUrl: 'http://127.0.0.1:8188', externalBaseUrl: '', externalApiKey: '', externalModel: 'gpt-image-1', externalEndpoint: '/images/generations', loraName: '', rmbgEnabled: true, img2imgDenoise: 0.5 },
     // P-0817-D：默认 32×20（与既有硬编码生成尺寸一致，接线设置后行为零变化；可调 10-256）
     mapGen: {
       model: 'structure', style: '随剧本风格', width: 64, height: 48, tileSize: 32,
@@ -198,13 +202,25 @@ function saveJson(key: string, value: unknown) {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ }
 }
 
-/** P-0811-G：一般模式 LLM 生成地图持久化加载（scriptId → ScriptMap；坏数据 → 空）。 */
+/** P-0820-S：一般模式地图缓存的内部归属标记，不参与地图契约渲染。 */
+const SAVED_MAP_SCENE_KEY = '__saved_for_scene_id';
+
+/** P-0811-G/P-0820-S：加载 scriptId → ScriptMap，并拒绝旧的空 key 全局地图与归属不一致的地图。 */
 function loadGeneralMaps(): Record<string, ScriptMap> {
   try {
     const raw = localStorage.getItem(GEN_MAPS_KEY);
     if (raw) {
       const obj = JSON.parse(raw);
-      if (obj && typeof obj === 'object' && !Array.isArray(obj)) return obj as Record<string, ScriptMap>;
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        const out: Record<string, ScriptMap> = {};
+        Object.entries(obj as Record<string, unknown>).forEach(([key, value]) => {
+          if (!key.trim() || !value || typeof value !== 'object' || Array.isArray(value)) return;
+          const owner = (value as Record<string, unknown>)[SAVED_MAP_SCENE_KEY];
+          if (owner !== undefined && String(owner) !== key) return;
+          out[key] = value as ScriptMap;
+        });
+        return out;
+      }
     }
   } catch { /* ignore */ }
   return {};
@@ -294,6 +310,8 @@ interface DemoState {
   removeBackendScript: (id: string) => boolean;
   /** P-0811-G：一般模式 LLM 生成地图缓存（scriptId → 契约 v1 地图；进入 explore 复用） */
   generalMaps: Record<string, ScriptMap>;
+  /** P-0820-S：按场景读取并校验归属的地图缓存。 */
+  getGeneralMap: (scriptId: string | null | undefined) => ScriptMap | undefined;
   /** P-0811-G：写入一般模式 LLM 生成地图（scriptId 维度缓存；空 map 清条目） */
   setGeneralMap: (scriptId: string, map: ScriptMap | null) => void;
   /** P-0811-E：LLM 生成失败回退 mock 时的可见提示（生成后跳转角色选择页仍可见） */
@@ -535,11 +553,21 @@ export const useDemoStore = create<DemoState>((set, get) => ({
     return true;
   },
   setGeneralMap: (scriptId, map) => {
+    const key = String(scriptId ?? '').trim();
+    if (!key) return;
     const next = { ...get().generalMaps };
-    if (map) next[scriptId] = map;
-    else delete next[scriptId];
+    if (map) next[key] = { ...map, [SAVED_MAP_SCENE_KEY]: key } as ScriptMap;
+    else delete next[key];
     saveJson(GEN_MAPS_KEY, next);
     set({ generalMaps: next });
+  },
+  getGeneralMap: (scriptId) => {
+    const key = String(scriptId ?? '').trim();
+    if (!key) return undefined;
+    const map = get().generalMaps[key] as (ScriptMap & Record<string, unknown>) | undefined;
+    if (!map) return undefined;
+    const owner = map[SAVED_MAP_SCENE_KEY];
+    return owner !== undefined && String(owner) !== key ? undefined : map;
   },
   addGenRoles: (roles) => {
     const next = [...get().genRoles, ...roles];
@@ -563,6 +591,9 @@ export const useDemoStore = create<DemoState>((set, get) => ({
       // 新开局不得误用上一局的令牌；GameBridge 会在 init/resume 成功后重新写入。
       localStorage.removeItem('scriptSessionId');
       localStorage.removeItem('scriptRoleKey');
+      localStorage.removeItem('werewolfSessionId');
+      localStorage.removeItem('werewolfRoleKey');
+      localStorage.removeItem('werewolfPlayer');
     } catch { /* ignore */ }
     set({ gameMode: kind, gamePlayers: nextPlayers, view: 'game', history: [...get().history, get().view].slice(-30) });
     if (typeof window !== 'undefined') window.history.pushState(null, '', viewToHash('game'));

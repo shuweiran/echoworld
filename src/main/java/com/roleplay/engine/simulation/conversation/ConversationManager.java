@@ -1,10 +1,12 @@
 package com.roleplay.engine.simulation.conversation;
 
+import jakarta.annotation.PreDestroy;
 import com.roleplay.engine.agent.Agent;
 import com.roleplay.engine.broadcast.AnnouncementService;
 import com.roleplay.engine.interrupt.AgentTaskManager;
 import com.roleplay.engine.interrupt.CancellationToken;
 import com.roleplay.engine.interrupt.InterruptManager;
+import com.roleplay.engine.interrupt.StopType;
 import com.roleplay.engine.interrupt.TaskCancelledException;
 import com.roleplay.engine.interrupt.TaskType;
 import com.roleplay.engine.llm.LLMClient;
@@ -43,6 +45,8 @@ public class ConversationManager {
     private final Map<String, ConversationGroup> activeGroups = new ConcurrentHashMap<>();
     private final Map<String, Long> recentPairCooldowns = new ConcurrentHashMap<>();
     private final Map<String, TopicManager> groupTopicManagers = new ConcurrentHashMap<>();
+    /** 生命周期 PASSIVE 硬门：角色仍在世界移动/渲染，但不自动入组或触发对话 LLM。 */
+    private final Set<String> passiveAgents = ConcurrentHashMap.newKeySet();
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
 
     private SimulationWorld world;
@@ -318,6 +322,24 @@ public class ConversationManager {
 
     public boolean isStopped() { return stopped; }
 
+    public void setAgentPassive(String agentName, boolean passive) {
+        if (agentName == null || agentName.isBlank()) return;
+        if (passive) {
+            passiveAgents.add(agentName);
+            detachAgent(agentName);
+        } else {
+            passiveAgents.remove(agentName);
+        }
+    }
+
+    public boolean isAgentPassive(String agentName) {
+        return agentName != null && passiveAgents.contains(agentName);
+    }
+
+    public void clearPassiveAgents() {
+        passiveAgents.clear();
+    }
+
     public void init(SimulationWorld world, LLMClient llmClient,
                      java.util.function.Function<String, Agent> agentLookup,
                      java.util.function.Supplier<String> narrationSupplier) {
@@ -451,6 +473,43 @@ public class ConversationManager {
     }
 
     /**
+     * P-0824-L：角色从世界退场前的事务性脱离。
+     * 先取消该角色仍在进行的生成任务，再从所有活动组移除；不足两人的组立即解散，避免遗留
+     * 冻结成员、悬挂轮次或持有已经从 SimulationWorld 删除的 AgentState 引用。
+     */
+    public int detachAgent(String agentName) {
+        if (agentName == null || agentName.isBlank()) return 0;
+        if (interruptManager != null) {
+            interruptManager.cancelAgent(agentName, StopType.STATE_INVALID, "角色生命周期退场");
+        }
+        int detached = 0;
+        for (ConversationGroup group : new ArrayList<>(activeGroups.values())) {
+            if (!group.removeParticipant(agentName)) continue;
+            detached++;
+            AgentState state = world == null ? null : world.getState(agentName);
+            if (state != null) {
+                state.setInConversation(false);
+                state.setVx(0);
+                state.setVy(0);
+                state.clearTarget();
+            }
+            if (group.getParticipantCount() < 2) dissolveGroup(group.getGroupId());
+            else recomputeTrackAssignments(group);
+        }
+        return detached;
+    }
+
+    /** 释放本实例拥有的虚拟线程执行器；对局 TTL 淘汰和 Spring 销毁均调用。 */
+    @PreDestroy
+    public void shutdown() {
+        stopAll();
+        executor.shutdownNow();
+        activeGroups.clear();
+        recentPairCooldowns.clear();
+        groupTopicManagers.clear();
+    }
+
+    /**
      * 对话资格的唯一空间判定：既要在声学范围内，也不能被 blocksSound 墙体/建筑遮挡。
      * 这样手动加入、玩家消息自动建组及已建组的持续性共用同一条规则。
      */
@@ -515,6 +574,7 @@ public class ConversationManager {
             // Keep "me" out of auto-initiated conversations (proximity-based)
             // Only converse when user sends a message manually
             if (s.isPlayerControlled()) continue;
+            if (passiveAgents.contains(s.getAgentName())) continue;
             if (!isBusy(s)) available.put(s.getAgentName(), s);
         }
 
@@ -534,7 +594,8 @@ public class ConversationManager {
                 double d = player.distanceTo(a);
                 // P-0815-A：自动 DYAD 距离上限（调研报告 2.4 #3）——nearest 超过
                 // MAX_AUTO_DYAD_DISTANCE 不建组（玩家在角落时最近的 AI 也可能几百 px 外）。
-                if (d < MAX_AUTO_DYAD_DISTANCE && d < minDist && canConverse(player, a)) {
+                if (d < minDist && world.getHearingSystem()
+                        .canAutoDyadWithinDistance(player, a, MAX_AUTO_DYAD_DISTANCE)) {
                     minDist = d;
                     nearest = a;
                 }
@@ -567,8 +628,10 @@ public class ConversationManager {
         for (ConversationGroup group : activeGroups.values()) {
             if (!group.isActive()) {
                 toRemove.add(group.getGroupId());
-            } else if (!groupIsAudiblyConnected(group)) {
+            } else if (!group.allFrozen() && !groupIsAudiblyConnected(group)) {
                 // 墙体/建筑或移动造成声学网络断开：不保留“隔墙仍在聊”的僵尸会话。
+                // 正在对话的成员已被冻结；此时坐标不应再参与移动断连判定，
+                // 否则前端/移动更新的瞬时位置会把刚生成首轮的组错误拆散。
                 toRemove.add(group.getGroupId());
             } else if (group.isAwaitingPlayback()) {
                 // P-0814-B：等待「播出完毕」的组——有玩家成员不自动解散（玩家输入/点击唤醒，

@@ -264,9 +264,20 @@
   padding: 2px;
 }
 .gal-dialog-name {
-  font-size: 14px;
+  font-size: var(--gal-name-size, 14px);
   font-weight: bold;
   text-shadow: 0 0 8px currentColor;
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: min(58vw, calc(100vw - 124px));
+  min-height: 28px;
+  padding: 3px 10px;
+  border: 1px solid color-mix(in srgb, currentColor 52%, transparent);
+  border-radius: 4px 12px 12px 4px;
+  background: color-mix(in srgb, currentColor 12%, rgba(11, 9, 25, .86));
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .gal-dialog-text {
   font-size: 15px;

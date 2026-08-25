@@ -10,10 +10,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Lazy;
+import org.springframework.http.HttpStatus;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.web.server.ResponseStatusException;
 
+import java.util.Comparator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * D11: 按 session_id 的 RouterService 实例管理（多会话隔离）。
@@ -27,8 +32,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * 共享的依赖（Arbiter / AgentExecutor / Compressor / Monitor / LLMClient 等）均为
  * 无会话状态的服务，可安全复用同一批 Spring 单例 bean。
  *
- * <p>向后兼容：未传 session_id 或 session_id 未知时，{@link #get(String)} 回退到
- * 默认单例 router（Spring bean），旧客户端（前端当前不传 session_id）行为完全不变。
+ * <p>向后兼容：未传 session_id 时，{@link #get(String)} 回退到默认单例 router（Spring bean）。
+ * 非空但未知的 session_id 必须明确返回 404，不能静默读写默认会话造成跨会话串线。
  *
  * <p>注：HistoryController 注入点使用 {@link Lazy}，打破
  * SessionRegistry → HistoryController → RouterService 的构造依赖环。
@@ -38,8 +43,21 @@ public class SessionRegistry {
     private static final Logger log = LoggerFactory.getLogger(SessionRegistry.class);
 
     private final Map<String, RouterService> sessions = new ConcurrentHashMap<>();
+    /** 最近访问时间；只跟踪独立会话，默认单例不参与淘汰。 */
+    private final Map<String, Long> lastAccess = new ConcurrentHashMap<>();
+    /** create/get/remove/sweep 的生命周期锁，避免刚访问的会话被并发清扫。 */
+    private final Object lifecycleLock = new Object();
+    /** 独立会话释放通知；自治子系统据此清理自己的 session 资源。 */
+    private final CopyOnWriteArrayList<RemovalListener> removalListeners = new CopyOnWriteArrayList<>();
     /** 默认单例 router —— 未传 session_id 时的向后兼容目标。 */
     private final RouterService defaultRouter;
+
+    /** 独立会话空闲 TTL；0=禁用。 */
+    @Value("${roleplay.session.ttl-ms:43200000}")
+    private long sessionTtlMs = 43_200_000L;
+    /** 独立会话容量上限；0=不限制。达到上限时淘汰最久未访问会话。 */
+    @Value("${roleplay.session.max-sessions:128}")
+    private int maxSessions = 128;
 
     // RouterService 构造依赖链（与 Spring 单例 bean 共用同一批无会话状态服务）
     private final ArbiterService arbiter;
@@ -103,12 +121,19 @@ public class SessionRegistry {
         this.sceneGoalService = sceneGoalService;
     }
 
-    /**
-     * 读路由：按 session_id 取会话实例；未传 / 未知 session_id → 默认单例（向后兼容）。
-     */
+    /** 读路由：未传 session_id → 默认单例；非空未知 session_id → 404。 */
     public RouterService get(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) return defaultRouter;
-        return sessions.getOrDefault(sessionId, defaultRouter);
+        String normalized = sessionId.trim();
+        synchronized (lifecycleLock) {
+            RouterService router = sessions.get(normalized);
+            if (router == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "会话不存在或已过期: " + normalized);
+            }
+            lastAccess.put(normalized, System.currentTimeMillis());
+            return router;
+        }
     }
 
     /**
@@ -116,12 +141,114 @@ public class SessionRegistry {
      */
     public RouterService getOrCreate(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) return defaultRouter;
-        return sessions.computeIfAbsent(sessionId, this::createRouter);
+        String normalized = sessionId.trim();
+        synchronized (lifecycleLock) {
+            RouterService existing = sessions.get(normalized);
+            if (existing != null) {
+                lastAccess.put(normalized, System.currentTimeMillis());
+                return existing;
+            }
+            evictOldestIfAtCapacity();
+            RouterService created = createRouter(normalized);
+            sessions.put(normalized, created);
+            lastAccess.put(normalized, System.currentTimeMillis());
+            return created;
+        }
+    }
+
+    /**
+     * 显式关闭并移除独立会话。使用 session-scoped close 取消本 Router 的自动续轮与等待状态，
+     * 不调用共享 InterruptManager.cancelAll，避免误停其他会话。
+     * 空 session_id 指向兼容默认单例，不能通过本方法删除。
+     */
+    public boolean remove(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) return false;
+        RouterService removed;
+        String normalized = sessionId.trim();
+        synchronized (lifecycleLock) {
+            removed = sessions.remove(normalized);
+            lastAccess.remove(normalized);
+        }
+        releaseQuietly(normalized, removed, "explicit close");
+        return removed != null;
+    }
+
+    /** Spring 定时清扫入口；由统一的 @EnableScheduling 激活，不再依赖第 N 次业务访问。 */
+    @Scheduled(fixedDelayString = "${roleplay.session.sweep-interval-ms:60000}")
+    public void sweepExpired() {
+        if (sessionTtlMs <= 0) return;
+        long deadline = System.currentTimeMillis() - sessionTtlMs;
+        Map<String, RouterService> expired = new java.util.LinkedHashMap<>();
+        synchronized (lifecycleLock) {
+            for (Map.Entry<String, Long> entry : lastAccess.entrySet()) {
+                Long accessedAt = entry.getValue();
+                if (accessedAt == null || accessedAt >= deadline) continue;
+                String sessionId = entry.getKey();
+                RouterService removed = sessions.remove(sessionId);
+                lastAccess.remove(sessionId);
+                if (removed != null) expired.put(sessionId, removed);
+            }
+        }
+        expired.forEach((id, router) -> releaseQuietly(id, router, "idle TTL"));
+    }
+
+    /** 测试/运维钩子：运行时调整 TTL，0=禁用。 */
+    public void setSessionTtlMs(long ttlMs) {
+        this.sessionTtlMs = Math.max(0, ttlMs);
+    }
+
+    /** 测试/运维钩子：运行时调整容量，0=不限制。 */
+    public void setMaxSessions(int maxSessions) {
+        this.maxSessions = Math.max(0, maxSessions);
     }
 
     /** 当前注册的独立会话数（监控/调试用）。 */
     public int sessionCount() {
         return sessions.size();
+    }
+
+    public void addRemovalListener(RemovalListener listener) {
+        if (listener != null) removalListeners.addIfAbsent(listener);
+    }
+
+    public void removeRemovalListener(RemovalListener listener) {
+        if (listener != null) removalListeners.remove(listener);
+    }
+
+    private void evictOldestIfAtCapacity() {
+        if (maxSessions <= 0) return;
+        while (sessions.size() >= maxSessions) {
+            String oldest = lastAccess.entrySet().stream()
+                    .filter(e -> sessions.containsKey(e.getKey()))
+                    .min(Comparator.comparingLong(e -> e.getValue() == null ? Long.MIN_VALUE : e.getValue()))
+                    .map(Map.Entry::getKey)
+                    .orElseGet(() -> sessions.keySet().stream().findFirst().orElse(null));
+            if (oldest == null) return;
+            RouterService removed = sessions.remove(oldest);
+            lastAccess.remove(oldest);
+            releaseQuietly(oldest, removed, "capacity limit");
+        }
+    }
+
+    private void releaseQuietly(String sessionId, RouterService router, String reason) {
+        if (router == null) return;
+        try {
+            router.closeSessionResources();
+        } catch (RuntimeException e) {
+            log.warn("Failed to release session {} during {}: {}", sessionId, reason, e.getMessage());
+        }
+        for (RemovalListener listener : removalListeners) {
+            try { listener.onRemoved(sessionId, router); }
+            catch (RuntimeException e) {
+                log.warn("Session removal listener failed for {}: {}", sessionId, e.getMessage());
+            }
+        }
+        log.info("Removed isolated RouterService for session {} ({})", sessionId, reason);
+    }
+
+    @FunctionalInterface
+    public interface RemovalListener {
+        void onRemoved(String sessionId, RouterService removedRouter);
     }
 
     /** 创建会话专属 router 实例：独立 MemoryStore，共享无状态服务。 */

@@ -43,6 +43,12 @@ const GENERAL_MODE_LABEL: Record<string, string> = {
   director: '导演',
 };
 
+interface AmbientRole {
+  roleId: string;
+  name: string;
+  line?: string;
+}
+
 /** SSE 桥（hook 必须常驻已挂载组件 → 独立组件按 sessionId 条件渲染） */
 function GalGeneralSseBridge() {
   const sessionId = useGalStore(s => s.liveSessionId);
@@ -108,16 +114,25 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
   // P-0810-16：场景卡目标（起局响应 / /api/state scene_goals / scene_target_update SSE 合并）
   const liveGoals = useGalStore(s => s.liveGoals);
   const setLiveGoals = useGalStore(s => s.setLiveGoals);
+  const focusedRoleId = useGalStore(s => s.liveFocusedRoleId);
+  const conversationMembers = useGalStore(s => s.liveConversationMembers);
+  const setLiveConversation = useGalStore(s => s.setLiveConversation);
 
   // ── 元信息（场景名 / agents / mode 中文标签） ──
   const [scene, setScene] = useState<string>('');
   const [roster, setRoster] = useState<string[]>([]);
   const [modeLabel, setModeLabel] = useState('');
   const [metaReady, setMetaReady] = useState(false);
+  const [ambientRoles, setAmbientRoles] = useState<AmbientRole[]>([]);
+  const [knownRoleIds, setKnownRoleIds] = useState<Record<string, string>>({});
+  const [storyScript, setStoryScript] = useState<any>(null);
+  const [storyOpen, setStoryOpen] = useState(false);
 
   // ── 抽屉/卡片开关 ──
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sceneCardOpen, setSceneCardOpen] = useState(false);
+  const [roleDrawerOpen, setRoleDrawerOpen] = useState(false);
+  const [groupDraft, setGroupDraft] = useState<string[]>([]);
   // P-0817-K：角色声音面板开关 + 静音状态刷新（mimoTts emit 时重渲染）
   const [voicePanelOpen, setVoicePanelOpen] = useState(false);
   const [, setVoiceTick] = useState(0);
@@ -193,6 +208,37 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
         setMetaReady(true);
       } catch { /* 后端不可达：保持现状 */ }
       try {
+        const world: any = await api.worldState(sessionId);
+        if (alive) {
+          if (world?.story_script && typeof world.story_script === 'object') setStoryScript(world.story_script);
+          const pendingId = useGalStore.getState().livePendingInputId;
+          if (pendingId) {
+            const terminal = Array.isArray(world?.recent_results) ? world.recent_results.find((item: any) =>
+              item?.kind === 'input' && String(item?.input_id || '') === pendingId) : null;
+            if (terminal) {
+              const failed = String(terminal?.status || '').toLowerCase() === 'failed';
+              useGalStore.setState({ livePendingInputId: '', liveSendError: failed
+                ? `世界调度失败：${String(terminal?.error || '请稍后重试')}` : '' });
+            }
+          }
+          const extras = Array.isArray(world?.ambient_agents) ? world.ambient_agents : [];
+          setAmbientRoles(extras.map((role: any) => ({
+            roleId: String(role?.roleId || ''),
+            name: String(role?.name || role?.agentName || '路人'),
+            line: String(role?.line || ''),
+          })).filter((role: AmbientRole) => role.roleId));
+          setKnownRoleIds(previous => {
+            const next = { ...previous };
+            for (const role of extras) {
+              const name = String(role?.name || role?.agentName || '');
+              const roleId = String(role?.roleId || '');
+              if (name && roleId) next[name] = roleId;
+            }
+            return next;
+          });
+        }
+      } catch { /* 世界运行时尚未就绪时保持空列表 */ }
+      try {
         const gm: any = await api.getMode(sessionId);
         const mode = String(gm?.mode || '');
         if (mode && GENERAL_MODE_LABEL[mode]) {
@@ -254,8 +300,9 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
   }, []);
 
   // 场景卡数据：scene 名有则显示，无则隐藏（GalSceneCard 内部 null 守卫）
+  // name 截取前20字作为短名，description 用完整文本
   const sceneInfo: GalSceneInfo | undefined = scene
-    ? { name: scene.length > 40 ? scene.slice(0, 40) + '…' : scene, description: scene }
+    ? { name: scene.length > 20 ? scene.slice(0, 20) + '…' : scene, description: scene }
     : undefined;
 
   // P-0814-C：自动推进（删「▶ 推进下一轮」按钮）——本轮播放完毕（打字机队列排空）自动
@@ -286,6 +333,29 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
   });
 
   const displayName = livePlayerName || playerName || '';
+  const ambientNames = new Set(ambientRoles.map(role => role.name));
+  const roleCards = [
+    ...roster.filter(name => name !== displayName).map(name => ({
+      name, roleId: knownRoleIds[name] || '', ambient: false,
+    })),
+    ...ambientRoles.filter(role => !roster.includes(role.name)).map(role => ({
+      name: role.name, roleId: role.roleId, ambient: true,
+    })),
+  ];
+  const openDirectChat = (name: string, roleId?: string) => {
+    setLiveConversation([name], roleId ? [roleId] : []);
+    setRoleDrawerOpen(false);
+  };
+  const toggleGroupRole = (name: string) => {
+    setGroupDraft(current => current.includes(name)
+      ? current.filter(item => item !== name)
+      : [...current, name].slice(0, 12));
+  };
+  const createGroupChat = () => {
+    if (groupDraft.length < 2) return;
+    setLiveConversation(groupDraft, groupDraft.map(name => knownRoleIds[name]).filter(Boolean));
+    setRoleDrawerOpen(false);
+  };
 
   return (
     <div className="galg-page">
@@ -301,19 +371,12 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
             <span className="galg-top-session" title={sessionId}>会话 {sessionId}</span>
           </div>
         </div>
-        <div className="galg-members" title="角色成员">
-          {roster.map(name => (
-            <span
-              key={name}
-              className="galg-member"
-              style={{ background: `hsl(${hashHue(name)} 55% 22%)`, borderColor: `hsl(${hashHue(name)} 80% 60%)` }}
-              title={name}
-            >
-              {(name || '?').slice(0, 1)}
-            </span>
-          ))}
-        </div>
         <div className="galg-top-actions">
+          {hasPlayer && (
+            <button className="galg-top-btn" onClick={() => setRoleDrawerOpen(true)} title="打开隐藏角色栏">
+              👥 角色 {roleCards.length}
+            </button>
+          )}
           {/* P-0817-I：全局语音开关（静音/恢复）—— Gal 视图顶栏入口，与对局顶栏同一 mimoTts 单例 */}
           <TtsMuteButton className="galg-top-btn" />
           {/* P-0817-K：单角色静音控制 —— 弹出面板列出当前会话角色，可单独静音某个角色的语音 */}
@@ -322,6 +385,9 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
           </button>
           <button className="galg-top-btn" onClick={() => setSceneCardOpen(v => !v)} title="场景卡">
             🗺️ 场景卡
+          </button>
+          <button className="galg-top-btn" onClick={() => setStoryOpen(v => !v)} title="查看主控实时编排的动态剧本">
+            📖 动态剧本
           </button>
           <button className="galg-top-btn" onClick={() => setHistoryOpen(true)} title="历史记录（消息列表 / 回滚）">
             📜 历史记录
@@ -336,6 +402,15 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
       <div className="galg-body">
         <GalGeneralStage scene={scene} />
       </div>
+
+      {hasPlayer && conversationMembers.length > 0 && (
+        <div className="galg-active-chat" aria-label="当前聊天">
+          <strong>{conversationMembers.length === 1 ? '单独聊天' : '群聊'}</strong>
+          <span>{displayName}、{conversationMembers.join('、')}</span>
+          {focusedRoleId && ambientNames.has(conversationMembers[0]) && <em>首次有效发言后补全人物卡</em>}
+          <button onClick={() => setLiveConversation([], [])}>结束聊天</button>
+        </div>
+      )}
 
       {displayName && (
         <div className="galg-identity">🎭 你扮演：{displayName}（发言不显示气泡，输入后直接发送）</div>
@@ -353,7 +428,58 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
         </div>
       )}
 
+      {storyOpen && storyScript && (
+        <div className="galg-story-mask" onClick={() => setStoryOpen(false)}>
+          <aside className="galg-story-panel" onClick={event => event.stopPropagation()}>
+            <div className="galg-role-head"><div><strong>{storyScript.title || '动态剧本'}</strong><small>主控只改写后续，不会替你改写已作出的选择</small></div><button onClick={() => setStoryOpen(false)}>✕</button></div>
+            <section><small>总目标</small><p>{storyScript.total_goal || '等待主控建立总目标'}</p></section>
+            <section><small>当前阶段 · 张力 {Number(storyScript?.stage?.tension || 0)}%</small><p><strong>{storyScript?.stage?.title || '开场'}</strong>：{storyScript?.stage?.goal || '等待阶段目标'}</p></section>
+            <section><small>主控手里的下一页</small><p>{storyScript.script || '剧情会随每一步更新。'}</p><p className="galg-story-next">下一拍：{storyScript.next_beat || '等待下一次互动。'}</p></section>
+            {Array.isArray(storyScript.recent_changes) && storyScript.recent_changes.length > 0 && <section><small>已发生</small><ul>{storyScript.recent_changes.map((change: string, index: number) => <li key={`${index}:${change}`}>{change}</li>)}</ul></section>}
+          </aside>
+        </div>
+      )}
+
       {sessionId && <GalGeneralSseBridge />}
+
+      {roleDrawerOpen && hasPlayer && (
+        <div className="galg-role-mask" onClick={() => setRoleDrawerOpen(false)}>
+          <aside className="galg-role-drawer" onClick={event => event.stopPropagation()}>
+            <div className="galg-role-head">
+              <div><strong>角色</strong><small>点击不会晋升，成功发言才计有效互动</small></div>
+              <button onClick={() => setRoleDrawerOpen(false)}>✕</button>
+            </div>
+            <div className="galg-role-list">
+              {roleCards.length === 0 && <div className="galg-role-empty">场景中暂时没有可互动角色</div>}
+              {roleCards.map(role => {
+                const selected = groupDraft.includes(role.name);
+                const chatting = conversationMembers.includes(role.name);
+                return (
+                  <article key={`${role.name}:${role.roleId}`} className={`galg-role-card${chatting ? ' chatting' : ''}`}>
+                    <span className="galg-role-avatar" style={{ background: `hsl(${hashHue(role.name)} 55% 22%)` }}>
+                      {role.name.slice(0, 1)}
+                    </span>
+                    <div className="galg-role-info">
+                      <strong>{role.name}</strong>
+                      <small>{role.ambient ? '轻量路人 · 尚未补全人物卡' : '完整角色 · 可立即回复'}</small>
+                    </div>
+                    <div className="galg-role-options">
+                      <button onClick={() => openDirectChat(role.name, role.roleId)}>单独聊天</button>
+                      <button className={selected ? 'active' : ''} onClick={() => toggleGroupRole(role.name)}>
+                        {selected ? '已加入群聊' : '加入群聊'}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+            <div className="galg-role-footer">
+              <span>已选 {groupDraft.length} 名角色（至少 2 名）</span>
+              <button disabled={groupDraft.length < 2} onClick={createGroupChat}>建立群聊</button>
+            </div>
+          </aside>
+        </div>
+      )}
 
       {/* P-0817-K：角色声音面板（单角色静音；点外部关闭） */}
       {voicePanelOpen && (
