@@ -48,6 +48,19 @@ tmp/
 # 本地审阅材料、录屏与个人面试准备，不进入公开仓库
 .local/
 
+# AI 协作规则、工作台账与本机维护上下文（仅保留工作区）
+AGENTS.md
+CLAUDE.md
+PROJECT_CONTEXT.md
+DECISION_LOG.md
+TEST_STATUS.md
+docs/INDEX.md
+docs/QUICKSTART.md
+docs/当前维护状态.md
+docs/工作区阅读指南.md
+docs/修改记录.md
+docs/并行作业登记.md
+
 # Env
 .env
 .env.local
