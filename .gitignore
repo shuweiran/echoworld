@@ -89,6 +89,10 @@ roleplay-v4/frontend/desktop/*
 !roleplay-v4/frontend/desktop/*.cjs
 !roleplay-v4/frontend/desktop/*.ps1
 
+# 前端源码需完整跟踪；否则新增 TS/TSX 模块会被 frontend/* 规则静默忽略
+!roleplay-v4/frontend/src/
+!roleplay-v4/frontend/src/**
+
 # Python 编译缓存
 __pycache__/
 *.pyc
