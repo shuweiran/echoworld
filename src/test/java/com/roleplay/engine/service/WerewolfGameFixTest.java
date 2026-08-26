@@ -243,6 +243,7 @@ class WerewolfGameFixTest {
         });
         WerewolfService.GameState g = svc.getGame(sid);
         assertTrue(!g.winner.isEmpty(), "有胜负判定，winner=" + g.winner);
+        await("终局推送", 5_000, () -> sse.has("werewolf_game_over"));
         assertTrue(sse.has("werewolf_game_over"), "终局推送");
         assertFalse(g.discussionTranscript.isEmpty(), "讨论引擎至少跑了一轮");
         assertTrue(sse.of("werewolf_night_result").size() >= 1, "至少一次夜间结算推送");
