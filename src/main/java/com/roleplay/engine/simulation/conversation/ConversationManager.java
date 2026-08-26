@@ -46,6 +46,8 @@ public class ConversationManager {
     private final Map<String, ConversationGroup> activeGroups = new ConcurrentHashMap<>();
     private final Map<String, Long> recentPairCooldowns = new ConcurrentHashMap<>();
     private final Map<String, TopicManager> groupTopicManagers = new ConcurrentHashMap<>();
+    /** 仅仲裁发言机会：DM/Track 不介入角色是否真正说话。 */
+    private final SpeakerArbitrator speakerArbitrator = new SpeakerArbitrator();
     /** 生命周期 PASSIVE 硬门：角色仍在世界移动/渲染，但不自动入组或触发对话 LLM。 */
     private final Set<String> passiveAgents = ConcurrentHashMap.newKeySet();
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -852,11 +854,24 @@ public class ConversationManager {
             AgentState self = world.getState(entry.getKey());
             if (self == null) continue;
             String base = entry.getValue().get("context");
+            String events = world.getPerceivedWorldEvents(self).stream()
+                    .map(event -> "- " + event.text()).collect(java.util.stream.Collectors.joining("\n"));
             String protocol = "\n" + LocalPerceptionSnapshot.from(self, states, hearing).toPrompt()
+                    + (events.isBlank() ? "" : "【刚刚感知到的世界事件】\n" + events + "\n")
                     + "【发言控制】不想回应时只输出 " + SpeechDecision.NO_OUTPUT
                     + "。要说话可在末尾加【音量：WHISPER/LOW/NORMAL/LOUD/SHOUT】；该标记不会展示。\n";
             entry.setValue(Map.of("context", (base == null ? "" : base) + protocol,
                     "role", entry.getValue().getOrDefault("role", "active")));
+        }
+        // 普通空间对话采用“机会→Agent 自决”的连续事件模型：每次只请求优先级最高的
+        // 一个 AI。若其返回 <NO_OUTPUT>，下一次调度会因机会惩罚转给下一候选，绝不强迫发言。
+        // Script roundGate 仍保留其既有批量语义，避免改动剧本杀流程。
+        if (gate == null) {
+            String selected = speakerArbitrator.select(group, agentContexts);
+            if (selected != null) {
+                group.markOpportunity(selected);
+                agentContexts.entrySet().removeIf(entry -> !selected.equals(entry.getKey()));
+            }
         }
         if (contextCapture != null) {
             contextCapture.clear();

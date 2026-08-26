@@ -17,6 +17,9 @@ public class ConversationGroup {
     private volatile int turnCount = 0;
     private volatile int roundCount = 0;
     private volatile String currentSpeaker;
+    /** 最近一次获得发言机会的角色；仅用于仲裁去重，不表示其必须发言。 */
+    private volatile String lastOpportunitySpeaker = "";
+    private volatile int lastOpportunityHistorySize = -1;
     private final List<String> turnHistory = new ArrayList<>();
     private final List<Map<String, String>> messageHistory = new ArrayList<>();
     private volatile long createdAt;
@@ -104,6 +107,13 @@ public class ConversationGroup {
 
     public String getCurrentSpeaker() { return currentSpeaker; }
     public void setCurrentSpeaker(String name) { this.currentSpeaker = name; }
+    public String getLastOpportunitySpeaker() { return lastOpportunitySpeaker; }
+    public void setLastOpportunitySpeaker(String name) { this.lastOpportunitySpeaker = name == null ? "" : name; }
+    public int getLastOpportunityHistorySize() { return lastOpportunityHistorySize; }
+    public void markOpportunity(String name) {
+        setLastOpportunitySpeaker(name);
+        lastOpportunityHistorySize = messageHistory.size();
+    }
 
     public List<String> getTurnHistory() { return turnHistory; }
 

@@ -41,6 +41,8 @@ public class SimulationWorld {
     private ScheduledFuture<?> tickFuture;
     private int tickCount = 0;
     private final List<Map<String, Object>> recentConversations = new ArrayList<>();
+    private final List<WorldEvent> recentWorldEvents = new CopyOnWriteArrayList<>();
+    private static final int MAX_RECENT_WORLD_EVENTS = 20;
     private static final int MAX_RECENT_CONVERSATIONS = 50;
     private volatile String worldNarration = "";
     private volatile boolean directorActive = false;
@@ -118,6 +120,7 @@ public class SimulationWorld {
         states.clear();
         agents.clear();
         recentConversations.clear();
+        recentWorldEvents.clear();
         tickCount = 0;
         worldNarration = "";
         directorActive = false;
@@ -139,6 +142,27 @@ public class SimulationWorld {
         if (recentConversations.size() > MAX_RECENT_CONVERSATIONS) recentConversations.remove(0);
     }
     public List<Map<String, Object>> getRecentConversations() { return new ArrayList<>(recentConversations); }
+    public void addWorldEvent(WorldEvent event) {
+        if (event == null) return;
+        recentWorldEvents.add(event);
+        while (recentWorldEvents.size() > MAX_RECENT_WORLD_EVENTS) recentWorldEvents.remove(0);
+    }
+    /** 只返回此角色可感知的近期世界事件；非 2D 路径不调用本方法，继续走 Track 隔离。 */
+    public List<WorldEvent> getPerceivedWorldEvents(AgentState self) {
+        if (self == null) return List.of();
+        List<WorldEvent> out = new ArrayList<>();
+        for (WorldEvent event : recentWorldEvents) {
+            boolean perceived = switch (event.scope()) {
+                case GLOBAL -> true;
+                case TARGET -> event.targets().contains(self.getAgentName());
+                case AREA -> event.type() == WorldEvent.Type.SOUND
+                        ? hearingSystem.canHearEvent(event.x(), event.y(), event.radius(), self)
+                        : Math.hypot(self.getX() - event.x(), self.getY() - event.y()) <= event.radius();
+            };
+            if (perceived) out.add(event);
+        }
+        return out;
+    }
 
     public synchronized void start() {
         if (running) return;

@@ -84,6 +84,9 @@ public class SimulationService {
     private final PlayerIdentityService identityService;
     private final ExecutorService taskExecutor = Executors.newVirtualThreadPerTaskExecutor();
     private volatile long lastDirectorTime = 0;
+    /** 普通导演轮的自主世界事件冷却；用户指令/硬系统事件可绕过。 */
+    private volatile long lastDirectorEventTime = 0;
+    private static final long DIRECTOR_EVENT_COOLDOWN_MS = 20_000;
     private final Set<String> pendingUserMessages = ConcurrentHashMap.newKeySet();
     /** 生命周期休眠槽：保留原 Agent/AgentState 引用，不丢记忆、位置、目标或社会关系。 */
     private final ConcurrentHashMap<String, SuspendedAgent> suspendedAgents = new ConcurrentHashMap<>();
@@ -778,6 +781,7 @@ public class SimulationService {
                 if (decisions != null) {
                     applyDirectorDecisions(decisions);
                 }
+                applyDirectorEvents(asMapList(result.get("events")), userTriggered);
 
                 // Clear pending user message flags after director processes them
                 pendingUserMessages.clear();
@@ -840,9 +844,42 @@ public class SimulationService {
         }
     }
 
+    /** 将 DM 的“世界事实”校验后送入统一公告管线；不把 AREA/TARGET 事件写进全局旁白。 */
+    void applyDirectorEvents(List<Map<String, Object>> rawEvents) {
+        applyDirectorEvents(rawEvents, false);
+    }
+
+    void applyDirectorEvents(List<Map<String, Object>> rawEvents, boolean userTriggered) {
+        if (rawEvents == null) return;
+        for (Map<String, Object> raw : rawEvents) {
+            WorldEvent event = WorldEvent.from(raw);
+            if (event == null) continue;
+            long now = System.currentTimeMillis();
+            boolean bypassCooldown = userTriggered || event.type() == WorldEvent.Type.SYSTEM;
+            if (!bypassCooldown && now - lastDirectorEventTime < DIRECTOR_EVENT_COOLDOWN_MS) continue;
+            world.addWorldEvent(event);
+            lastDirectorEventTime = now;
+            // TARGET 是角色私有感知，不能复用面向所有 SSE 客户端的 AnnouncementService。
+            if (event.scope() == WorldEvent.Scope.TARGET) continue;
+            String channel = event.scope() == WorldEvent.Scope.GLOBAL ? "global" : "area";
+            double x = event.scope() == WorldEvent.Scope.AREA ? event.x() : -1;
+            double y = event.scope() == WorldEvent.Scope.AREA ? event.y() : -1;
+            double radius = event.scope() == WorldEvent.Scope.AREA ? event.radius() : 0;
+            announcementService.enqueue(BroadcastMessage.of(
+                    event.type() == WorldEvent.Type.SYSTEM ? BroadcastMessage.Level.SYSTEM : BroadcastMessage.Level.EVENT,
+                    channel, "世界", event.text(), x, y, radius, BroadcastMessage.MODE_ANNOUNCEMENT));
+        }
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<Map<String, Object>> asMapList(Object value) {
+        if (!(value instanceof List<?> list)) return List.of();
+        return list.stream().filter(Map.class::isInstance).map(v -> (Map<String, Object>) v).toList();
+    }
+
     private String buildDirectorPrompt(boolean userTriggered) {
         StringBuilder sb = new StringBuilder();
-        sb.append("你是虚拟世界的导演/主控（DM）。观察所有角色的状态，决定他们下一步的目标和行动。\n\n");
+        sb.append("你是虚拟世界的导演/主控（DM）。决定世界事件、环境和角色高层目标；不要替角色决定具体说什么或是否说话。\n\n");
 
         sb.append("世界：").append((int) SimulationWorld.WORLD_WIDTH).append("×")
                 .append((int) SimulationWorld.WORLD_HEIGHT).append("px，Tick #")
@@ -914,7 +951,9 @@ public class SimulationService {
             sb.append(String.join("、", pendingUserMessages)).append("\n");
         }
         sb.append("JSON格式：\n");
-        sb.append("{\"narration\":\"导演旁白\",\"decisions\":[");
+        sb.append("仅在确有新世界事实（用户触发、日程、后果、剧情节点、停滞或环境变化）时生成 events，普通周期不要刷屏。\n");
+        sb.append("事件可为 SOUND/VISUAL/ENVIRONMENT/ANNOUNCEMENT/PRIVATE/SYSTEM，scope 仅 GLOBAL/AREA/TARGET；AREA 必填 x,y,radius，TARGET 必填 targets 数组。\n");
+        sb.append("{\"narration\":\"导演旁白\",\"events\":[{\"type\":\"SOUND\",\"scope\":\"AREA\",\"x\":420,\"y\":180,\"radius\":150,\"text\":\"远处传来一声巨响\"}],\"decisions\":[");
         sb.append("{\"agent\":\"名字\",\"target_x\":坐标,\"target_y\":坐标,\"action\":\"行为描述\",\"emotion\":\"情绪\"}");
         sb.append("]}");
         return sb.toString();

@@ -112,6 +112,17 @@ public class HearingSystem {
         return dist <= Math.min(effA, effB);
     }
 
+    /** 非角色声源（例如 DM 创建的玻璃碎裂声）的空间听觉判定，仍受墙体与听力影响。 */
+    public boolean canHearEvent(double x, double y, double rawRange, AgentState listener) {
+        if (listener == null || rawRange <= 0) return false;
+        AgentState source = new AgentState("world-event", x, y);
+        if (soundBlocked(source, listener)) return false;
+        double distance = source.distanceTo(listener);
+        double attenuation = 1.0 / (1.0 + distance * distance * 0.0001);
+        double effectiveRange = rawRange * attenuation * listener.getHearRange() / 200.0;
+        return distance <= effectiveRange;
+    }
+
     /**
      * 玩家主动发言自动建立 DYAD 使用明确的会话距离上限；仍保留障碍物的隔音判断，
      * 不把普通持续交流的距离衰减规则误用于“玩家找最近 AI 建组”这一入口。
