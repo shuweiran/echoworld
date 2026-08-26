@@ -2,6 +2,7 @@ package com.roleplay.engine.simulation.track;
 
 import com.roleplay.engine.core.Track;
 import com.roleplay.engine.simulation.AgentState;
+import com.roleplay.engine.simulation.HearingSystem;
 
 import java.util.*;
 
@@ -36,6 +37,7 @@ public class SpatialTrackResolver {
 
     private final double conversationDistance;
     private final Set<String> privateRoomAgents;
+    private final HearingSystem hearingSystem;
 
     public SpatialTrackResolver() {
         this(DEFAULT_CONVERSATION_DISTANCE, Set.of());
@@ -53,8 +55,19 @@ public class SpatialTrackResolver {
      *                             ISOLATED (私密房间外 → 隔离)
      */
     public SpatialTrackResolver(double conversationDistance, Set<String> privateRoomAgents) {
+        this(conversationDistance, privateRoomAgents, null);
+    }
+
+    /**
+     * Production constructor: when a world hearing system is available, physical
+     * audibility (including blocksSound obstacles) is authoritative over the
+     * distance-only compatibility fallback.
+     */
+    public SpatialTrackResolver(double conversationDistance, Set<String> privateRoomAgents,
+                                HearingSystem hearingSystem) {
         this.conversationDistance = conversationDistance > 0 ? conversationDistance : DEFAULT_CONVERSATION_DISTANCE;
         this.privateRoomAgents = privateRoomAgents == null ? Set.of() : Set.copyOf(privateRoomAgents);
+        this.hearingSystem = hearingSystem;
     }
 
     /** 当前会话距离（px，可观测/测试）。 */
@@ -76,6 +89,9 @@ public class SpatialTrackResolver {
 
                 if (privateIsolated(self, other)) {
                     privateNote = privateNote == null ? "私密房间内外隔离" : privateNote;
+                    continue;
+                }
+                if (hearingSystem != null && !hearingSystem.canHearEachOther(self, other)) {
                     continue;
                 }
                 if (dist < conversationDistance) {
