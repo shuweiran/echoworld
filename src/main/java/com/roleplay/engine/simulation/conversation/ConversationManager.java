@@ -845,6 +845,19 @@ public class ConversationManager {
         }
         Map<String, Map<String, String>> agentContexts = new ConcurrentHashMap<>();
         strategy.prepareContext(group, agentContexts);
+        // 所有策略共用局部感知与一次发言控制协议，避免不同模式泄露全局角色。
+        HearingSystem hearing = world.getHearingSystem();
+        Collection<AgentState> states = world.getAllStates().values();
+        for (var entry : agentContexts.entrySet()) {
+            AgentState self = world.getState(entry.getKey());
+            if (self == null) continue;
+            String base = entry.getValue().get("context");
+            String protocol = "\n" + LocalPerceptionSnapshot.from(self, states, hearing).toPrompt()
+                    + "【发言控制】不想回应时只输出 " + SpeechDecision.NO_OUTPUT
+                    + "。要说话可在末尾加【音量：WHISPER/LOW/NORMAL/LOUD/SHOUT】；该标记不会展示。\n";
+            entry.setValue(Map.of("context", (base == null ? "" : base) + protocol,
+                    "role", entry.getValue().getOrDefault("role", "active")));
+        }
         if (contextCapture != null) {
             contextCapture.clear();
             for (var e : agentContexts.entrySet()) {
@@ -947,6 +960,15 @@ public class ConversationManager {
         if (cancelled.get()) {
             return;
         }
+
+        // LLM 主观静默是控制协议，不是“沉默台词”：在任何状态写入之前无痕丢弃。
+        Map<String, SpeechDecision> decisions = new HashMap<>();
+        responses.forEach((name, response) -> decisions.put(name, SpeechDecision.parse(response)));
+        decisions.forEach((name, decision) -> {
+            if (decision.speak()) group.setPendingSpeechVolume(name, decision.volume());
+        });
+        responses.replaceAll((name, response) -> decisions.get(name).text());
+        responses.entrySet().removeIf(entry -> !decisions.get(entry.getKey()).speak());
 
         strategy.processResults(group, responses, llmClient);
 

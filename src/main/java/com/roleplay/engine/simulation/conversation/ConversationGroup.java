@@ -1,6 +1,7 @@
 package com.roleplay.engine.simulation.conversation;
 
 import com.roleplay.engine.simulation.AgentState;
+import com.roleplay.engine.simulation.SpeechVolume;
 import com.roleplay.engine.simulation.track.TrackAssignment;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -23,6 +24,8 @@ public class ConversationGroup {
     private volatile boolean active = true;
     private String topic = "";
     private final Map<String, Double> engagement = new ConcurrentHashMap<>();
+    /** 仅用于当前 utterance，recordTurn 消费后移除，绝不成为 AgentState 属性。 */
+    private final Map<String, SpeechVolume> pendingSpeechVolumes = new ConcurrentHashMap<>();
     /** Phase 1 Track fusion: spatial assignments computed at group creation. */
     private volatile Map<String, TrackAssignment> trackAssignments = Map.of();
     /** Phase 2 Track fusion: cached WEAK-track eavesdrop summary (EavesdropSummarizer
@@ -127,6 +130,10 @@ public class ConversationGroup {
 
     public void touchActivity() { this.lastActivity = System.currentTimeMillis(); }
 
+    public void setPendingSpeechVolume(String speaker, SpeechVolume volume) {
+        if (speaker != null) pendingSpeechVolumes.put(speaker, volume == null ? SpeechVolume.NORMAL : volume);
+    }
+
     public void recordTurn(String speaker, String message) {
         turnCount++;
         roundCount = (turnCount + participants.size() - 1) / participants.size();
@@ -135,6 +142,8 @@ public class ConversationGroup {
         Map<String, String> entry = new LinkedHashMap<>();
         entry.put("speaker", speaker);
         entry.put("message", message);
+        SpeechVolume volume = pendingSpeechVolumes.remove(speaker);
+        entry.put("volume", (volume == null ? SpeechVolume.NORMAL : volume).name());
         entry.put("round", String.valueOf(roundCount));
         messageHistory.add(entry);
         if (messageHistory.size() > 30) messageHistory.remove(0);

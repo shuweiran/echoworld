@@ -31,12 +31,18 @@ public class HearingSystem {
     }
 
     public List<HearingResult> computeAudibility(Collection<AgentState> agents) {
+        return computeAudibility(agents, Map.of());
+    }
+
+    /** 同一声学模型的逐句音量入口；未指定者仍按情绪推定，保持旧调用兼容。 */
+    public List<HearingResult> computeAudibility(Collection<AgentState> agents, Map<String, SpeechVolume> utteranceVolumes) {
         List<HearingResult> results = new ArrayList<>();
         List<AgentState> agentList = new ArrayList<>(agents);
 
         for (int i = 0; i < agentList.size(); i++) {
             AgentState speaker = agentList.get(i);
-            double volume = computeVolume(speaker);
+            SpeechVolume chosen = utteranceVolumes == null ? null : utteranceVolumes.get(speaker.getAgentName());
+            double volume = computeVolume(speaker) * (chosen == null ? 1.0 : chosen.multiplier());
             double rawRange = speaker.getHearRange() * volume;
 
             List<AgentState> nearby = spatialGrid.queryNearby(speaker, rawRange * 1.5);
