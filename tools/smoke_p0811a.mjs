@@ -12,7 +12,7 @@ global.localStorage = {
   setItem: (k, v) => { store[k] = String(v); },
   removeItem: k => { delete store[k]; },
 };
-const { useDemoStore } = require('./roleplay-v4/frontend/src/demo2/store.ts');
+const { useDemoStore } = require('./frontend/src/demo2/store.ts');
 const s = useDemoStore.getState();
 
 // 1) add three records: murder script A, murder script B, werewolf
@@ -34,7 +34,7 @@ console.log('WEREWOLF_page=' + filter('werewolf', null).map(h => h.title).join('
 console.log('GENERAL_A_page(should be empty)=' + filter('general', 'g_cafe').length);
 
 // 3) persistence round-trip: new store instance reloads from localStorage
-const { useDemoStore: useDemoStore2 } = require('./roleplay-v4/frontend/src/demo2/store.ts');
+const { useDemoStore: useDemoStore2 } = require('./frontend/src/demo2/store.ts');
 const reloaded = useDemoStore2.getState().historyList;
 console.log('RELOAD_COUNT=' + reloaded.length + ' first_scriptId=' + reloaded[0].scriptId);
 
@@ -43,7 +43,7 @@ store['roleplay_demo2_history_v1'] = JSON.stringify([
   { id: 'h_old', title: '旧剧本记录', kind: 'murder', roleName: '我', time: '08-01 10:00', result: '开始对局（2 名角色）' },
   { id: 'h_oldww', title: '旧狼人杀', kind: 'werewolf', roleName: '我', time: '08-01 10:00', result: '开始对局（1 名角色）' },
 ]);
-const { useDemoStore: useDemoStore3 } = require('./roleplay-v4/frontend/src/demo2/store.ts');
+const { useDemoStore: useDemoStore3 } = require('./frontend/src/demo2/store.ts');
 const legacy = useDemoStore3.getState().historyList;
 const legacyFilter = (k, sId) => legacy.filter(h => h.kind === k && (h.scriptId ?? '') === (sId ?? ''));
 console.log('LEGACY_murder_page(hidden)=' + legacyFilter('murder', 'm_manor').length);

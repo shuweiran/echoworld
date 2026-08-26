@@ -48,6 +48,18 @@ tmp/
 # 本地审阅材料、录屏与个人面试准备，不进入公开仓库
 .local/
 
+# AI 协作规则、提示词、任务计划、审查结论与会话输出仅保存在本机。
+# 新文件优先写入 .local/ai-collaboration/；以下路径阻止常见误入库位置。
+.ai-collaboration/
+.ai/
+.codex/
+docs/ai-collaboration/
+docs/ai-output/
+docs/agent-output/
+AI_COLLABORATION*.md
+*AI协作*.md
+*AI审查*.md
+
 # AI 协作规则、工作台账与本机维护上下文（仅保留工作区）
 AGENTS.md
 CLAUDE.md
@@ -75,19 +87,9 @@ maven/
 mvn/
 mvn.zip
 
-# 独立 Python 项目（v4 旧版，自带 git）与演示产物
+# 旧版独立 Python 项目（自带 git）与演示产物，仅保留本地考古用途
 roleplay-v4/
 demo/
-
-# v4 桌面安全入口与发布脚本属于当前 Java 桌面壳，必须纳入版本控制
-!roleplay-v4/
-roleplay-v4/*
-!roleplay-v4/frontend/
-roleplay-v4/frontend/*
-!roleplay-v4/frontend/desktop/
-roleplay-v4/frontend/desktop/*
-!roleplay-v4/frontend/desktop/*.cjs
-!roleplay-v4/frontend/desktop/*.ps1
 
 # Python 编译缓存
 __pycache__/

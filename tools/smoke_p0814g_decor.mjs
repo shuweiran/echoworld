@@ -11,19 +11,19 @@ import { createRequire } from 'module';
 import { mkdirSync } from 'fs';
 
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
 mkdirSync('tmp/p0814g_decor', { recursive: true });
 
 const code = `
-const { normalizeMap } = require('./roleplay-v4/frontend/src/phaser/mapData.ts');
+const { normalizeMap } = require('./frontend/src/phaser/mapData.ts');
 const {
   buildDecorPlan, objectStyle, decorStyle, markerStyle, overlayStyle,
   decorDepth, charDepth, DEPTH_WATER, DEPTH_OVERLAY,
   C_TREE_GREEN, C_TRUNK_BROWN, C_FENCE_BROWN, C_PILLAR_GRAY, C_BENCH_BROWN,
   C_LAMP_YELLOW, C_CHEST_BROWN, C_NOTE_WHITE, C_GRASS_LIGHT, C_DEBRIS_BROWN,
   C_UNKNOWN, C_WATER_BLUE, FLOWER_COLORS,
-} = require('./roleplay-v4/frontend/src/phaser/decorData.ts');
+} = require('./frontend/src/phaser/decorData.ts');
 
 let failures = 0;
 function check(label, ok, detail) {
@@ -159,7 +159,7 @@ process.exit(failures === 0 ? 0 : 1);
 
 const result = buildSync({
   entryPoints: [],
-  stdin: { contents: code, resolveDir: 'D:/roleplay-java', sourcefile: 'smoke_p0814g_decor.ts' },
+  stdin: { contents: code, resolveDir: 'D:/echoworld', sourcefile: 'smoke_p0814g_decor.ts' },
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -172,7 +172,7 @@ execSyncNode();
 function execSyncNode() {
   const { execSync } = require('child_process');
   try {
-    const out = execSync('node tmp/p0814g_decor/smoke_p0814g_decor.cjs', { cwd: 'D:/roleplay-java', encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = execSync('node tmp/p0814g_decor/smoke_p0814g_decor.cjs', { cwd: 'D:/echoworld', encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     process.stdout.write(out);
   } catch (e) {
     process.stdout.write(e.stdout || '');

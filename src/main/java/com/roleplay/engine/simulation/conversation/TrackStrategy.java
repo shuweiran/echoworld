@@ -50,7 +50,7 @@ public class TrackStrategy implements ConversationStrategy {
     private static final int HISTORY_WINDOW = 8;
     /**
      * C-2：角色发言每句话字数上限（prompt 轻提示，与前端
-     * roleplay-v4/frontend/src/phaser/simChatConfig.ts 的 maxSentenceChars=60 对齐，
+     * frontend/src/phaser/simChatConfig.ts 的 maxSentenceChars=60 对齐，
      * 前端渲染硬截断为真保险，此处仅轻提示）。
      */
     private static final int MAX_SENTENCE_CHARS = 60;

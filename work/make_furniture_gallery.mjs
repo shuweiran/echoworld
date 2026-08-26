@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
-const frontend = join(root, 'roleplay-v4', 'frontend');
+const frontend = join(root, 'frontend');
 // 用 esbuild 把 decorData.ts 打成 CJS（type-only import 自动擦除）
 const out = join(root, 'work', 'decordata.cjs');
 execFileSync('node', ['node_modules/esbuild/bin/esbuild', 'src/phaser/decorData.ts',

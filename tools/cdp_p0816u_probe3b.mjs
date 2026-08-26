@@ -1,7 +1,7 @@
 /* cdp_p0816u_probe3b.mjs — 定点复核（复用已开 4399 tab：susSel/locSearched/avatar/clueNew 计算样式） */
 import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 const CDP_URL = 'http://127.0.0.1:9222';
-const OUT = 'D:/roleplay-java/tmp/p0816u';
+const OUT = 'D:/echoworld/tmp/p0816u';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/probe3b.log`;
 appendFileSync(PROG, '\n==== ' + new Date().toISOString() + ' ====\n');

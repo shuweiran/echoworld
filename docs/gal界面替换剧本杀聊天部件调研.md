@@ -3,7 +3,7 @@
 > 调研人：researcher subagent（2026-08-15）
 > 任务：摸清一般模式 gal（Galgame 风格）界面实现，评估将其替换到剧本杀模式聊天部件（聊天 UI）的方案。
 > 范围：只读调研 + 方案设计，未改任何业务代码，未启动服务，未 git commit。
-> 证据基准：源码现状（`roleplay-v4/frontend/src/` 前端 + `src/main/java/com/roleplay/engine/` 后端，截至 2026-08-15 工作树）。
+> 证据基准：源码现状（`frontend/src/` 前端 + `src/main/java/com/roleplay/engine/` 后端，截至 2026-08-15 工作树）。
 
 ---
 
@@ -18,7 +18,7 @@
 
 ## 1. 一般模式 gal 界面调研
 
-### 1.1 源码文件清单（`roleplay-v4/frontend/src/gal/`，20 文件）
+### 1.1 源码文件清单（`frontend/src/gal/`，20 文件）
 
 | 文件 | 规模 | 职责 | 关键证据 |
 |---|---|---|---|

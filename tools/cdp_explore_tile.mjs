@@ -4,7 +4,7 @@ import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const PORT = 9252;
 const BASE = `http://127.0.0.1:${PORT}`;
-const OUT = 'D:/roleplay-java/tmp/explore_tile_check';
+const OUT = 'D:/echoworld/tmp/explore_tile_check';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/progress.log`;
 appendFileSync(PROG, '\n==== ' + new Date().toISOString() + ' ====\n');

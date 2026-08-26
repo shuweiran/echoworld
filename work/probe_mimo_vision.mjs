@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 
 const c = JSON.parse(readFileSync(process.env.USERPROFILE + '/.openclaw/openclaw.json', 'utf-8'));
 const key = c.models.providers['xiaomimimo-map'].apiKey;
-const b64 = readFileSync('D:/roleplay-java/work/vision_test.png').toString('base64');
+const b64 = readFileSync('D:/echoworld/work/vision_test.png').toString('base64');
 
 const t0 = Date.now();
 fetch('https://token-plan-cn.xiaomimimo.com/v1/chat/completions', {

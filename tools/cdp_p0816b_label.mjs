@@ -10,7 +10,7 @@ import { readFileSync, writeFileSync, mkdirSync, appendFileSync } from 'node:fs'
 
 const PORT = 9258;
 const BASE = `http://127.0.0.1:${PORT}`;
-const OUT = 'D:/roleplay-java/tmp/p0816b';
+const OUT = 'D:/echoworld/tmp/p0816b';
 const PROG = `${OUT}/progress.log`;
 const log = (...a) => { const l = '[' + new Date().toISOString().slice(11, 19) + '] ' + a.join(' '); appendFileSync(PROG, l + '\n'); console.log(l); };
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));

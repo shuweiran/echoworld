@@ -1,5 +1,5 @@
 /* static_proxy_p0814g.mjs — P-0814-G 本地验证代理（基于 static_proxy_p0814e.mjs）
- * 服务 roleplay-v4/frontend/dist（新 bundle）于 4175，/api/** /ai-images/** /assets/** 透传 http://localhost:8000
+ * 服务 frontend/dist（新 bundle）于 4175，/api/** /ai-images/** /assets/** 透传 http://localhost:8000
  * 差异：+ /assets/** 转发（素材瓦片图集 SCENE_TILESET 直连 8000 静态资源，消除「Failed to process file」代理伪错误）。
  */
 import { createServer } from 'node:http';
@@ -7,7 +7,7 @@ import { createReadStream, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { request as httpRequest } from 'node:http';
 
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const ROOT = 'D:/echoworld/frontend/dist';
 const BACKEND = process.env.STATIC_PROXY_BACKEND || 'http://localhost:8000';
 const PORT = Number(process.env.PORT || 4175);
 

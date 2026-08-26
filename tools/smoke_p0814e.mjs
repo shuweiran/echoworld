@@ -9,7 +9,7 @@ import { createRequire } from 'module';
 import { mkdirSync, writeFileSync } from 'fs';
 
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
 mkdirSync('tmp/p0814e/node_modules/react', { recursive: true });
 
@@ -34,7 +34,7 @@ module.exports = { __beginRender, useRef, useEffect };
 `);
 
 buildSync({
-  entryPoints: ['D:/roleplay-java/roleplay-v4/frontend/src/gal/useAutoPlaybackDone.ts'],
+  entryPoints: ['D:/echoworld/frontend/src/gal/useAutoPlaybackDone.ts'],
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -43,8 +43,8 @@ buildSync({
   logLevel: 'silent',
 });
 
-const { useAutoPlaybackDone } = require('D:/roleplay-java/tmp/p0814e/hook.cjs');
-const { __beginRender } = require('D:/roleplay-java/tmp/p0814e/node_modules/react/index.js');
+const { useAutoPlaybackDone } = require('D:/echoworld/tmp/p0814e/hook.cjs');
+const { __beginRender } = require('D:/echoworld/tmp/p0814e/node_modules/react/index.js');
 
 let failures = 0;
 function check(label, ok, detail) {

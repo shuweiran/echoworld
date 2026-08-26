@@ -3,13 +3,13 @@ import { createRequire } from 'module';
 import { mkdirSync } from 'fs';
 
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
 mkdirSync('tmp/p0813d', { recursive: true });
 
 const code = `
-const { useGalStore } = require('./roleplay-v4/frontend/src/gal/GalStore.ts');
-const { buildLiveChoices } = require('./roleplay-v4/frontend/src/gal/galChoices.ts');
+const { useGalStore } = require('./frontend/src/gal/GalStore.ts');
+const { buildLiveChoices } = require('./frontend/src/gal/galChoices.ts');
 
 let failures = 0;
 function check(label, ok, detail) {
@@ -103,7 +103,7 @@ process.exit(failures === 0 ? 0 : 1);
 
 const result = buildSync({
   entryPoints: [],
-  stdin: { contents: code, resolveDir: 'D:/roleplay-java', sourcefile: 'smoke_p0813d.ts' },
+  stdin: { contents: code, resolveDir: 'D:/echoworld', sourcefile: 'smoke_p0813d.ts' },
   bundle: true,
   platform: 'node',
   format: 'cjs',
@@ -116,7 +116,7 @@ execSyncNode();
 function execSyncNode() {
   const { execSync } = require('child_process');
   try {
-    const out = execSync('node tmp/p0813d/smoke_p0813d.cjs', { cwd: 'D:/roleplay-java', encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = execSync('node tmp/p0813d/smoke_p0813d.cjs', { cwd: 'D:/echoworld', encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
     process.stdout.write(out);
   } catch (e) {
     process.stdout.write(e.stdout || '');

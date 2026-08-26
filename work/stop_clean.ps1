@@ -7,7 +7,7 @@ if ($conn) {
   Write-Output "8000 not listening"
 }
 Start-Sleep -Seconds 2
-$target = 'D:\roleplay-java\target\classes\static'
+$target = 'D:\echoworld\target\classes\static'
 if (Test-Path -LiteralPath $target) {
   Remove-Item -LiteralPath $target -Recurse -Force
   Write-Output 'target/classes/static removed'

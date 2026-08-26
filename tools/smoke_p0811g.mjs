@@ -4,12 +4,12 @@ import { writeFileSync, mkdirSync } from 'fs';
 import { execSync } from 'child_process';
 
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
 mkdirSync('tmp/p0811g', { recursive: true });
 
 const code = `
-const { useGalStore } = require('./roleplay-v4/frontend/src/gal/GalStore.ts');
+const { useGalStore } = require('./frontend/src/gal/GalStore.ts');
 
 const SID = 'sess-A';
 const OTHER = 'sess-B';

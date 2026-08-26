@@ -4,7 +4,7 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.web.servlet.config.annotation.WebMvcConfigurer;
 
 /**
- * Frontend static resources served from classpath:/static/ (copied from roleplay-v4/frontend/dist/).
+ * Frontend static resources served from classpath:/static/ (copied from frontend/dist/).
  * API endpoints served by controllers. No custom resource handlers needed.
  */
 @Configuration

@@ -13,7 +13,7 @@ const EDGE_CANDIDATES = [
 const PORT = 9254;
 const BASE = `http://127.0.0.1:${PORT}`;
 const APP = 'http://127.0.0.1:8000/';
-const OUT = 'D:/roleplay-java/work/full_play';
+const OUT = 'D:/echoworld/work/full_play';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/progress.log`;
 appendFileSync(PROG, '\n==== ' + new Date().toISOString() + ' ====\n');

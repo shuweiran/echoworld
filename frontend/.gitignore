@@ -1,0 +1,15 @@
+# Frontend build and desktop release outputs are local-only.
+node_modules/
+dist/
+dist-*/
+release*/
+tmp/
+*.log
+*.bak
+*.local
+desktop/runtime/
+desktop/runtime-release/
+desktop/staged/
+# Local audit-excluded third-party tiles: do not reintroduce them into the public repository.
+public/tiles/avalon-object-layer.png
+public/tiles/lpc-house-inside.png

@@ -1,10 +1,10 @@
 param(
-    [string]$OutputDir = "C:\\Users\\shuweiran\\Documents\\Codex\\2026-08-05\\http-localhost-5173\\outputs\\Roleplay-v4"
+    [string]$OutputDir = "C:\\Users\\shuweiran\\Documents\\Codex\\2026-08-05\\http-localhost-5173\\outputs\\EchoWorld"
 )
 
 $ErrorActionPreference = 'Stop'
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
-$FrontendRoot = Join-Path $ProjectRoot 'roleplay-v4\\frontend'
+$FrontendRoot = Join-Path $ProjectRoot 'frontend'
 $StaticRoot = Join-Path $ProjectRoot 'src\\main\\resources\\static'
 $Jar = Join-Path $ProjectRoot 'target\\roleplay-engine-1.0.0-SNAPSHOT.jar'
 

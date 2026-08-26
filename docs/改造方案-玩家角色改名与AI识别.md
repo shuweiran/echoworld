@@ -36,7 +36,7 @@
 | 7 | 狼人杀：`humanPlayers` 名字集合，AI = 不在集合的玩家 | ✅ `service/WerewolfService.java:141` `humanPlayers`；:260-266 setHumanPlayers；:614-619 AI=alive 中不在 humans；:672 aiVotes 排除 humans；`controller/WerewolfController.java:81-82` init 只把 `player_name` 登记为人类 |
 | 8 | 剧本杀：`playerIsHuman` 名字 map | ✅ `service/ScriptGameService.java:155` 声明；**只写不读**（:359、:1701 写入，无读取点）→ 潜在链路，现全员人类；实际风险在名字键结构（players/assignments/playerKeys）与 `checkPlayerAccess`（:1428-1451 按 player+roleKey） |
 | 9 | 改名撞名无校验，覆盖同名 persona | ✅ `db/service/DatabaseService.java:67-79` `saveCharacter` 是 **upsert-by-name**（`findByName(name).orElse(new CharacterEntity(...))`）→ 新名已存在则覆盖其 persona/voice/background；`CharacterController.java:27` 内存列表无唯一性 → 重名可并存两行 |
-| 10 | 前端唯一改名弹窗（场景页/素材库/设置页共用） | ✅ `roleplay-v4/frontend/src/api/client.ts:65-67` `createCharacter/updateCharacter(oldName, data)/deleteCharacter`；:83 `send(text, playerName)` 每次请求传 `player_name` |
+| 10 | 前端唯一改名弹窗（场景页/素材库/设置页共用） | ✅ `frontend/src/api/client.ts:65-67` `createCharacter/updateCharacter(oldName, data)/deleteCharacter`；:83 `send(text, playerName)` 每次请求传 `player_name` |
 
 **关键架构事实补充**（方案设计前提）：
 - `RouterService` 与 2D `SimulationService` 均为**单活动会话**（`RouterService.java:120-146` initSession 先 `agents.clear()` 再填充；`SimulationWorld` 单 world），局中改名只需处理当前活动会话；狼人杀/剧本杀为多局（按 sessionId 键）。
@@ -282,7 +282,7 @@ Body（兼容，无 player_id 时）: { "old_name": "旧名字", "new_name": "�
 
 **后端核心（16）**：`db/entity/CharacterEntity.java`、`db/repository/CharacterRepository.java`、`db/service/DatabaseService.java`、`controller/CharacterController.java`、`service/PlayerIdentityService.java`（新）、`controller/PlayerController.java`（新）、`service/RouterService.java`（禁动，需授权）、`simulation/SimulationService.java`、`simulation/SimulationWorld.java`、`simulation/AgentState.java`、`simulation/SimulationController.java`、`controller/SessionController.java`、`service/WerewolfService.java`、`controller/WerewolfController.java`、`service/ScriptGameService.java`、`controller/ScriptController.java`
 
-**前端（4）**：`roleplay-v4/frontend/src/api/client.ts`、`store/appStore.ts`、`components/ScenePage/ScenePage.tsx`、`components/ChatPage/ChatPage.tsx`
+**前端（4）**：`frontend/src/api/client.ts`、`store/appStore.ts`、`components/ScenePage/ScenePage.tsx`、`components/ChatPage/ChatPage.tsx`
 
 **新增测试（7 类）**：`CharacterRenameValidationTest`、`Test2dPlayerRenameTest`、`RouterRenameTest`、`WerewolfRenameTest`、`ScriptRenameTest`、`PlayerRenameE2ETest`、`ScriptRenameResumeTest`
 

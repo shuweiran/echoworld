@@ -3,7 +3,7 @@
 import json, urllib.request
 
 BASE = "http://127.0.0.1:8000"
-with open(r"D:\roleplay-java\docs\test-results\verify_marker_ts.txt", encoding="utf-8") as f:
+with open(r"D:\echoworld\docs\test-results\verify_marker_ts.txt", encoding="utf-8") as f:
     lines = f.read().splitlines()
 TS, char_name = lines[0], lines[1]
 scene_id = "verify-" + TS

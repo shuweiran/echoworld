@@ -50,7 +50,7 @@ mvn -Dtest=SpatialTrackResolverTest,TrackStrategyTest,HearingSystemObstacleTest,
 前端：
 
 ```bash
-cd roleplay-v4/frontend
+cd frontend
 npm ci
 npm run build
 npm run lint

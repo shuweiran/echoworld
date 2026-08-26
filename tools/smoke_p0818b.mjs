@@ -1,7 +1,7 @@
 /* smoke_p0818b.mjs — P-0818-B extractSpeechText 纯函数冒烟（Node 24 直接 import TS 源码）
- * 运行：node tools/smoke_p0818b.mjs（工作目录 D:\roleplay-java）
+ * 运行：node tools/smoke_p0818b.mjs（工作目录 D:\echoworld）
  */
-import { extractSpeechText } from '../roleplay-v4/frontend/src/services/ttsText.ts';
+import { extractSpeechText } from '../frontend/src/services/ttsText.ts';
 
 let pass = 0, fail = 0;
 const eq = (n, actual, expected) => {

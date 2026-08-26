@@ -1,7 +1,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 const PORT = 9252;
 const BASE = `http://127.0.0.1:${PORT}`;
-const OUT = 'D:/roleplay-java/work/repro_script_v2';
+const OUT = 'D:/echoworld/work/repro_script_v2';
 mkdirSync(OUT, { recursive: true });
 
 class CDP {

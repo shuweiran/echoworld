@@ -1,5 +1,5 @@
 /* static_proxy_p0815b.mjs — P-0815-B 验证用静态代理
- * 服务 roleplay-v4/frontend/dist（新 bundle）于 4176，/api/** 与 /ai-images/** 透传 http://localhost:8000
+ * 服务 frontend/dist（新 bundle）于 4176，/api/** 与 /ai-images/** 透传 http://localhost:8000
  * （剥除 Origin 头规避 8000 CORS 白名单仅 5173/8000）；SSE（/api/events）流式透传。
  * 用法：node tools/static_proxy_p0815b.mjs   （PORT 环境变量可覆盖，默认 4176）
  */
@@ -8,7 +8,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { request as httpRequest } from 'node:http';
 
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const ROOT = 'D:/echoworld/frontend/dist';
 const BACKEND = 'http://localhost:8000';
 const PORT = Number(process.env.PORT || 4176);
 

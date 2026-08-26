@@ -1,5 +1,5 @@
 /* static_proxy_p0816b.mjs — P-0816-B 地图内容渲染验证用静态代理
- * 服务 roleplay-v4/frontend/dist（新 bundle index-BDCXWtWn.js，含地图内容渲染）于 4191，
+ * 服务 frontend/dist（新 bundle index-BDCXWtWn.js，含地图内容渲染）于 4191，
  * /api/** 与 /ai-images/** 透传 http://localhost:8000（剥除 Origin 头规避 CORS 白名单）；
  * SSE（/api/events）流式透传。不拦截 /api/scenes/map——本批验证用 localStorage 注入
  * 已生成的真实 LLM 地图（g_cafe 等预设剧本 id），GameBridge 命中缓存不发起生成。
@@ -10,7 +10,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { request as httpRequest } from 'node:http';
 
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const ROOT = 'D:/echoworld/frontend/dist';
 const BACKEND = 'http://localhost:8000';
 const PORT = Number(process.env.PORT || 4191);
 

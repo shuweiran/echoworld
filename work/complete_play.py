@@ -84,7 +84,7 @@ final = get('/api/script/status?player=' + urllib.parse.quote('沈墨'))
 print('FINAL phase=%s game_over=%s winner=%s' % (final.get('phase'), final.get('game_over'), final.get('winner')))
 print('TRUTH:', (final.get('truth') or '')[:120])
 if final.get('phase') == 'ended':
-    with open(r'D:\roleplay-java\work\full_play\final-ended.json', 'w', encoding='utf-8') as f:
+    with open(r'D:\echoworld\work\full_play\final-ended.json', 'w', encoding='utf-8') as f:
         json.dump(final, f, ensure_ascii=False, indent=2)
     print('COMPLETED')
 else:

@@ -12,7 +12,7 @@ import { createRequire } from 'module';
 import { mkdirSync, writeFileSync } from 'fs';
 
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
 mkdirSync('tmp/p0814g/choices', { recursive: true });
 
@@ -21,20 +21,20 @@ globalThis.EventSource = class { constructor() {} close() {} addEventListener() 
 globalThis.fetch = async () => new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
 
 buildSync({
-  entryPoints: ['D:/roleplay-java/tmp/p0814g/choices/drive.ts'],
+  entryPoints: ['D:/echoworld/tmp/p0814g/choices/drive.ts'],
   bundle: true,
   platform: 'node',
   format: 'cjs',
   outfile: 'tmp/p0814g/choices/drive.cjs',
-  nodePaths: ['D:/roleplay-java/roleplay-v4/frontend/node_modules'],
+  nodePaths: ['D:/echoworld/frontend/node_modules'],
   logLevel: 'silent',
 });
-writeFileSync('D:/roleplay-java/tmp/p0814g/choices/drive.ts', `
-export { isPlayerTurnGate } from '../../../../roleplay-v4/frontend/src/gal/GalChoiceBar';
-export { useGalStore } from '../../../../roleplay-v4/frontend/src/gal/GalStore';
+writeFileSync('D:/echoworld/tmp/p0814g/choices/drive.ts', `
+export { isPlayerTurnGate } from '../../../../frontend/src/gal/GalChoiceBar';
+export { useGalStore } from '../../../../frontend/src/gal/GalStore';
 `);
 
-const { isPlayerTurnGate, useGalStore } = require('D:/roleplay-java/tmp/p0814g/choices/drive.cjs');
+const { isPlayerTurnGate, useGalStore } = require('D:/echoworld/tmp/p0814g/choices/drive.cjs');
 
 let failures = 0;
 function check(label, ok, detail) {

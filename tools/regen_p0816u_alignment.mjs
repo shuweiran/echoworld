@@ -4,7 +4,7 @@
  */
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const OUT = 'D:/roleplay-java/tmp/p0816u';
+const OUT = 'D:/echoworld/tmp/p0816u';
 const real = JSON.parse(readFileSync(`${OUT}/probe_real.json`, 'utf-8'));
 const proto = JSON.parse(readFileSync(`${OUT}/probe_proto.json`, 'utf-8'));
 

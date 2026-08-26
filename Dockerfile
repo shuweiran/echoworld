@@ -1,11 +1,11 @@
 # syntax=docker/dockerfile:1
 
 FROM node:20-bookworm-slim AS frontend-build
-WORKDIR /app/roleplay-v4/frontend
+WORKDIR /app/frontend
 
-COPY roleplay-v4/frontend/package*.json ./
+COPY frontend/package*.json ./
 RUN npm ci
-COPY roleplay-v4/frontend/ ./
+COPY frontend/ ./
 RUN npm run build
 
 FROM maven:3.9-eclipse-temurin-21 AS backend-build
@@ -13,7 +13,7 @@ WORKDIR /app
 
 COPY pom.xml ./
 COPY src ./src
-COPY --from=frontend-build /app/roleplay-v4/frontend/dist /tmp/frontend-dist
+COPY --from=frontend-build /app/frontend/dist /tmp/frontend-dist
 
 # Keep backend-served simulation assets while refreshing the React bundle.
 RUN cp -R /tmp/frontend-dist/. src/main/resources/static/ \

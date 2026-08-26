@@ -7,7 +7,7 @@ target/
 build/
 dist/
 node_modules/
-roleplay-v4/frontend/node_modules/
+frontend/node_modules/
 
 # 部署副本与一次性验证留档（源码任务默认不需要）
 static/

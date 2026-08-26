@@ -2,12 +2,12 @@
 import { createRequire } from 'module';
 import { writeFileSync, mkdirSync } from 'fs';
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
 mkdirSync('tmp/p0811g', { recursive: true });
 
 const code = `
-const { useDemoStore } = require('./roleplay-v4/frontend/src/demo2/store.ts');
+const { useDemoStore } = require('./frontend/src/demo2/store.ts');
 let failures = 0;
 function check(label, ok, detail) {
   if (!ok) { failures++; console.log('FAIL ' + label + (detail ? ' :: ' + detail : '')); }

@@ -29,7 +29,7 @@ import java.util.Set;
  *
  * <p><b>降级纪律</b>：模型文件不存在 / 图片不可读 / 推理失败 —— 一律返回 {@code false}
  * 且不抛异常，由调用方（ImageGenService.genOne）降级保留原图，log.warn 不阻塞主流程。
- * 模型路径外置（默认 {@code D:\roleplay-java\models\rmbg\rmbg-1.4.onnx}），不打包进 jar。
+ * 模型路径外置（默认 {@code D:\echoworld\models\rmbg\rmbg-1.4.onnx}），不打包进 jar。
  *
  * <p>非 Spring 强依赖类：由 ImageGenService 直构（{@link #RmbgRemover(AiImageProperties)}），
  * 懒加载 OrtSession（首次 removeBackground 才初始化，模型缺失零成本跳过）。

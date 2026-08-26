@@ -1,7 +1,7 @@
 /* cdp_p0816u_probe4.mjs — 修复复核：重载 4399 tab → susSel/locSearched/glow 验证 */
 import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 const CDP_URL = 'http://127.0.0.1:9222';
-const OUT = 'D:/roleplay-java/tmp/p0816u';
+const OUT = 'D:/echoworld/tmp/p0816u';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/probe4.log`;
 appendFileSync(PROG, '\n==== ' + new Date().toISOString() + ' ====\n');

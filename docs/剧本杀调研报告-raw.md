@@ -128,7 +128,7 @@ public enum Phase { SETUP, INVESTIGATION, DISCUSSION, VOTE, REVEAL, ENDED }
 
 ## ② 前端现状取证
 
-路径前缀：`D:\roleplay-java\roleplay-v4\frontend\src`
+路径前缀：`D:\echoworld\frontend\src`
 
 ### 2.1 ScenePage.tsx（568 行）— 剧本杀占位位置确认
 
@@ -182,7 +182,7 @@ public enum Phase { SETUP, INVESTIGATION, DISCUSSION, VOTE, REVEAL, ENDED }
 
 ## ③ 需求文档原文摘录（含行号）
 
-路径：`D:\roleplay-java\需求文档-完整需求.md`（全文无"剧本杀"专章）
+路径：`D:\echoworld\需求文档-完整需求.md`（全文无"剧本杀"专章）
 
 **"剧本杀"全部出现位置（仅 1 处）**
 - L477–484（第五章 Level 3 剧情 Track 用途）：

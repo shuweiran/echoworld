@@ -1,5 +1,5 @@
 /* static_proxy_p0815i.mjs — P-0815-H 群聊按群过滤验证用静态代理
- * 服务 roleplay-v4/frontend/dist（新 bundle，含 P-0815-H 过滤修复）于 4183，
+ * 服务 frontend/dist（新 bundle，含 P-0815-H 过滤修复）于 4183，
  * /api/** 与 /ai-images/** 透传 http://localhost:8000（剥除 Origin 头规避 CORS 白名单）；
  * SSE（/api/events）流式透传。拦截 POST /api/scenes/map → 500 → 前端兜底 park 场景
  * （零 LLM 地图成本，2D 动态模拟照常，P-0815-F perf_proxy 同款手法）。
@@ -10,7 +10,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { request as httpRequest } from 'node:http';
 
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const ROOT = 'D:/echoworld/frontend/dist';
 const BACKEND = 'http://localhost:8000';
 const PORT = Number(process.env.PORT || 4183);
 

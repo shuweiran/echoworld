@@ -5,7 +5,7 @@ import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const PORT = 9247;
 const BASE = `http://127.0.0.1:${PORT}`;
-const OUT = 'D:/roleplay-java/tmp/gal_chat_verify2';
+const OUT = 'D:/echoworld/tmp/gal_chat_verify2';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/progress.log`;
 appendFileSync(PROG, '\n==== ' + new Date().toISOString() + ' ====\n');

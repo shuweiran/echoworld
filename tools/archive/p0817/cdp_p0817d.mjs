@@ -9,7 +9,7 @@ import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 
 const CDP_URL = 'http://127.0.0.1:9222';
 const APP = 'http://localhost:4497/';
-const OUT = 'D:/roleplay-java/tmp/p0817d';
+const OUT = 'D:/echoworld/tmp/p0817d';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/progress.log`;
 appendFileSync(PROG, '\n==== CDP ' + new Date().toISOString() + ' ====\n');

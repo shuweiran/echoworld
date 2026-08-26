@@ -1,5 +1,5 @@
 /* static_proxy_p0818b.mjs — P-0818-B 验证代理
- * 服务 roleplay-v4/frontend/dist（新构建 index-DjjZJV02.js）于 4194，
+ * 服务 frontend/dist（新构建 index-DjjZJV02.js）于 4194，
  * /api/** 与 /ai-images/** 透传 http://localhost:8000（剥 Origin 规避 CORS 白名单），
  * 并捕获 POST /api/tts/mimo/synthesize 的请求体（验证「只朗读语句、不含括号内容」）。
  * 用法：node tools/static_proxy_p0818b.mjs
@@ -9,7 +9,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { request as httpRequest } from 'node:http';
 
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const ROOT = 'D:/echoworld/frontend/dist';
 const BACKEND = 'http://localhost:8000';
 const PORT = Number(process.env.PORT || 4194);
 const ttsBodies = [];

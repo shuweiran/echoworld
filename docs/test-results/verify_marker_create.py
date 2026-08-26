@@ -19,7 +19,7 @@ char_name = "验证角色-" + TS
 sc, body = post("/api/characters", {"name": char_name, "persona": "D14重启恢复验证专用角色",
                                      "voice": "测试音色", "background": "由运行时验证脚本创建"})
 print("POST /api/characters ->", sc, body)
-with open(r"D:\roleplay-java\docs\test-results\verify_marker_ts.txt", "w", encoding="utf-8") as f:
+with open(r"D:\echoworld\docs\test-results\verify_marker_ts.txt", "w", encoding="utf-8") as f:
     f.write(TS + "\n" + char_name + "\n")
 
 scene_id = "verify-" + TS

@@ -40,8 +40,8 @@ React / Phaser → REST + SSE → Spring adapters → Simulation runtime
 Prerequisites: JDK 21、Maven 3.9+；前端开发另需 Node.js 20+。
 
 ```bash
-git clone https://github.com/shuweiran/roleplay-java.git
-cd roleplay-java
+git clone https://github.com/shuweiran/echoworld.git
+cd echoworld
 mvn test
 mvn package -DskipTests
 java -jar target/roleplay-engine-0.1.0.jar
@@ -50,7 +50,7 @@ java -jar target/roleplay-engine-0.1.0.jar
 Open `http://localhost:8000`. LLM credentials are supplied by environment variable, for example `ROLEPLAY_LLM_API_KEY`; normal test runs use mock/fallback clients and do not require a real provider.
 
 ```bash
-cd roleplay-v4/frontend
+cd frontend
 npm ci
 npm run build
 ```

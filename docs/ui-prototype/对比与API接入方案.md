@@ -3,7 +3,7 @@
 > 版本：V1.1（2026-08-16）｜前置：`docs/ui-prototype/` 三张静态原型（investigation / discussion / vote，V2）+ `设计方案-深化版.md`
 > 性质：**只读原项目代码 + 产出文档**，未修改任何生产代码，未 git commit，未 spring-boot:run。
 > **第一步盘点复用**：`docs/ui-prototype/原项目功能盘点.md`（另一任务产出，618 行：后端 24 Controller / 163 端点含 2 个 SSE / 无 WebSocket；前端 App2 入口 + ChatTopbar 9 按钮 + ChatDrawers 6 抽屉；7 张 JPA 表；剧本杀六态状态机；约 60+ 项功能；10 项 [需确认] 清单）。本文档盘点章节为**摘要 + 抽查核对结果**（已核实：@RestController 类数 24、ScriptController 23 端点、SessionController 20 端点、SSE 事件清单、前端 9 按钮——与盘点文档一致；以代码为准）。
-> 依据：代码事实以 `src/main/java/com/roleplay/`（24 个 Controller / 163 端点）、`roleplay-v4/frontend/src/`（App2 路由 / ChatPage / gal / phaser / api）、`PROJECT_CONTEXT.md`、`DECISION_LOG.md`（D-001~D-061）为准；不确定处均标 **[需确认]**。
+> 依据：代码事实以 `src/main/java/com/roleplay/`（24 个 Controller / 163 端点）、`frontend/src/`（App2 路由 / ChatPage / gal / phaser / api）、`PROJECT_CONTEXT.md`、`DECISION_LOG.md`（D-001~D-061）为准；不确定处均标 **[需确认]**。
 
 ---
 

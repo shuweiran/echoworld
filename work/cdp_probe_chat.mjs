@@ -1,7 +1,7 @@
 import { writeFileSync, mkdirSync, appendFileSync } from 'node:fs';
 const PORT = 9251;
 const BASE = `http://127.0.0.1:${PORT}`;
-const OUT = 'D:/roleplay-java/work/repro_script';
+const OUT = 'D:/echoworld/work/repro_script';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/progress.log`;
 const log = (...a) => { const l = '[' + new Date().toISOString().slice(11, 19) + '] ' + a.join(' '); appendFileSync(PROG, l + '\n'); console.log(l); };

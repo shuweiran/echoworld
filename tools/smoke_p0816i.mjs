@@ -12,7 +12,7 @@ import { createRequire } from 'module';
 import { mkdirSync } from 'fs';
 
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
 mkdirSync('tmp/p0816i', { recursive: true });
 
@@ -24,7 +24,7 @@ const {
   filterEvidence,
   buildVnLines,
   actionEmoji,
-} = require('./roleplay-v4/frontend/src/components/ChatPage/actionUtils.ts');
+} = require('./frontend/src/components/ChatPage/actionUtils.ts');
 
 let failures = 0;
 function check(label, ok, detail) {
@@ -122,11 +122,11 @@ process.exit(failures === 0 ? 0 : 1);
 `;
 
 const out = buildSync({
-  stdin: { contents: code, resolveDir: 'D:/roleplay-java', loader: 'js' },
+  stdin: { contents: code, resolveDir: 'D:/echoworld', loader: 'js' },
   bundle: true,
   write: false,
   format: 'cjs',
   platform: 'node',
 });
 require('node:fs').writeFileSync('tmp/p0816i/smoke.cjs', out.outputFiles[0].text);
-require('node:child_process').execSync('node tmp/p0816i/smoke.cjs', { cwd: 'D:/roleplay-java', stdio: 'inherit' });
+require('node:child_process').execSync('node tmp/p0816i/smoke.cjs', { cwd: 'D:/echoworld', stdio: 'inherit' });

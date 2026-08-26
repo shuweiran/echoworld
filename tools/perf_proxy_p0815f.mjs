@@ -1,6 +1,6 @@
 /* perf_proxy_p0815f.mjs — P-0815-F 前后端渲染性能对比验证用静态代理
  * 端口 4181 = BEFORE（src/main/resources/static 当前生产 bundle：index-CUDanUv2.js，无本批优化）
- * 端口 4182 = AFTER （roleplay-v4/frontend/dist 新 bundle：index-D2TRmpGE.js，含本批优化）
+ * 端口 4182 = AFTER （frontend/dist 新 bundle：index-D2TRmpGE.js，含本批优化）
  * /api/** 与 /ai-images/** 透传 http://localhost:8000（剥 Origin 头规避 CORS 白名单）；SSE 流式透传。
  * 用法：node tools/perf_proxy_p0815f.mjs
  */
@@ -56,5 +56,5 @@ function serve(port, ROOT, label) {
   server.listen(port, () => console.log(`[${label}] ${label} proxy on http://127.0.0.1:${port} (root=${ROOT})`));
 }
 
-serve(4181, 'D:/roleplay-java/src/main/resources/static', 'BEFORE');
-serve(4182, 'D:/roleplay-java/roleplay-v4/frontend/dist', 'AFTER');
+serve(4181, 'D:/echoworld/src/main/resources/static', 'BEFORE');
+serve(4182, 'D:/echoworld/frontend/dist', 'AFTER');

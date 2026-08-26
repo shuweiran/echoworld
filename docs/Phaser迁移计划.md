@@ -45,7 +45,7 @@
 
 ### 阶段 1：ScenePage 渲染层换 Phaser（数据流不变）（✅ 已完成 2026-08-01，台账 #55）
 
-**范围**：`roleplay-v4/frontend` 的 ScenePage 2D 渲染层由自研 Canvas 换为 Phaser（React 内嵌 Phaser Game 实例，Ref 挂载），**数据流与状态流不变**——后端 SSE/REST 推送的状态仍是唯一数据源，Track 数据管线（SpatialTrackResolver→TrackStrategy→MovementConstraint）的产出直接作为渲染输入。
+**范围**：`frontend` 的 ScenePage 2D 渲染层由自研 Canvas 换为 Phaser（React 内嵌 Phaser Game 实例，Ref 挂载），**数据流与状态流不变**——后端 SSE/REST 推送的状态仍是唯一数据源，Track 数据管线（SpatialTrackResolver→TrackStrategy→MovementConstraint）的产出直接作为渲染输入。
 
 **交付物**：
 - ScenePage 渲染层改造（Phaser Scene 承载 2D 模拟视图，替换手绘 Canvas 绘制循环）——✅ 已完成（新增「2D 模拟（Phaser 内嵌）」入口 + PhaserSimulationView 内嵌渲染，「原版窗口（回退）」保留，数据流与原 simulation.html 完全相同）
@@ -67,7 +67,7 @@
 **交付物**：
 - 地图 JSON schema 契约文档（版本化）——✅ 已由阶段 0 产出并定稿 `docs/地图JSON契约-v1.md`（map_version 内嵌版本 + 字段表 + 宽容解析规则 + 校验器）
 - LLM 生成地图接入（生成路径统一 + 宽容解析 + 兜底，对齐 D-014 双生成器统一模式）——✅ 后端 `POST /api/script/map`（ScriptController）+ `simulation/map/` 包（MapContract/MapValidator/BspMapGenerator）+ `service/ScriptMapService.java`：LLM 生成 → 契约 v1 宽容解析 → MapValidator 7 项校验 → 失败降级 BSP；缓存命中/regenerate 强制重生成；map_data 随对局快照落库
-- 搜证热点绑定前端实装——✅ `roleplay-v4/frontend/src/phaser/`（mapData.ts/ScriptMapScene.ts/PhaserScriptMapView.tsx）+ ScenePage 剧本杀 Tab「生成地图」入口；`zones.clue_location` ↔ `clues.location` 联动，热点搜证走既有 POST /api/script/search，成功 markZoneSearched 变绿
+- 搜证热点绑定前端实装——✅ `frontend/src/phaser/`（mapData.ts/ScriptMapScene.ts/PhaserScriptMapView.tsx）+ ScenePage 剧本杀 Tab「生成地图」入口；`zones.clue_location` ↔ `clues.location` 联动，热点搜证走既有 POST /api/script/search，成功 markZoneSearched 变绿
 
 **验收标准**：
 - LLM 生成地图 → 前端 Phaser 渲染全链路闭环——✅ 后端全量 254/0（4 类 37 用例，台账 #56）+ 前端 npm run build 63 modules 通过（index-Ccc-CMzG.js 已同步 static）+ 冒烟 self_test_stage2.py 16/16 + 阶段1 回归 self_test_stage1.py 10/10（台账 #58/#59 独立复核）；8000 实例重启后生效（PID 25760）
@@ -105,7 +105,7 @@
 | Track 数据管线 | `src/main/java/com/roleplay/engine/simulation/track/`（SpatialTrackResolver / InteractionDetector / EavesdropSummarizer） | **零改动**——其产出（位置/轨道/约束）即渲染数据源，Phaser 只消费 |
 | 移动约束产出 | `simulation/movement/MovementConstraint` | 同上，零改动 |
 | 演讲广播地基 | `broadcast/`（AnnouncementService / BroadcastMessage / SseBroadcaster）+ WorldEventBus | 零改动——横幅/公告/演讲渲染由前端现有组件承载，与渲染层正交 |
-| React 组件 | `roleplay-v4/frontend/src/components/`（ScenePage / ChatPage / ScriptStatePanel / AnnouncementBanner / AnnouncementTicker 等） | 全复用——仅 ScenePage 内 2D 绘制层替换为 Phaser，组件外壳/状态/SSE 接线不动 |
+| React 组件 | `frontend/src/components/`（ScenePage / ChatPage / ScriptStatePanel / AnnouncementBanner / AnnouncementTicker 等） | 全复用——仅 ScenePage 内 2D 绘制层替换为 Phaser，组件外壳/状态/SSE 接线不动 |
 | 前端状态与 API 层 | `store/appStore.ts` / `api/client.ts` / `useSSE.ts` | 全复用，数据流契约不变 |
 | 后端全部（Java） | `src/main/java/` | **零改动**（结构性前提） |
 

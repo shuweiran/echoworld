@@ -2,7 +2,7 @@
 
 > 任务：把「剧本杀对局页」的 UI 风格与理念（三栏布局 + 阶段驱动 + 深色精致风，对齐 docs/ui-prototype/*.html 原型）统一到整个软件。
 > 本报告为 **只读调研 + 可执行替换方案**，未修改任何生产代码；代码事实均带文件+行号。
-> 调研范围：`D:\roleplay-java\roleplay-v4\frontend\src`（2026-08-16 23:0x 快照）。
+> 调研范围：`D:\echoworld\frontend\src`（2026-08-16 23:0x 快照）。
 > 批次：P-0816-V（修改记录 #239）。状态：待核查。
 
 ---
@@ -148,13 +148,13 @@
 
 | 文件 | 要点 |
 |---|---|
-| roleplay-v4/frontend/src/uiProtoV2.ts | ui-proto-v2 特性开关（全局常量 + VITE_UI_PROTO_V2 env） |
-| roleplay-v4/frontend/src/demo2/App2.tsx | 路由壳/NAV 8 项 + 10 视图分发 |
-| roleplay-v4/frontend/src/components/ChatPage/ChatPage.tsx | protoV2 判定（L63）/ 三栏装配（L228-268）/ 旧布局并存 |
-| roleplay-v4/frontend/src/components/ChatPage/ChatMessageFlow.tsx | protoMain 阶段驱动主区（L44/L231-299） |
-| roleplay-v4/frontend/src/styles/global.css | L1-21 旧 :root tokens / L1569+ proto 段 / L2653-2681 阶段色 / L2115+ VN / L2230+ 检索 chips |
-| roleplay-v4/frontend/src/demo2/styles.css | 大厅独立 :root（L8-25） |
-| roleplay-v4/frontend/src/gal/gal.css + galGeneral.css | Gal 像素风 --gal-* 体系 |
+| frontend/src/uiProtoV2.ts | ui-proto-v2 特性开关（全局常量 + VITE_UI_PROTO_V2 env） |
+| frontend/src/demo2/App2.tsx | 路由壳/NAV 8 项 + 10 视图分发 |
+| frontend/src/components/ChatPage/ChatPage.tsx | protoV2 判定（L63）/ 三栏装配（L228-268）/ 旧布局并存 |
+| frontend/src/components/ChatPage/ChatMessageFlow.tsx | protoMain 阶段驱动主区（L44/L231-299） |
+| frontend/src/styles/global.css | L1-21 旧 :root tokens / L1569+ proto 段 / L2653-2681 阶段色 / L2115+ VN / L2230+ 检索 chips |
+| frontend/src/demo2/styles.css | 大厅独立 :root（L8-25） |
+| frontend/src/gal/gal.css + galGeneral.css | Gal 像素风 --gal-* 体系 |
 | docs/ui-prototype/决策记录.md | U1-U14 决策（U11 渐进嵌入/U12 不覆盖一般·狼人杀/U13 VN 前端拼装） |
 | docs/ui-prototype/investigation.html / discussion.html / vote.html | 新视觉语言源头（:root 阶段色/glow/圆角） |
 

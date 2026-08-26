@@ -1,5 +1,5 @@
 /* static_proxy_p0816u.mjs — P-0816-U 验证用静态代理
- * 服务 roleplay-v4/frontend/dist（P-0816-U 新构建产物）于 4399；
+ * 服务 frontend/dist（P-0816-U 新构建产物）于 4399；
  * /api/** + /ai-images/** + /assets/SCENE_TILESET/** 透传 http://localhost:8000（剔除 Origin 头避 CORS 白名单）。
  * 用法：node tools/static_proxy_p0816u.mjs
  */
@@ -8,7 +8,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { request as httpRequest } from 'node:http';
 
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const ROOT = 'D:/echoworld/frontend/dist';
 const BACKEND = 'http://localhost:8000';
 const PORT = Number(process.env.PORT || 4399);
 

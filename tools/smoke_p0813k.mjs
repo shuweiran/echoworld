@@ -7,13 +7,13 @@ import { createRequire } from 'module';
 import { mkdirSync } from 'fs';
 
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
 mkdirSync('tmp/p0813k', { recursive: true });
 
 const code = `
-const { findApproachableGroups, GROUP_APPROACH_MEMBER_DIST, GROUP_APPROACH_CENTER_DIST } = require('./roleplay-v4/frontend/src/phaser/simulationData.ts');
-const { api } = require('./roleplay-v4/frontend/src/api/client.ts');
+const { findApproachableGroups, GROUP_APPROACH_MEMBER_DIST, GROUP_APPROACH_CENTER_DIST } = require('./frontend/src/phaser/simulationData.ts');
+const { api } = require('./frontend/src/api/client.ts');
 
 let failures = 0;
 function check(label, ok, detail) {
@@ -146,7 +146,7 @@ globalThis.fetch = async (url, opts = {}) => {
 `;
 
 const result = buildSync({
-  stdin: { contents: code, resolveDir: 'D:/roleplay-java', sourcefile: 'smoke_p0813k.ts', loader: 'ts' },
+  stdin: { contents: code, resolveDir: 'D:/echoworld', sourcefile: 'smoke_p0813k.ts', loader: 'ts' },
   bundle: true,
   platform: 'node',
   format: 'cjs',

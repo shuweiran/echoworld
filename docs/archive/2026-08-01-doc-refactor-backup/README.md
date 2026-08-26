@@ -20,7 +20,7 @@
 >
 > 开工前按顺序阅读：**① `PROJECT_CONTEXT.md`**（项目速览）→ **② `DECISION_LOG.md`**（架构决策史，改码前必查）→ **③ `AGENTS.md` / `CLAUDE.md`**（协作规则与硬性约束）→ 按任务需要追加 **`docs/问题清单-20260731.md`**（缺陷 D1-D27 与状态）/ `TEST_STATUS.md` / `docs/测试方案-全功能覆盖-v2.md`。
 >
-> ⚠️ **硬性约束**：8000 端口有运行中后端，只准 `mvn compile/test`，**禁止 `spring-boot:run`**；**禁止 git commit**（需主人授权）；对 `D:\roleplay-java` 的任何文件修改必须登记 `docs/修改记录.md`。
+> ⚠️ **硬性约束**：8000 端口有运行中后端，只准 `mvn compile/test`，**禁止 `spring-boot:run`**；**禁止 git commit**（需主人授权）；对 `D:\echoworld` 的任何文件修改必须登记 `docs/修改记录.md`。
 
 ---
 
@@ -54,7 +54,7 @@ Java 实现的多 Agent 角色扮演引擎：AI 角色在 **2D 空间**中移动
 | LLM | DeepSeek API（OpenAI 兼容，可配置任意兼容端点）；Java HttpClient，2 模型 × 2 次重试，超时 60s |
 | 语音 | Edge TTS / CosyVoice / Qwen-TTS（TtsService）；WhisperService（语音识别） |
 | 搜索 | Brave Search API + 网页正文抓取 |
-| 前端 | React 19 + TypeScript + Vite 5 + Zustand 5（`roleplay-v4/frontend`，构建产物同步 `src/main/resources/static/`）；2D 独立页 `simulation.html` |
+| 前端 | React 19 + TypeScript + Vite 5 + Zustand 5（`frontend`，构建产物同步 `src/main/resources/static/`）；2D 独立页 `simulation.html` |
 | 测试 | JUnit 5 + Mockito + AssertJ（mock LLM + RANDOM_PORT + H2 内存库隔离） |
 
 ---
@@ -87,7 +87,7 @@ mvn spring-boot:run          # 默认端口 8000；浏览器打开 http://localh
 ### 前端开发（可选）
 
 ```bash
-cd roleplay-v4/frontend
+cd frontend
 npm run dev                  # 5173 端口，自动代理 /api → localhost:8000
 npm run build                # 构建产物同步到 src/main/resources/static/
 ```
@@ -433,7 +433,7 @@ enqueue → flush(100ms) → WorldEventBus 进程内分发（TYPE_ANNOUNCEMENT�
 
 ## 🤝 开发协作
 
-- **修改登记**：对 `D:\roleplay-java` 的任何文件修改（含子 agent）必须追加登记到 `docs/修改记录.md`（编号/时间/修改人/文件/摘要/核查状态），未登记未核查视为无效
+- **修改登记**：对 `D:\echoworld` 的任何文件修改（含子 agent）必须追加登记到 `docs/修改记录.md`（编号/时间/修改人/文件/摘要/核查状态），未登记未核查视为无效
 - **禁止 `spring-boot:run`**：8000 端口有运行实例；只准 `mvn compile/test`（测试 RANDOM_PORT 隔离）
 - **禁止 git commit**：需主人明确授权
 - **测试通过后**：更新 `TEST_STATUS.md`

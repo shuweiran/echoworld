@@ -3,7 +3,7 @@
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 const CDP_URL = 'http://127.0.0.1:9222';
-const OUT = 'D:/roleplay-java/tmp/p0816u';
+const OUT = 'D:/echoworld/tmp/p0816u';
 mkdirSync(OUT, { recursive: true });
 
 const b64 = (f) => 'data:image/png;base64,' + readFileSync(`${OUT}/${f}`).toString('base64');

@@ -1,5 +1,5 @@
 /* static_proxy_p0816d.mjs — P-0816-D 地图显示太小取证/复测用静态代理
- * 服务 roleplay-v4/frontend/dist（当前部署 bundle index-DUZ0q_g5.js）于 4192，
+ * 服务 frontend/dist（当前部署 bundle index-DUZ0q_g5.js）于 4192，
  * /api/** 与 /ai-images/** 透传 http://localhost:8000（剥除 Origin 头规避 CORS 白名单）。
  * 用法：node tools/static_proxy_p0816d.mjs
  */
@@ -8,7 +8,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { request as httpRequest } from 'node:http';
 
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const ROOT = 'D:/echoworld/frontend/dist';
 const BACKEND = 'http://localhost:8000';
 const PORT = Number(process.env.PORT || 4192);
 

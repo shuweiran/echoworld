@@ -38,10 +38,10 @@ jobs:
         with:
           node-version: 20
           cache: npm
-          cache-dependency-path: roleplay-v4/frontend/package-lock.json
+          cache-dependency-path: frontend/package-lock.json
 
       - name: Prepare desktop inputs
-        working-directory: roleplay-v4/frontend
+        working-directory: frontend
         run: |
           npm ci
           ./desktop/build-runtime.ps1 -Output ./desktop/runtime-release
@@ -51,13 +51,13 @@ jobs:
           ./desktop/prepare-release.ps1 -EngineJar $engineJar -UpdateUrl '${{ inputs.update_url }}'
 
       - name: Build unsigned candidate and update manifest
-        working-directory: roleplay-v4/frontend
+        working-directory: frontend
         run: |
           npm run desktop:dist
           npm run desktop:update-manifest -- -BaseUrl '${{ inputs.update_url }}'
 
       - name: Reject certificates and private keys in candidate
-        working-directory: roleplay-v4/frontend
+        working-directory: frontend
         run: |
           $sensitivePattern = '\.(pfx|p12|p8|pem|key|keystore)$'
           $sourceLeaks = Get-ChildItem -LiteralPath desktop -Recurse -File |
@@ -79,5 +79,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: huanjingbook-windows-candidate
-          path: roleplay-v4/frontend/release/
+          path: frontend/release/
           if-no-files-found: error

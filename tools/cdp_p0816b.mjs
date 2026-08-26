@@ -21,7 +21,7 @@ const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 const PORT = 9257;
 const BASE = `http://127.0.0.1:${PORT}`;
 const APP = 'http://127.0.0.1:4191/';
-const OUT = 'D:/roleplay-java/tmp/p0816b';
+const OUT = 'D:/echoworld/tmp/p0816b';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/progress.log`;
 appendFileSync(PROG, '\n==== ' + new Date().toISOString() + ' ====\n');
@@ -31,7 +31,7 @@ let pass = 0, fail = 0;
 const check = (n, c, d = '') => { if (c) { pass++; log('PASS ' + n + (d ? ' :: ' + d : '')); } else { fail++; log('FAIL ' + n + (d ? ' :: ' + d : '')); } };
 
 // 真实 LLM 地图（本地已生成；含 zones/rooms/spawn_points/decor/spawnMarkers）
-const MAP_BODY = JSON.parse(readFileSync('D:/roleplay-java/tmp/p0816b_map.json', 'utf-8').replace(/^\uFEFF/, ''));
+const MAP_BODY = JSON.parse(readFileSync('D:/echoworld/tmp/p0816b_map.json', 'utf-8').replace(/^\uFEFF/, ''));
 const MAP = MAP_BODY.map ?? MAP_BODY;
 const TILE_W = 1000 / MAP.width;
 const TILE_H = 600 / MAP.height;

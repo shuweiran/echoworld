@@ -5,10 +5,10 @@ import { mkdirSync, writeFileSync, readFileSync, copyFileSync, existsSync } from
 import { dirname } from 'path';
 
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
-const SRC = 'D:/roleplay-java/roleplay-v4/frontend/src';
-const REG = 'D:/roleplay-java/tmp/p0814g/regress';
+const SRC = 'D:/echoworld/frontend/src';
+const REG = 'D:/echoworld/tmp/p0814g/regress';
 mkdirSync(REG + '/api', { recursive: true });
 mkdirSync(REG + '/utils', { recursive: true });
 
@@ -60,11 +60,11 @@ buildSync({
   platform: 'node',
   format: 'cjs',
   outfile: 'tmp/p0814g/regress/drive.cjs',
-  nodePaths: ['D:/roleplay-java/roleplay-v4/frontend/node_modules'],
+  nodePaths: ['D:/echoworld/frontend/node_modules'],
   logLevel: 'silent',
 });
 
-const { useGalStore, pullGeneralHistory } = require('D:/roleplay-java/tmp/p0814g/regress/drive.cjs');
+const { useGalStore, pullGeneralHistory } = require('D:/echoworld/tmp/p0814g/regress/drive.cjs');
 const st = () => useGalStore.getState();
 const queueTexts = () => st().liveQueue.map(m => `${m.kind}:${m.speakerId}:${m.text}`);
 

@@ -3,7 +3,7 @@
 import io
 
 # ---------- 修改记录.md：我的部署行 #226 -> #227 ----------
-p = r'D:\roleplay-java\docs\修改记录.md'
+p = r'D:\echoworld\docs\修改记录.md'
 with io.open(p, 'r', encoding='utf-8') as f:
     content = f.read()
 
@@ -28,7 +28,7 @@ with io.open(p, 'w', encoding='utf-8') as f:
 print('修改记录.md: deployment row renumbered to #227')
 
 # ---------- TEST_STATUS.md：我的 v119 -> v120 ----------
-p2 = r'D:\roleplay-java\TEST_STATUS.md'
+p2 = r'D:\echoworld\TEST_STATUS.md'
 with io.open(p2, 'r', encoding='utf-8') as f:
     ts = f.read()
 

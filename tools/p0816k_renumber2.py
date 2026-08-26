@@ -2,7 +2,7 @@
 """P-0816-K 部署子任务：TEST_STATUS 我的部署区块 v119->v120（与并行 coder 续作 v119 撞号，顺延）"""
 import io
 
-p2 = r'D:\roleplay-java\TEST_STATUS.md'
+p2 = r'D:\echoworld\TEST_STATUS.md'
 with io.open(p2, 'r', encoding='utf-8') as f:
     ts = f.read()
 

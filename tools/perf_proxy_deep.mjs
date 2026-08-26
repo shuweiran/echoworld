@@ -8,7 +8,7 @@ import { request as httpRequest } from 'node:http';
 
 const BACKEND = 'http://localhost:8001';
 const PORT = 4183;
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist-instr';
+const ROOT = 'D:/echoworld/frontend/dist-instr';
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8',

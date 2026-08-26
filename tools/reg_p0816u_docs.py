@@ -14,7 +14,7 @@ def append(p, text):
 row_240 = (
     "| 240 | 2026-08-16 23:0x-00:1x | 未为-coder（**P-0816-U 局内视觉对齐包：实际对局页向三张原型页「像素级」对齐"
     "（搜证·青蓝 #0ea5e9 / 讨论·暖橙 #f59e0b / 投票·红紫 #dc2626→#9333ea）**；只改前端样式与组件样式部分，功能/后端零改动，"
-    "ui-proto-v2 开关保留） | 前端 roleplay-v4/frontend：新增 tools/smoke_p0816u.mjs（28 断言）；改 src/styles/global.css"
+    "ui-proto-v2 开关保留） | 前端 frontend：新增 tools/smoke_p0816u.mjs（28 断言）；改 src/styles/global.css"
     "（尾部追加 P-0816-U 大块：三阶段 radial 氛围背景/顶栏 64px 玻璃深蓝 blur(10px)/卡片渐变+投影/阶段条连接线+30px 圆点+当前发光/"
     "VN 大演出弹层/讨论角色色气泡 color-mix/信任度·嫌疑卡·投票栏/tab/toast/FAB/窄屏适配，及修复 P-0816-M 潜伏 bug：.proto-sus.sel "
     "用未定义 --bg-2/--bg-3 导致渐变描边失效）、src/components/ChatPage/chatUtils.ts（+roleColorFor 五主角固定色，回退 colorFor）、"
@@ -56,7 +56,7 @@ par_row = (
     "（.proto-sus.sel 渐变描边、.proto-loc.searched 背景）；②tsx 微调：chatUtils +roleColorFor（五主角固定色）、ScriptDiscussionPanel 铭牌渐变底+"
     "--msg-c、ScriptVnReveal 大头像渐变、ScriptVotePanel 嫌疑人名色、ScriptInvestigationPanel 横幅 h1、ChatPage FAB 圆钮；③验证：CDP 并排 diff"
     "（8899 原型 + 4399 新 bundle 真实对局 + 8000 后端）561 项 561/561 对齐，截图 tmp/p0816u/；④构建：tsc 0 + npm build 0 → dist/"
-    "index-Vfzyry-l.js + index-Bca7P-_X.css + smoke 28/28 ALL PASS | 23:0x-00:1x | 前端 roleplay-v4/frontend/src/styles/global.css + "
+    "index-Vfzyry-l.js + index-Bca7P-_X.css + smoke 28/28 ALL PASS | 23:0x-00:1x | 前端 frontend/src/styles/global.css + "
     "components/ChatPage/（chatUtils.ts/ScriptDiscussionPanel.tsx/ScriptVnReveal.tsx/ScriptVotePanel.tsx/ScriptInvestigationPanel.tsx/ChatPage.tsx）；"
     "工具 tools/smoke_p0816u.mjs + cdp_p0816u*.mjs + static_proxy_p0816u.mjs + regen_p0816u_alignment.mjs（新增）；证据 tmp/p0816u/；"
     "docs：修改记录.md（#240）、TEST_STATUS.md（Round 133/v133）、本行 | 完成（561/561 对齐 + tsc 0 + npm build 0 + smoke 28/28 ALL PASS；"

@@ -3,5 +3,5 @@ $key = & node -e "const c=require('fs').readFileSync('C:\\Users\\shuweiran\\.ope
 $env:ROLEPLAY_LLM_API_KEY = $key
 $env:ROLEPLAY_ARBITER_LLM_API_KEY = $key
 Write-Host "KEY_LEN=$($key.Length)"
-Start-Process java -ArgumentList "-jar","D:\roleplay-java\target\roleplay-engine-0.1.0.jar" -WorkingDirectory "D:\roleplay-java" -WindowStyle Hidden
+Start-Process java -ArgumentList "-jar","D:\echoworld\target\roleplay-engine-0.1.0.jar" -WorkingDirectory "D:\echoworld" -WindowStyle Hidden
 Write-Host "STARTED"

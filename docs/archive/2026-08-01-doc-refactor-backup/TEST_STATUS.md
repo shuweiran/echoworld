@@ -1,7 +1,7 @@
 # TEST_STATUS.md — 测试状态台账（AI 必读③，持续更新）
 
 > ⚠️ **规则**：每次执行测试后**必须更新本文件**（追加记录 + 更新汇总）。测试通过就写入，失败也写（含原因），保持诚实。
-> 执行命令：`cd D:\roleplay-java && C:\Users\shuweiran\AppData\Local\maven\apache-maven-3.9.8\bin\mvn.cmd test`
+> 执行命令：`cd D:\echoworld && C:\Users\shuweiran\AppData\Local\maven\apache-maven-3.9.8\bin\mvn.cmd test`
 
 ---
 
@@ -143,7 +143,7 @@
   - `node src/main/resources/static/simulation/vision/vision_core.test.js` → **28/28 通过**（与迁移前一致：Liang-Barsky 求交 6 / LOS 5 / 可见性全分支 9 / 多边形 3 / 碰撞 2）
   - `node src/main/resources/static/simulation/vision/vision_sim_smoke.js` → **12/12 通过**（初始视角分布 4 / 草丛不对称 3 / 迷雾 2 / 行为闭环 2 / 20s 稳定性 1）
   - vision_demo.html 引用核对：唯一外部引用 `<script src="vision_core.js">`（同目录相对），http 与 file:// 均可用
-- **手动验收（demo 如何自测）**：工程内访问 `http://localhost:8000/simulation/vision/vision_demo.html`（后端运行时，静态资源默认挂载）或直接双击 `D:\roleplay-java\src\main\resources\static\simulation\vision\vision_demo.html`（file:// 直开）→ 初始应看到：玩家蓝色视野扇形穿门缝、草丛边「影卫·青」绿圈高亮、墙后「守卫·铁」淡出 + 红虚线 + 「墙后」标签、右上「猎手·风」灰线（太远）、左上「巡游·金」在视野角外；WASD / 点击移动——进迷雾（视野缩小、雾中实体变淡）、躲草丛（右侧 AI 卡片显示「目标藏在草丛中」、AI 不追击）、走出草丛（事件流出现「开始追击」+ 红色感知线）；面板滑块调视野角 / 范围、复选框开关迷雾 / 草丛 / AI 视野锥 / 连线；空格暂停
+- **手动验收（demo 如何自测）**：工程内访问 `http://localhost:8000/simulation/vision/vision_demo.html`（后端运行时，静态资源默认挂载）或直接双击 `D:\echoworld\src\main\resources\static\simulation\vision\vision_demo.html`（file:// 直开）→ 初始应看到：玩家蓝色视野扇形穿门缝、草丛边「影卫·青」绿圈高亮、墙后「守卫·铁」淡出 + 红虚线 + 「墙后」标签、右上「猎手·风」灰线（太远）、左上「巡游·金」在视野角外；WASD / 点击移动——进迷雾（视野缩小、雾中实体变淡）、躲草丛（右侧 AI 卡片显示「目标藏在草丛中」、AI 不追击）、走出草丛（事件流出现「开始追击」+ 红色感知线）；面板滑块调视野角 / 范围、复选框开关迷雾 / 草丛 / AI 视野锥 / 连线；空格暂停
 - **git**：commit `c7f95f4`（feat: 集成 2D 视觉系统 demo——障碍物视线遮挡/迷雾/草丛不对称视觉）——**仅含 4 个新增 demo 文件**（1224 行）；并行批次 A~C4 的代码与文档改动未纳入本次提交（保持未提交状态）；push 状态：origin 存在（github.com/shuweiran/roleplay-java.git），推送结果见交付报告
 
 ### 2026-08-01 09:50–10:05 — 批次C4 DM面板+重连UI（Round 9，176 tests）
@@ -180,7 +180,7 @@
   - `node demo/vision/vision_core.test.js` → **28/28 通过**（Liang-Barsky 线段-AABB 求交 6 项、LOS 视线通畅 5 项、可见性判定全分支 9 项：VISIBLE / OUT_OF_RANGE / OUT_OF_FOV / BLOCKED / IN_GRASS / FOG_DIM、视野多边形 3 项、圆-矩形碰撞 2 项）
   - `node demo/vision/vision_sim_smoke.js` → **12/12 通过**（初始视角分布 4 项：门缝可见 / 墙后遮挡淡出 / 太远 / 视野角外；草丛不对称视觉 3 项；迷雾 2 项；AI 行为闭环 2 项：暴露→追击·躲草→丢失目标、听觉→搜寻；20s×400 帧连续模拟无 NaN / 不出界 / 状态机不抛错）
   - HTML 内联脚本 `node --check` 语法通过；控件 id 与 getElementById 引用一一对应核对
-- **手动验收（demo 如何自测）**：浏览器双击打开 `D:\roleplay-java\demo\vision\vision_demo.html`（file:// 直开，无后端依赖）→ 初始应看到：玩家蓝色视野扇形穿门缝、草丛边「影卫·青」绿圈高亮、墙后「守卫·铁」淡出 + 红虚线 + 「墙后」标签、右上「猎手·风」灰线（太远）、左上「巡游·金」在视野角外；WASD / 点击移动——进迷雾（视野缩小、雾中实体变淡）、躲草丛（右侧 AI 卡片显示「目标藏在草丛中」、AI 不追击）、走出草丛（事件流出现「开始追击」+ 红色感知线）；面板滑块调视野角 / 范围、复选框开关迷雾 / 草丛 / AI 视野锥 / 连线；空格暂停
+- **手动验收（demo 如何自测）**：浏览器双击打开 `D:\echoworld\demo\vision\vision_demo.html`（file:// 直开，无后端依赖）→ 初始应看到：玩家蓝色视野扇形穿门缝、草丛边「影卫·青」绿圈高亮、墙后「守卫·铁」淡出 + 红虚线 + 「墙后」标签、右上「猎手·风」灰线（太远）、左上「巡游·金」在视野角外；WASD / 点击移动——进迷雾（视野缩小、雾中实体变淡）、躲草丛（右侧 AI 卡片显示「目标藏在草丛中」、AI 不追击）、走出草丛（事件流出现「开始追击」+ 红色感知线）；面板滑块调视野角 / 范围、复选框开关迷雾 / 草丛 / AI 视野锥 / 连线；空格暂停
 - **git**：未 commit（等主人确认）
 
 ### 2026-08-01 08:55 — 批次B ENDED/落库/SSE（Round 5，139 tests）
@@ -281,7 +281,7 @@
 ode -e / 
 ode --check）：bsp.js 多 seed（20260801/1/42/999）生成+validateMap 全过、BFS 玩家出生点全房间可达；坏 JSON 检出（热点埋墙/出生点越界/碰撞值非 0/1）；gen_assets.js 生成 PNG 解码验证（尺寸/像素/帧键）；全部 js 语法检查通过
 - **手动验收（demo 如何自测）**：
-  - 打开：双击 D:\roleplay-java\src\main\resources\static\simulation\phaser_validate\index.html（file:// 直开）或 http://localhost:8000/simulation/phaser_validate/index.html（**运行中 8000 实例需下一轮打包重启后生效**，见 README；本地 python -m http.server 即时可用）
+  - 打开：双击 D:\echoworld\src\main\resources\static\simulation\phaser_validate\index.html（file:// 直开）或 http://localhost:8000/simulation/phaser_validate/index.html（**运行中 8000 实例需下一轮打包重启后生效**，见 README；本地 python -m http.server 即时可用）
   - ①瓦片渲染+碰撞：WASD 移动，3 个红色 AI 漫游——玩家/AI 均被墙体阻挡（墙体验证）
   - ②BSP 分区：打开即见生成地图（固定 seed 可复现），右侧 JSON 预览 + 校验器结果；「重新生成」随机 seed 再跑
   - ③Zone 热点：金色区域=搜证点；走近出现提示条（onEnter），点击区域或按 E 弹出线索文本并计入已搜证（onInteract）
@@ -293,7 +293,7 @@ ode --check）：bsp.js 多 seed（20260801/1/42/999）生成+validateMap 全过
 
 
 ### 2026-08-01 13:36-14:00 — Phaser 阶段1 ScenePage 渲染层换 Phaser（Node/Python/Edge headless 自测，非 JUnit；台账 #55）
-- **范围**：前端 Only，后端 Java 零改动：新增 `roleplay-v4/frontend/src/phaser/`（SimulationScene.ts 渲染层 / PhaserSimulationView.tsx React 组件 / simulationData.ts 数据适配）；改 `ScenePage.tsx`（新增「2D 模拟（Phaser 内嵌）」按钮 + 内嵌渲染区域 + 回退按钮，原 window.open 保留）；新增 tools/ phaser_smoke.html + phaser_integration_smoke.html + self_test_stage1.py（冒烟）；构建产物同步 static/（index.html → index-B2ueyU_u.js）
+- **范围**：前端 Only，后端 Java 零改动：新增 `frontend/src/phaser/`（SimulationScene.ts 渲染层 / PhaserSimulationView.tsx React 组件 / simulationData.ts 数据适配）；改 `ScenePage.tsx`（新增「2D 模拟（Phaser 内嵌）」按钮 + 内嵌渲染区域 + 回退按钮，原 window.open 保留）；新增 tools/ phaser_smoke.html + phaser_integration_smoke.html + self_test_stage1.py（冒烟）；构建产物同步 static/（index.html → index-B2ueyU_u.js）
 - **自测命令与结果**（前端目录 frontend 下执行）：
   - ① `npm run build` 通过（tsc -b && vite build，60 modules，含 Phaser 1.79MB bundle——对齐迁移计划风险表「Phaser 体积 ~1MB 级低风险」）
   - ② `python tools/self_test_stage1.py http://localhost:5173` → **纯渲染冒烟 10/10 ALL PASS**（phaser-version 3.90.0 / game-create / agents-render=3 / obstacles-render=2 / agents-removal=2 / game-destroy 收敛（pendingDestroy→runDestroy→canvas 移除）/ game-recreate（StrictMode double-mount 模拟）/ data-smoke-ok=1 无 JS 异常）

@@ -1,7 +1,7 @@
 $old = @(
-  'D:\roleplay-java\src\main\resources\static\assets\index-DDK3_Yan.js',
-  'D:\roleplay-java\src\main\resources\static\assets\index-CsSegv7D.js',
-  'D:\roleplay-java\src\main\resources\static\assets\index-B15NZqdV.css'
+  'D:\echoworld\src\main\resources\static\assets\index-DDK3_Yan.js',
+  'D:\echoworld\src\main\resources\static\assets\index-CsSegv7D.js',
+  'D:\echoworld\src\main\resources\static\assets\index-B15NZqdV.css'
 )
 foreach ($p in $old) {
   if (Test-Path -LiteralPath $p) {
@@ -9,5 +9,5 @@ foreach ($p in $old) {
     Write-Output "removed $p"
   }
 }
-Get-ChildItem 'D:\roleplay-java\src\main\resources\static\assets' -File | Select-Object Name, Length
-Get-Content 'D:\roleplay-java\src\main\resources\static\index.html' | Select-String -Pattern 'assets/'
+Get-ChildItem 'D:\echoworld\src\main\resources\static\assets' -File | Select-Object Name, Length
+Get-Content 'D:\echoworld\src\main\resources\static\index.html' | Select-String -Pattern 'assets/'

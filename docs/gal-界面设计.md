@@ -1,8 +1,8 @@
 # Gal 界面设计 — Galgame 视觉小说式前端改造（P-0810-02）
 
 > 批次：P-0810-02（2026-08-10）｜阶段：应用级前端改造**第一阶段（核心组件 + 假数据 demo）**
-> 目标：把 roleplay-v4 前端从「聊天工具式 UI」改造成「Galgame 视觉小说式界面（像素风）」，本阶段跑通视觉与交互，后续阶段接入真实 SSE 消息流 + Pony 立绘。
-> 代码位置：`roleplay-v4/frontend/src/gal/`（独立新目录，不侵入现有组件）；入口：App2 顶部导航「🎮 Gal Demo」。
+> 目标：把 EchoWorld 前端从「聊天工具式 UI」改造成「Galgame 视觉小说式界面（像素风）」，本阶段跑通视觉与交互，后续阶段接入真实 SSE 消息流 + Pony 立绘。
+> 代码位置：`frontend/src/gal/`（独立新目录，不侵入现有组件）；入口：App2 顶部导航「🎮 Gal Demo」。
 
 ---
 
@@ -239,17 +239,17 @@ GalChoiceBar 自由输入 → submitText(text)
 
 | 文件 | 说明 |
 |---|---|
-| `roleplay-v4/frontend/src/gal/galDemoData.ts` | demo 消息序列 + 角色定义 |
-| `roleplay-v4/frontend/src/gal/GalStore.ts` | Zustand store |
-| `roleplay-v4/frontend/src/gal/GalStage.tsx` | 舞台（chat/2d 布局） |
-| `roleplay-v4/frontend/src/gal/GalCharacter.tsx` | 立绘（SVG 像素占位/放大/置灰/淡入） |
-| `roleplay-v4/frontend/src/gal/GalDialogBox.tsx` | 对话框（打字机/点击推进） |
-| `roleplay-v4/frontend/src/gal/GalChoiceBar.tsx` | 选项条 + 自选输入框 |
-| `roleplay-v4/frontend/src/gal/GalTopBar.tsx` | 顶栏（模式切换/重开/提示） |
-| `roleplay-v4/frontend/src/gal/GalDemoPage.tsx` | 组装页 |
-| `roleplay-v4/frontend/src/gal/gal.css` | 像素主题样式 |
-| `roleplay-v4/frontend/src/demo2/App2.tsx` | 新增「🎮 Gal Demo」NAV 入口 + 视图分支 |
-| `roleplay-v4/frontend/src/demo2/store.ts` | View 类型 + `'gal'` |
+| `frontend/src/gal/galDemoData.ts` | demo 消息序列 + 角色定义 |
+| `frontend/src/gal/GalStore.ts` | Zustand store |
+| `frontend/src/gal/GalStage.tsx` | 舞台（chat/2d 布局） |
+| `frontend/src/gal/GalCharacter.tsx` | 立绘（SVG 像素占位/放大/置灰/淡入） |
+| `frontend/src/gal/GalDialogBox.tsx` | 对话框（打字机/点击推进） |
+| `frontend/src/gal/GalChoiceBar.tsx` | 选项条 + 自选输入框 |
+| `frontend/src/gal/GalTopBar.tsx` | 顶栏（模式切换/重开/提示） |
+| `frontend/src/gal/GalDemoPage.tsx` | 组装页 |
+| `frontend/src/gal/gal.css` | 像素主题样式 |
+| `frontend/src/demo2/App2.tsx` | 新增「🎮 Gal Demo」NAV 入口 + 视图分支 |
+| `frontend/src/demo2/store.ts` | View 类型 + `'gal'` |
 
 ## §7 P-0810-06 落地注记：真实对局 SSE 接入（阶段 B）
 

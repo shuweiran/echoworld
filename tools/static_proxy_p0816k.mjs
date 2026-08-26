@@ -1,5 +1,5 @@
 /* static_proxy_p0816k.mjs — P-0816-K 后端场景接入剧本选择页验证用静态代理
- * 服务 roleplay-v4/frontend/dist（P-0816-K 构建产物 index-CATKV_JB.js）于 4196，
+ * 服务 frontend/dist（P-0816-K 构建产物 index-CATKV_JB.js）于 4196，
  * /api/** 透传 http://localhost:8000（剥除 Origin 头规避 CORS 白名单）。
  * 用法：node tools/static_proxy_p0816k.mjs
  */
@@ -8,7 +8,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { request as httpRequest } from 'node:http';
 
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const ROOT = 'D:/echoworld/frontend/dist';
 const BACKEND = 'http://localhost:8000';
 const PORT = Number(process.env.PORT || 4196);
 

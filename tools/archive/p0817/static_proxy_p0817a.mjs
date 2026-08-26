@@ -1,5 +1,5 @@
 /* static_proxy_p0817a.mjs — P-0817-A 前端接入验证用静态代理
- * 服务 roleplay-v4/frontend/dist（本批次新构建产物）于 4499；
+ * 服务 frontend/dist（本批次新构建产物）于 4499；
  * /api/tts/mimo/** 由本代理 mock（8000 未部署 P-0817-A 后端，端点 502）——
  *   返回与 MimoTtsController 契约一致的 JSON（audio_base64 为真实 WAV，前端可解码播放）；
  * 其余 /api/** + /ai-images/** + /assets/** 透传 http://localhost:8000（剔除 Origin 头避 CORS 白名单）。
@@ -10,7 +10,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { request as httpRequest } from 'node:http';
 
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const ROOT = 'D:/echoworld/frontend/dist';
 const BACKEND = 'http://localhost:8000';
 const PORT = Number(process.env.PORT || 4499);
 
@@ -27,7 +27,7 @@ const MIME = {
 };
 
 // mock WAV（0.4s 8kHz 16bit 静音，真实可解码）
-const MOCK_WAV_B64 = readFileSync('D:/roleplay-java/tools/mock_tts_wav.b64', 'utf8').trim();
+const MOCK_WAV_B64 = readFileSync('D:/echoworld/tools/mock_tts_wav.b64', 'utf8').trim();
 
 // ── 一般模式对局 mock（8000 未运行时的前端链路验证） ──────────────
 // 预置会话：3 AI 角色 + 2 条历史 AI 消息（MessageView 渲染 + 播放按钮验证用）

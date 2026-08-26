@@ -1,5 +1,5 @@
 /* static_proxy_p0817d.mjs — P-0817-D 阶段C 玩法页对齐 CDP 走查用静态代理
- * 服务 roleplay-v4/frontend/dist（本批新构建产物）于 4497；
+ * 服务 frontend/dist（本批新构建产物）于 4497；
  * /api/** + /ai-images/** + /assets/** 纯透传 http://localhost:8000（8000 真实后端在跑，无 mock）。
  * 用法：node tools/static_proxy_p0817d.mjs
  */
@@ -8,7 +8,7 @@ import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join, extname, normalize } from 'node:path';
 import { request as httpRequest } from 'node:http';
 
-const ROOT = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const ROOT = 'D:/echoworld/frontend/dist';
 const BACKEND = 'http://localhost:8000';
 const PORT = Number(process.env.PORT || 4497);
 

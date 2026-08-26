@@ -17,7 +17,7 @@ const CDP_PORT = 9261;
 const APP_PORT = 4182;
 const APP = `http://127.0.0.1:${APP_PORT}/`;
 const BACKEND = 'http://localhost:8000';
-const OUT = 'D:/roleplay-java/tmp/move_probe';
+const OUT = 'D:/echoworld/tmp/move_probe';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/progress.log`;
 appendFileSync(PROG, '\n==== ' + new Date().toISOString() + ' ====\n');
@@ -26,7 +26,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 /* ── 静态代理（dist + API 透传） ─────────────────────────────── */
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.png': 'image/png', '.svg': 'image/svg+xml', '.ico': 'image/x-icon', '.woff2': 'font/woff2' };
-const DIST = 'D:/roleplay-java/roleplay-v4/frontend/dist';
+const DIST = 'D:/echoworld/frontend/dist';
 createServer((req, res) => {
   const url = req.url || '/';
   if (url.startsWith('/api/')) {

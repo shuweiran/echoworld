@@ -13,7 +13,7 @@ const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 const PORT = 9247;
 const BASE = `http://127.0.0.1:${PORT}`;
 const APP = 'http://127.0.0.1:4174/';
-const OUT = 'D:/roleplay-java/tmp/p0814e';
+const OUT = 'D:/echoworld/tmp/p0814e';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/progress.log`;
 appendFileSync(PROG, '\n==== ' + new Date().toISOString() + ' ====\n');

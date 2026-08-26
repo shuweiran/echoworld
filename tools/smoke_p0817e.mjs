@@ -11,15 +11,15 @@ import { createRequire } from 'module';
 import { mkdirSync } from 'fs';
 
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
 mkdirSync('tmp/p0817e', { recursive: true });
 
 const code = `
-const { evidenceTags, filterEvidence } = require('./roleplay-v4/frontend/src/utils/ui/evidenceFilter.ts');
-const { buildVnLines } = require('./roleplay-v4/frontend/src/utils/ui/vnText.ts');
-const { evidenceTags: et2, filterEvidence: fe2, buildVnLines: bv2 } = require('./roleplay-v4/frontend/src/components/ChatPage/actionUtils.ts');
-const { progressText } = require('./roleplay-v4/frontend/src/components/ui/GoalBadge.tsx');
+const { evidenceTags, filterEvidence } = require('./frontend/src/utils/ui/evidenceFilter.ts');
+const { buildVnLines } = require('./frontend/src/utils/ui/vnText.ts');
+const { evidenceTags: et2, filterEvidence: fe2, buildVnLines: bv2 } = require('./frontend/src/components/ChatPage/actionUtils.ts');
+const { progressText } = require('./frontend/src/components/ui/GoalBadge.tsx');
 
 let failures = 0;
 function check(label, ok, detail) {
@@ -72,7 +72,7 @@ console.log('SMOKE ALL PASS');
 
 const out = 'tmp/p0817e/smoke_bundle.mjs';
 buildSync({
-  stdin: { contents: code, resolveDir: 'D:/roleplay-java', loader: 'js' },
+  stdin: { contents: code, resolveDir: 'D:/echoworld', loader: 'js' },
   bundle: true,
   format: 'esm',
   outfile: out,

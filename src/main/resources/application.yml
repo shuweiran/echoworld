@@ -347,7 +347,7 @@ roleplay:
   frontend:
     dev-mode: false
     dev-port: 5173
-    dist-dir: "../roleplay-v4/frontend/dist"
+    dist-dir: "frontend/dist"
   structure:
     # P-0817-L（结构树契约 + 生成 API）：大型结构分层生成——L0 模板库（零成本）/ L1 程序化布局 /
     #   单图优先，结构总面积超单图预算自动拆多图（zone 切图 + warps 连接，复用 P-0803-K 多图语义）

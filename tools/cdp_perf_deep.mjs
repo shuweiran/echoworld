@@ -11,7 +11,7 @@ const EDGE = 'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
 const PORT = 9256;
 const BASE = `http://127.0.0.1:${PORT}`;
 const APP = 'http://127.0.0.1:4183/';
-const OUT = 'D:/roleplay-java/tmp/perf_deep';
+const OUT = 'D:/echoworld/tmp/perf_deep';
 mkdirSync(OUT, { recursive: true });
 const PROG = `${OUT}/cdp_progress.log`;
 appendFileSync(PROG, '\n==== ' + new Date().toISOString() + ' ====\n');

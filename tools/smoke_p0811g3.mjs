@@ -2,7 +2,7 @@
 import { createRequire } from 'module';
 import { writeFileSync, mkdirSync } from 'fs';
 const require = createRequire(import.meta.url);
-const { buildSync } = require('D:/roleplay-java/roleplay-v4/frontend/node_modules/esbuild');
+const { buildSync } = require('D:/echoworld/frontend/node_modules/esbuild');
 
 mkdirSync('tmp/p0811g', { recursive: true });
 
@@ -18,7 +18,7 @@ function check(label, ok, detail) {
   if (!ok) { failures++; console.log('FAIL ' + label + (detail ? ' :: ' + detail : '')); }
   else console.log('PASS ' + label);
 }
-const { useDemoStore } = require('./roleplay-v4/frontend/src/demo2/store.ts');
+const { useDemoStore } = require('./frontend/src/demo2/store.ts');
 const MAP = { map_version: 1, map_id: 'm1', name: '测试地图', theme: 't', tile_size: 32, width: 4, height: 4, layers: { ground: [[]], collision: [[]] }, rooms: [], corridors: [], zones: [], spawn_points: [] } as any;
 
 // 写入 → localStorage 持久化
@@ -27,7 +27,7 @@ const persisted = JSON.parse(store['roleplay_demo2_general_maps_v1'] || '{}');
 check('setGeneralMap 持久化到 localStorage', !!persisted['g_cafe']);
 
 // 新实例（模拟刷新）→ 从 localStorage 恢复
-const { useDemoStore: S2 } = require('./roleplay-v4/frontend/src/demo2/store.ts');
+const { useDemoStore: S2 } = require('./frontend/src/demo2/store.ts');
 check('刷新后 generalMaps 恢复', !!S2.getState().generalMaps['g_cafe']);
 
 // 清除
