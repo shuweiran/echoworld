@@ -33,4 +33,15 @@ class SpeechDecisionAndPerceptionTest {
         double shout = hearing.computeAudibility(List.of(self, near), Map.of("我", SpeechVolume.SHOUT)).getFirst().rawRange();
         assertEquals(normal * SpeechVolume.SHOUT.multiplier(), shout, 0.0001);
     }
+
+    @Test
+    void hearingIsDirectionalForEachUtteranceVolume() {
+        AgentState a = new AgentState("A", 0, 0);
+        AgentState b = new AgentState("B", 90, 0);
+        SpatialGrid grid = new SpatialGrid(1000, 600, 100);
+        grid.rebuild(List.of(a, b));
+        HearingSystem hearing = new HearingSystem(grid);
+        assertTrue(hearing.canHear(a, b, SpeechVolume.SHOUT));
+        assertFalse(hearing.canHear(b, a, SpeechVolume.WHISPER));
+    }
 }

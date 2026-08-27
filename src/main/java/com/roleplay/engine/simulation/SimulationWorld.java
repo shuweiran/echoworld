@@ -14,16 +14,17 @@ public class SimulationWorld {
 
     private static final Logger log = LoggerFactory.getLogger(SimulationWorld.class);
 
-    public static final double WORLD_WIDTH = 1000.0;
-    public static final double WORLD_HEIGHT = 600.0;
+    /** 无 MapContract 时的兼容兜底，不作为运行中世界的权威边界。 */
+    public static final double DEFAULT_WORLD_WIDTH = 1000.0;
+    public static final double DEFAULT_WORLD_HEIGHT = 600.0;
     public static final long TICK_INTERVAL_MS = 200;
     public static final long CONVERSATION_COOLDOWN_MS = 5000;
     public static final double CONVERSATION_DISTANCE_FACTOR = 0.7;
     public static final double GRID_CELL_SIZE = 100.0;
     public static final double WORLD_MARGIN = 20.0;
 
-    private final SpatialGrid spatialGrid;
-    private final MovementSystem movementSystem;
+    private SpatialGrid spatialGrid;
+    private MovementSystem movementSystem;
     private final HearingSystem hearingSystem;
 
     private final ConcurrentHashMap<String, AgentState> states = new ConcurrentHashMap<>();
@@ -49,18 +50,34 @@ public class SimulationWorld {
     private volatile String userDirective = "";
     private volatile String currentScene = "park";
     private volatile List<Obstacle> obstacles = new CopyOnWriteArrayList<>();
+    private volatile double worldWidth = DEFAULT_WORLD_WIDTH;
+    private volatile double worldHeight = DEFAULT_WORLD_HEIGHT;
 
     public SimulationWorld() {
-        this.spatialGrid = new SpatialGrid(WORLD_WIDTH, WORLD_HEIGHT, GRID_CELL_SIZE);
-        this.movementSystem = new MovementSystem(WORLD_WIDTH, WORLD_HEIGHT, WORLD_MARGIN, spatialGrid);
+        this.spatialGrid = new SpatialGrid(worldWidth, worldHeight, GRID_CELL_SIZE);
+        this.movementSystem = new MovementSystem(worldWidth, worldHeight, WORLD_MARGIN, spatialGrid);
         this.hearingSystem = new HearingSystem(spatialGrid);
-        this.obstacles = Obstacle.createScene(currentScene, WORLD_WIDTH, WORLD_HEIGHT);
+        this.obstacles = Obstacle.createScene(currentScene, worldWidth, worldHeight);
         this.hearingSystem.setObstacles(this.obstacles);
     }
 
     public SpatialGrid getSpatialGrid() { return spatialGrid; }
     public MovementSystem getMovementSystem() { return movementSystem; }
     public HearingSystem getHearingSystem() { return hearingSystem; }
+    public double getWorldWidth() { return worldWidth; }
+    public double getWorldHeight() { return worldHeight; }
+
+    /** 在加载角色前由 MapContract 设置物理边界；网格、移动与预置障碍随之重建。 */
+    public synchronized void setWorldBounds(double width, double height) {
+        if (width <= WORLD_MARGIN * 2 || height <= WORLD_MARGIN * 2) throw new IllegalArgumentException("invalid world bounds");
+        if (!states.isEmpty()) throw new IllegalStateException("world bounds may only change before registering agents");
+        worldWidth = width;
+        worldHeight = height;
+        spatialGrid = new SpatialGrid(width, height, GRID_CELL_SIZE);
+        movementSystem = new MovementSystem(width, height, WORLD_MARGIN, spatialGrid);
+        obstacles = Obstacle.createScene(currentScene, width, height);
+        hearingSystem.setObstacles(obstacles);
+    }
 
     // ── Agent management ───────────────────────────────────────
 
@@ -152,6 +169,8 @@ public class SimulationWorld {
         if (self == null) return List.of();
         List<WorldEvent> out = new ArrayList<>();
         for (WorldEvent event : recentWorldEvents) {
+            // 尚无 VisionSystem/遮挡视线契约：VISUAL 只作为前端世界效果，不进入 Agent 私有认知。
+            if (event.type() == WorldEvent.Type.VISUAL) continue;
             boolean perceived = switch (event.scope()) {
                 case GLOBAL -> true;
                 case TARGET -> event.targets().contains(self.getAgentName());
@@ -192,7 +211,7 @@ public class SimulationWorld {
 
     public void setScene(String sceneName) {
         this.currentScene = sceneName;
-        this.obstacles = Obstacle.createScene(sceneName, WORLD_WIDTH, WORLD_HEIGHT);
+        this.obstacles = Obstacle.createScene(sceneName, worldWidth, worldHeight);
         this.movementSystem.setObstacles(this.obstacles);
         this.hearingSystem.setObstacles(this.obstacles);
         log.info("Scene changed to: {} ({} obstacles)", sceneName, obstacles.size());
@@ -244,12 +263,13 @@ public class SimulationWorld {
             obsList.add(o.toMap());
         }
         return new WorldSnapshot(tickCount, agentStates, obsList, System.currentTimeMillis(),
-                worldNarration, directorActive, currentScene);
+                worldNarration, directorActive, currentScene, worldWidth, worldHeight);
     }
 
     public record WorldSnapshot(int tick, List<Map<String, Object>> agents,
                                 List<Map<String, Object>> obstacles, long timestamp,
-                                String worldNarration, boolean directorActive, String scene) {
+                                String worldNarration, boolean directorActive, String scene,
+                                double worldWidth, double worldHeight) {
         public Map<String, Object> toMap() {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("tick", tick);
@@ -259,6 +279,8 @@ public class SimulationWorld {
             map.put("worldNarration", worldNarration);
             map.put("directorActive", directorActive);
             map.put("scene", scene);
+            map.put("worldWidth", worldWidth);
+            map.put("worldHeight", worldHeight);
             return map;
         }
     }

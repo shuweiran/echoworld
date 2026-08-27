@@ -95,6 +95,12 @@ public class Obstacle {
      * @return 合并后的 Obstacle 列表（最多 MAX_MERGE 个，超出仅保留大块）
      */
     public static List<Obstacle> fromCollisionGrid(int[][] collision, int tileSizePx, String label) {
+        return fromCollisionGrid(collision, tileSizePx, label, WORLD_W, WORLD_H);
+    }
+
+    /** 地图坐标就是世界坐标：MapContract 宽×高×tileSize 决定物理边界。 */
+    public static List<Obstacle> fromCollisionGrid(int[][] collision, int tileSizePx, String label,
+                                                   double worldWidth, double worldHeight) {
         List<Obstacle> out = new ArrayList<>();
         if (collision == null || collision.length == 0) return out;
         int h = collision.length;
@@ -103,8 +109,8 @@ public class Obstacle {
         // 世界坐标缩放：模拟世界 1000×600 铺满整个地图（x/y 独立等分，无留白）——
         // P-0811-G 修复：此前 min 缩放 + 居中留白，角色出生/移动落在 offset 留白区 → 「角色挤出地图外」。
         // 铺满后地图边界 = 世界边界，角色始终在地图内。
-        double tileW = WORLD_W / (double) w;
-        double tileH = WORLD_H / (double) h;
+        double tileW = worldWidth / (double) w;
+        double tileH = worldHeight / (double) h;
         double offsetX = 0.0;
         double offsetY = 0.0;
 

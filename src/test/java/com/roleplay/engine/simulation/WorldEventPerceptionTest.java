@@ -31,4 +31,13 @@ class WorldEventPerceptionTest {
         assertNull(WorldEvent.from(Map.of("type", "SOUND", "scope", "AREA", "text", "缺坐标")));
         assertNull(WorldEvent.from(Map.of("type", "PRIVATE", "scope", "TARGET", "text", "缺目标")));
     }
+
+    @Test
+    void visualIsNotInjectedIntoAgentPerceptionBeforeVisionSystemExists() {
+        SimulationWorld world = new SimulationWorld();
+        AgentState observer = new AgentState("观察者", 10, 10);
+        world.addWorldEvent(WorldEvent.from(Map.of("type", "VISUAL", "scope", "AREA", "x", 10, "y", 10,
+                "radius", 100, "text", "一道闪光")));
+        assertTrue(world.getPerceivedWorldEvents(observer).isEmpty());
+    }
 }

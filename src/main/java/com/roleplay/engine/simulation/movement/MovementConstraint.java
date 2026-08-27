@@ -39,6 +39,17 @@ import java.util.Set;
  */
 public class MovementConstraint {
 
+    private final SimulationWorld world;
+
+    /** 兼容既有纯规则单测；运行时由 SimulationService 注入同一 SimulationWorld。 */
+    public MovementConstraint() {
+        this.world = null;
+    }
+
+    public MovementConstraint(SimulationWorld world) {
+        this.world = world;
+    }
+
     /** ISOLATED：与 secretAgents/指定目标的最小安全距离（格）。 */
     public static final double ISOLATED_SAFE_DISTANCE = 60.0;
     /** ISOLATED：过近时把角色推到 安全距离×1.2 处（留出缓冲）。 */
@@ -319,10 +330,10 @@ public class MovementConstraint {
         return (h % 360) * Math.PI / 180.0;
     }
 
-    private static double clamp(double v) {
+    private double clamp(double v) {
         double min = SimulationWorld.WORLD_MARGIN + 20;
-        double maxX = SimulationWorld.WORLD_WIDTH - min;
-        double maxY = SimulationWorld.WORLD_HEIGHT - min;
+        double maxX = (world == null ? SimulationWorld.DEFAULT_WORLD_WIDTH : world.getWorldWidth()) - min;
+        double maxY = (world == null ? SimulationWorld.DEFAULT_WORLD_HEIGHT : world.getWorldHeight()) - min;
         return Math.max(min, Math.min(maxX, Math.min(maxY, v)));
     }
 

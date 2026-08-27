@@ -20,8 +20,8 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class MovementSystemWorldBoundTest {
 
-    private static final double W = SimulationWorld.WORLD_WIDTH;   // 1000
-    private static final double H = SimulationWorld.WORLD_HEIGHT;  // 600
+    private static final double W = SimulationWorld.DEFAULT_WORLD_WIDTH;
+    private static final double H = SimulationWorld.DEFAULT_WORLD_HEIGHT;
     private static final double DT = SimulationWorld.TICK_INTERVAL_MS / 1000.0; // 0.2s/tick
 
     private MovementSystem ms(List<Obstacle> obs) {

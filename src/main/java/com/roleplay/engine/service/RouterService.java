@@ -880,6 +880,7 @@ public class RouterService {
                     Message agentMsg = new Message(Message.Role.AGENT, output.agentName(), output.content());
                     agentMsg.setRoundNumber(roundCount);
                     agentMsg.setTrackId(output.trackId());
+                    agentMsg.setVisibleTo(output.visibleTo());
                     memory.addMessage(agentMsg);
 
                     Map<String, Object> outMap = new LinkedHashMap<>();
@@ -1294,8 +1295,12 @@ public class RouterService {
         contextParts.add("【轨道】\n" + trackId + " (" + trackMode + "模式)");
 
         // Summary context
-        String summary = memory.getSummaryContext();
-        if (!summary.isEmpty()) contextParts.add(summary);
+        // 压缩摘要没有逐角色 visibleTo 元数据；只允许在完整 merged 轨道读取，
+        // 防止 WEAK/ISOLATED 经长期记忆反向取回不可感知的秘密。
+        if ("merged".equalsIgnoreCase(trackMode)) {
+            String summary = memory.getSummaryContext();
+            if (!summary.isEmpty()) contextParts.add(summary);
+        }
 
         // 相关性检索只补充不在短期窗口内的旧消息；非 merged 轨道不检索无可见性标记的压缩块。
         String relatedMemory = memory.getRelevantMemoryContext(agentName, memoryQuery, 3, 2, 30,
@@ -1363,7 +1368,8 @@ public class RouterService {
                 if (!agentMap.containsKey(agentName)) continue; // P0-2 speaker 排除
                 AgentExecutor.Priority priority = computeSerialPriority(agentName);
                 ordered.add(new AgentExecutor.AgentTask(
-                        agentName, track.getId(), trackMode, priority, null));
+                        agentName, track.getId(), trackMode, priority,
+                        List.copyOf(track.getActiveAgents()), null));
             }
         }
         ordered.sort(Comparator.comparingInt(t -> t.priority().ordinal()));
@@ -1410,6 +1416,7 @@ public class RouterService {
                     Message agentMsg = new Message(Message.Role.AGENT, task.agentName(), content);
                     agentMsg.setRoundNumber(roundCount);
                     agentMsg.setTrackId(task.trackId());
+                    agentMsg.setVisibleTo(task.visibleTo());
                     memory.addMessage(agentMsg);
 
                     Map<String, Object> outMap = new LinkedHashMap<>();
@@ -1425,10 +1432,10 @@ public class RouterService {
                             sessionId, task.agentName(), content, task.trackId(),
                             String.valueOf(trackMap.getOrDefault("label", "")),
                             String.valueOf(trackMap.getOrDefault("mode", "merged")),
-                            List.of());
+                            task.visibleTo());
                     }
                     outputs.add(new AgentExecutor.AgentOutput(
-                            task.agentName(), content, task.trackId(), List.of(), elapsed, null));
+                            task.agentName(), content, task.trackId(), task.visibleTo(), elapsed, null));
                     latencies.add(elapsed);
                 }
             } catch (TaskCancelledException e) {

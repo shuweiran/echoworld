@@ -23,6 +23,7 @@ import { GalChoicesArea, GalInputArea } from '../gal/GalChoiceBar';
 import { useAutoPlaybackDone } from '../gal/useAutoPlaybackDone';
 import { api } from '../api/client';
 import { shouldShowWorldMsg } from './simGroupFilter';
+import { simChatPlaybackTiming } from './simChatConfig';
 import '../gal/gal.css';
 import '../gal/galGeneral.css';
 
@@ -71,6 +72,7 @@ export function SimGalChatPanel({ playerName, worldMsgs, sendText, pendingLines,
   const firstBatchRef = useRef(true);
   /** P-0814-A/B：自动推进 —— 本轮「播出完毕待推进」（新消息入队置位；自动推进 hook 消费清除） */
   const [playbackArmed, setPlaybackArmed] = useState(false);
+  const playbackTiming = simChatPlaybackTiming(!playerName?.trim());
 
   // ── 挂载：进入 GalStore live 模式（2D 世界对话流驱动；卸载退出） ──
   useEffect(() => {
@@ -105,12 +107,12 @@ export function SimGalChatPanel({ playerName, worldMsgs, sendText, pendingLines,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ── 打字机定时器（与 GalGeneralView 同款：每 25ms 推进 2 字符） ──
+  // ── 打字机定时器：只读取 PlaybackTiming 单一事实源（地图气泡不走此路径） ──
   useEffect(() => {
     if (!started || finished) return;
-    const t = setInterval(() => tick(2), 25);
+    const t = setInterval(() => tick(1), playbackTiming.tickMs);
     return () => clearInterval(t);
-  }, [started, finished, tick]);
+  }, [started, finished, tick, playbackTiming.tickMs]);
 
   // ── P-0813-G：消费待处理对话行（挂载 effect 先于本 effect 执行 → liveMode 已就绪） ──
   useEffect(() => {
@@ -132,9 +134,7 @@ export function SimGalChatPanel({ playerName, worldMsgs, sendText, pendingLines,
   useEffect(() => {
     const st = useGalStore.getState();
     if (!st.liveMode) return;
-    // P-0815-H（方案 A）：群聊按群过滤 —— 玩家在群中（groupInfo 非空）只入队当前群消息
-    // （所见即所得：群头成员 = 消息流角色）；自由对话模式（groupInfo 空）保持全量世界消息
-    // （2D 世界氛围保留）。群切换（groupInfo.id 变化）时 effect 重跑，seenRef 去重防重复入队。
+    // 群聊按群过滤：当前面板只阅读已加入的群。自由探索不能旁听全世界的完整台词。
     const currentGroupId = groupInfo?.id;
     let enqueued = false;
     for (const m of worldMsgs) {

@@ -4,30 +4,32 @@
  * 主人拍板方案（docs/前端问题调研-20260802.md 背景 + C-2 任务书）：
  *   1. 流式 = 前端打字机模拟：LLM 整句生成 → SSE/轮询推送 → 前端打字机播出；
  *      上一段播完（含句间停顿）才播下一段（播放队列严格串行）。
- *   2. 打字速度 3 字/秒；句间停顿 3 秒；仅输出语言文字（过滤非语言噪音，保留中文标点）；
+ *   2. Gal 面板只从本文件读取播放节奏；地图气泡直接出现，不参与打字机；
  *      每句话字数上限（前端渲染硬截断 + LLM prompt 轻提示双保险）。
  *
  * 所有可调参数集中于此，改这里即可全局调整（对齐 D-004「阈值勿 hardcode」纪律）。
  */
 
 export const simChatConfig = {
-  /** 打字机速度：字/秒（主人拍板 3 字/秒） */
-  typingCharsPerSec: 3,
-  /** 打字机逐字间隔 ms（1000 / 3 ≈ 333ms/字） */
-  typingTickMs: Math.round(1000 / 3),
-  /** 句间停顿 ms：上一段播完 → 停顿 → 下一段（主人拍板 3 秒） */
-  interSentencePauseMs: 3000,
+  /** 玩家当前对话的 UI 打字速度；只影响显示，不阻塞世界模拟。 */
+  typingCharsPerSec: 12,
+  /** 打字机逐字间隔 ms。 */
+  typingTickMs: Math.round(1000 / 12),
+  /** 句间停顿 ms：上一段播完 → 停顿 → 下一段。 */
+  interSentencePauseMs: 650,
   /** 暂停超时 ms：输入框有字 → 暂停播放；超时无操作 → 跳过当前句（主人拍板 60s） */
   pauseTimeoutMs: 60000,
   /** 句长上限（字）：渲染层硬截断（超长省略号）。建议 40-60 区间，取 60。
    *  与后端 TrackStrategy.MAX_SENTENCE_CHARS（角色发言 prompt 轻提示）对齐。 */
   maxSentenceChars: 60,
-  /** 2D 世界角色气泡文本截断上限（SimulationScene 渲染现状 50） */
-  maxBubbleChars: 50,
+  /** 2D 世界角色气泡只作「谁正在说」提示，不承担完整阅读。 */
+  maxBubbleChars: 20,
+  /** 同一画面最多展示的气泡数；完整文本进入当前对话面板。 */
+  maxVisibleBubbles: 3,
   /** 导演旁听仅加速本地回放，不加快后端 AI 思考/发言，方便观察连续对话。 */
-  observerTypingCharsPerSec: 12,
+  observerTypingCharsPerSec: 20,
   /** 旁听时两句之间的短停顿。 */
-  observerInterSentencePauseMs: 650,
+  observerInterSentencePauseMs: 400,
 } as const;
 
 /** 打字机参数的单行摘要（调试/演示用） */

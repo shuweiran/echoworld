@@ -60,6 +60,9 @@ public class SchedulerService {
 
     /** 对话占用角色提供者（SimulationService 注册：只读 ConversationManager.getActiveGroups()）。 */
     private volatile Supplier<Set<String>> occupiedSupplier = Set::of;
+    /** applyToWorld 每 tick 刷新；纯 applyToStates 仍以兼容默认值运行。 */
+    private volatile double activeWorldWidth = SimulationWorld.DEFAULT_WORLD_WIDTH;
+    private volatile double activeWorldHeight = SimulationWorld.DEFAULT_WORLD_HEIGHT;
 
     /** 到点判定距离（px）：SOLO/WORK 到达该距离内即站立不再重选点；WANDER/SOCIAL 无此限制持续游荡。 */
     private static final double ARRIVE_EPSILON = 40.0;
@@ -160,6 +163,8 @@ public class SchedulerService {
     /** 对世界全部角色落地当前窗口（SimulationService 注册为 pre-tick hook，先于移动）。 */
     public void applyToWorld(SimulationWorld world, long now) {
         if (!enabled || world == null) return;
+        activeWorldWidth = world.getWorldWidth();
+        activeWorldHeight = world.getWorldHeight();
         applyToStates(world.getAllStates().values(), now);
     }
 
@@ -239,20 +244,20 @@ public class SchedulerService {
 
     /** 区域内随机游荡点（WANDER/SOCIAL）。种子 = now + 角色名 hash → 同刻同点（确定性）。 */
     private double[] randomPointInRegion(ScheduleRegion r, String agentName, long now) {
-        if (r == null) return new double[]{500, 300};
+        if (r == null) return new double[]{activeWorldWidth / 2, activeWorldHeight / 2};
         Random rnd = new Random(now ^ (agentName == null ? 0L : agentName.hashCode()));
         double cx = r.cx() + (rnd.nextDouble() * 2 - 1) * r.radius() * 0.8;
         double cy = r.cy() + (rnd.nextDouble() * 2 - 1) * r.radius() * 0.8;
-        return new double[]{clamp(cx, 30, 970), clamp(cy, 30, 570)};
+        return new double[]{clamp(cx, 30, activeWorldWidth - 30), clamp(cy, 30, activeWorldHeight - 30)};
     }
 
     /** 窗口内固定停留点（SOLO/WORK）：区域中心 + 按 agent+slot 派生的确定性偏移（到点即站）。 */
     private double[] fixedPointInRegion(ScheduleRegion r, String agentName, int slot) {
-        if (r == null) return new double[]{500, 300};
+        if (r == null) return new double[]{activeWorldWidth / 2, activeWorldHeight / 2};
         Random rnd = new Random((agentName == null ? 0L : agentName.hashCode()) * 31L + slot * 7L);
         double ox = (rnd.nextDouble() * 2 - 1) * r.radius() * 0.5;
         double oy = (rnd.nextDouble() * 2 - 1) * r.radius() * 0.5;
-        return new double[]{clamp(r.cx() + ox, 30, 970), clamp(r.cy() + oy, 30, 570)};
+        return new double[]{clamp(r.cx() + ox, 30, activeWorldWidth - 30), clamp(r.cy() + oy, 30, activeWorldHeight - 30)};
     }
 
     private static double distance(AgentState s, double[] p) {

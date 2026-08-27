@@ -13,7 +13,8 @@ public record LocalPerceptionSnapshot(List<Peer> peers) {
         if (self == null || all == null || hearing == null) return new LocalPerceptionSnapshot(List.of());
         List<Peer> peers = new ArrayList<>();
         for (AgentState other : all) {
-            if (other == self || !hearing.canHearEachOther(self, other)) continue;
+            // “我感知到对方”是对方→我的单向传播，而非互相能听的组队条件。
+            if (other == self || !hearing.canHear(other, self, SpeechVolume.NORMAL)) continue;
             long distance = Math.round(self.distanceTo(other));
             peers.add(new Peer(other.getAgentName(), distance, distance < 35 ? "清晰" : distance < 90 ? "可听到" : "模糊"));
         }

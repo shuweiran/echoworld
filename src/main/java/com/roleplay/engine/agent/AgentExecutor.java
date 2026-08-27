@@ -86,6 +86,7 @@ public class AgentExecutor {
             String trackId,
             String trackMode,
             Priority priority,
+            List<String> visibleTo,
             Callable<String> task
     ) {}
 
@@ -215,7 +216,7 @@ public class AgentExecutor {
 
                     resultQueue.add(new AgentOutput(
                             task.agentName(), content, task.trackId(),
-                            List.of(), elapsed, null));
+                            task.visibleTo(), elapsed, null));
                     agentTaskManager.completeTask(it);
                 } catch (TaskCancelledException e) {
                     // D1: 任务被取消 —— 结果不入成功输出（RouterService 会跳过），
@@ -224,7 +225,7 @@ public class AgentExecutor {
                     it.saveUnfinished(e.getPartial());
                     resultQueue.add(new AgentOutput(
                             task.agentName(), null, task.trackId(),
-                            List.of(), elapsed,
+                            task.visibleTo(), elapsed,
                             "cancelled" + (e.getReason() != null && !e.getReason().isBlank()
                                     ? ": " + e.getReason() : "")));
                     log.info("Agent {} task {} cancelled: {}", task.agentName(), it.getId(), e.getReason());
@@ -234,7 +235,7 @@ public class AgentExecutor {
                             task.agentName(),
                             "[" + task.agentName() + " 走神了: " + e.getMessage() + "]",
                             task.trackId(),
-                            List.of(), elapsed, e.getMessage()));
+                            task.visibleTo(), elapsed, e.getMessage()));
                     agentTaskManager.failTask(it, e.getMessage());
                     log.warn("Agent {} failed: {}", task.agentName(), e.getMessage());
                 } finally {
@@ -335,7 +336,8 @@ public class AgentExecutor {
                             trackMode, List.of(), "", null, "", token);
                 };
 
-                tasks.add(new AgentTask(agentName, trackId, trackMode, priority, callable));
+                tasks.add(new AgentTask(agentName, trackId, trackMode, priority,
+                        List.copyOf(track.getActiveAgents()), callable));
             }
         }
 

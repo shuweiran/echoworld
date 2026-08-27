@@ -100,16 +100,17 @@ public class HearingSystem {
     }
 
     public boolean canHearEachOther(AgentState a, AgentState b) {
-        if (soundBlocked(a, b)) return false;
-        double dist = a.distanceTo(b);
-        double volA = computeVolume(a);
-        double volB = computeVolume(b);
-        double rangeA = a.getHearRange() * volA;
-        double rangeB = b.getHearRange() * volB;
-        double att = 1.0 / (1.0 + dist * dist * 0.0001);
-        double effA = rangeA * att * b.getHearRange() / 200.0;
-        double effB = rangeB * att * a.getHearRange() / 200.0;
-        return dist <= Math.min(effA, effB);
+        return canHear(a, b, SpeechVolume.NORMAL) && canHear(b, a, SpeechVolume.NORMAL);
+    }
+
+    /** 单向发言判定：speaker 的本次音量决定 listener 是否实际听到。 */
+    public boolean canHear(AgentState speaker, AgentState listener, SpeechVolume utteranceVolume) {
+        if (speaker == null || listener == null || soundBlocked(speaker, listener)) return false;
+        double distance = speaker.distanceTo(listener);
+        double volume = computeVolume(speaker) * (utteranceVolume == null ? 1.0 : utteranceVolume.multiplier());
+        double attenuation = 1.0 / (1.0 + distance * distance * 0.0001);
+        double effectiveRange = speaker.getHearRange() * volume * attenuation * listener.getHearRange() / 200.0;
+        return distance <= effectiveRange;
     }
 
     /** 非角色声源（例如 DM 创建的玻璃碎裂声）的空间听觉判定，仍受墙体与听力影响。 */

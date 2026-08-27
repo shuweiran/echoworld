@@ -114,14 +114,23 @@ public class SimulationController {
         // P-0811-G：可选契约 v1 地图 → collision 瓦片转障碍注入模拟世界（动态模拟用 LLM 布局）
         List<Obstacle> customObstacles = null;
         String mapLabel = null;
+        double mapWorldWidth = SimulationWorld.DEFAULT_WORLD_WIDTH;
+        double mapWorldHeight = SimulationWorld.DEFAULT_WORLD_HEIGHT;
         if (body.get("map") instanceof Map<?, ?> m && !m.isEmpty()) {
             try {
                 int[][] collision = mapCollisionGrid(m);
                 if (collision != null) {
                     int tileSize = m.get("tile_size") instanceof Number n ? n.intValue() : 32;
+                    int width = m.get("width") instanceof Number n ? n.intValue() : collision[0].length;
+                    int height = m.get("height") instanceof Number n ? n.intValue() : collision.length;
+                    if (width != collision[0].length || height != collision.length || width <= 0 || height <= 0) {
+                        throw new IllegalArgumentException("map dimensions do not match collision grid");
+                    }
                     Object nameObj = m.get("name");
                     String mapName = nameObj == null ? "LLM地图" : String.valueOf(nameObj);
-                    customObstacles = Obstacle.fromCollisionGrid(collision, tileSize, mapName);
+                    mapWorldWidth = (double) width * tileSize;
+                    mapWorldHeight = (double) height * tileSize;
+                    customObstacles = Obstacle.fromCollisionGrid(collision, tileSize, mapName, mapWorldWidth, mapWorldHeight);
                     mapLabel = mapName;
                 }
             } catch (Exception e) {
@@ -145,8 +154,14 @@ public class SimulationController {
 
         final List<Obstacle> selectedObstacles = customObstacles;
         final String selectedMapLabel = mapLabel;
-        Runnable load = () -> simulationService.initWithPersonas(
-                personas, sceneName, playerName, playerId, selectedObstacles, selectedMapLabel);
+        final double selectedWorldWidth = mapWorldWidth;
+        final double selectedWorldHeight = mapWorldHeight;
+        Runnable load = () -> {
+            // 必须先清空旧角色，运行时边界才可安全替换；无地图则回退兼容默认尺寸。
+            simulationService.clearAll();
+            world.setWorldBounds(selectedWorldWidth, selectedWorldHeight);
+            simulationService.initWithPersonas(personas, sceneName, playerName, playerId, selectedObstacles, selectedMapLabel);
+        };
         if (worldRuntime != null) worldRuntime.replaceSimulationWorld(load);
         else load.run();
         return Map.of("status", "ok", "message", "Loaded " + personas.size() + " characters into simulation");
@@ -281,8 +296,8 @@ public class SimulationController {
         if (state == null) return Map.of("status", "error", "message", "Agent not found");
         double x = body.getOrDefault("x", state.getX());
         double y = body.getOrDefault("y", state.getY());
-        x = Math.max(10, Math.min(SimulationWorld.WORLD_WIDTH - 10, x));
-        y = Math.max(10, Math.min(SimulationWorld.WORLD_HEIGHT - 10, y));
+        x = Math.max(10, Math.min(world.getWorldWidth() - 10, x));
+        y = Math.max(10, Math.min(world.getWorldHeight() - 10, y));
         state.setX(x);
         state.setY(y);
         state.clearTarget();
@@ -297,8 +312,8 @@ public class SimulationController {
         if (state == null) return Map.of("status", "error", "message", "Agent not found");
         double x = body.getOrDefault("x", state.getX());
         double y = body.getOrDefault("y", state.getY());
-        x = Math.max(10, Math.min(SimulationWorld.WORLD_WIDTH - 10, x));
-        y = Math.max(10, Math.min(SimulationWorld.WORLD_HEIGHT - 10, y));
+        x = Math.max(10, Math.min(world.getWorldWidth() - 10, x));
+        y = Math.max(10, Math.min(world.getWorldHeight() - 10, y));
         state.setTargetX(x);
         state.setTargetY(y);
         state.setHasTarget(true);
@@ -339,8 +354,8 @@ public class SimulationController {
         double ny = dy / len;
         double tx = state.getX() + nx * step;
         double ty = state.getY() + ny * step;
-        tx = Math.max(10, Math.min(SimulationWorld.WORLD_WIDTH - 10, tx));
-        ty = Math.max(10, Math.min(SimulationWorld.WORLD_HEIGHT - 10, ty));
+        tx = Math.max(10, Math.min(world.getWorldWidth() - 10, tx));
+        ty = Math.max(10, Math.min(world.getWorldHeight() - 10, ty));
         state.setTargetX(tx);
         state.setTargetY(ty);
         state.setHasTarget(true);

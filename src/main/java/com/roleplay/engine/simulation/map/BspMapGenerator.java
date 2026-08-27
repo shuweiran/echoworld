@@ -29,8 +29,9 @@ import java.util.Map;
 public final class BspMapGenerator {
 
     /** 默认参数（与 bsp.js 一致）。 */
-    public static final int DEFAULT_WIDTH = 24;
-    public static final int DEFAULT_HEIGHT = 16;
+    /** 一般 2D 世界默认不再是一屏地图：64×40 格、32px 瓦片即 2048×1280 世界。 */
+    public static final int DEFAULT_WIDTH = 64;
+    public static final int DEFAULT_HEIGHT = 40;
     public static final int DEFAULT_SEED = 20260801;
     public static final int DEFAULT_MIN_LEAF = 7;
     public static final int DEFAULT_MIN_ROOM = 3;
@@ -51,7 +52,7 @@ public final class BspMapGenerator {
         }
 
         /**
-         * 显式参数构造（P-0803-J 地图容量扩展）：width/height ≤0 → 默认 24×16；seed ≤0 → 默认种子；
+         * 显式参数构造（P-0803-J 地图容量扩展）：width/height ≤0 → 默认 64×40；seed ≤0 → 默认种子；
          * zonesCount &lt; 0 → 按面积自动缩放 {@link #scaledZonesCount}（默认 24×16 下等于 DEFAULT_ZONES_COUNT=3，
          * 旧调用方传 -1 行为不变；大图传 -1 自动获得与面积匹配的热点数）。
          */

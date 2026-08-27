@@ -102,17 +102,17 @@ class BspMapGeneratorTest {
     void structureContract() {
         Map<String, Object> m = BspMapGenerator.generate(BspMapGenerator.Options.defaults(20260801L));
         assertEquals(1, m.get("map_version"));
-        assertEquals(24, m.get("width"));
-        assertEquals(16, m.get("height"));
+        assertEquals(BspMapGenerator.DEFAULT_WIDTH, m.get("width"));
+        assertEquals(BspMapGenerator.DEFAULT_HEIGHT, m.get("height"));
         assertEquals(32, m.get("tile_size"));
 
         Map<String, Object> layers = (Map<String, Object>) m.get("layers");
         int[][] ground = grid(layers.get("ground"));
         int[][] collision = grid(layers.get("collision"));
-        assertEquals(16, ground.length);
-        assertEquals(16, collision.length);
-        assertEquals(24, ground[0].length);
-        assertEquals(24, collision[0].length);
+        assertEquals(BspMapGenerator.DEFAULT_HEIGHT, ground.length);
+        assertEquals(BspMapGenerator.DEFAULT_HEIGHT, collision.length);
+        assertEquals(BspMapGenerator.DEFAULT_WIDTH, ground[0].length);
+        assertEquals(BspMapGenerator.DEFAULT_WIDTH, collision[0].length);
 
         assertTrue(m.get("rooms") instanceof List<?> rooms && rooms.size() >= 4, "BSP 叶子应 ≥4");
         assertTrue(m.get("corridors") instanceof List<?> cors && !((List<?>) cors).isEmpty(), "应有走廊");

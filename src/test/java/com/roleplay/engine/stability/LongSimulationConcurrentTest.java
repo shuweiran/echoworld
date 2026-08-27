@@ -37,8 +37,8 @@ class LongSimulationConcurrentTest {
     private static final int AGENT_COUNT = 8;
 
     private static final double MIN_BOUND = SimulationWorld.WORLD_MARGIN;
-    private static final double MAX_X = SimulationWorld.WORLD_WIDTH - SimulationWorld.WORLD_MARGIN;
-    private static final double MAX_Y = SimulationWorld.WORLD_HEIGHT - SimulationWorld.WORLD_MARGIN;
+    private static final double MAX_X = SimulationWorld.DEFAULT_WORLD_WIDTH - SimulationWorld.WORLD_MARGIN;
+    private static final double MAX_Y = SimulationWorld.DEFAULT_WORLD_HEIGHT - SimulationWorld.WORLD_MARGIN;
 
     private SimulationWorld worldWithAgents() {
         SimulationWorld world = new SimulationWorld();

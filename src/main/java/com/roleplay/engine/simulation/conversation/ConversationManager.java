@@ -48,6 +48,11 @@ public class ConversationManager {
     private final Map<String, TopicManager> groupTopicManagers = new ConcurrentHashMap<>();
     /** 仅仲裁发言机会：DM/Track 不介入角色是否真正说话。 */
     private final SpeakerArbitrator speakerArbitrator = new SpeakerArbitrator();
+    /**
+     * LLM 生成线程只把待落地的发言放入此队列；世界 tick 线程随后用最新坐标与障碍解析实际听众。
+     * 生成时的 Track/Perception 上下文仅用于角色决策，绝不能当作最终投递名单。
+     */
+    private final Queue<SpeechCommitCommand> pendingSpeechCommits = new ConcurrentLinkedQueue<>();
     /** 生命周期 PASSIVE 硬门：角色仍在世界移动/渲染，但不自动入组或触发对话 LLM。 */
     private final Set<String> passiveAgents = ConcurrentHashMap.newKeySet();
     private final ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor();
@@ -112,6 +117,17 @@ public class ConversationManager {
      *  仅 2D 世界注入；等待中的无玩家组（AI-AI / 单 AI）超过该时长被 tick 自动解散（防 awaitPlayback
      *  永久阻塞、组内角色冻结）；有玩家成员的组不自动解散（玩家输入/点击唤醒，见 wakeGroupForAgent）。 */
     private volatile long groupAwaitTimeoutMs = 30_000;
+
+    /** LLM 返回但尚未落地的角色发言；位置不在这里缓存，必须在 commit 时重新读取。 */
+    public record PendingUtterance(String speakerId, String text, SpeechVolume volume,
+                                   long generationStartedAt, long generationFinishedAt) {}
+
+    /** 发言在世界线程落地后得到的实际听众快照。 */
+    public record SpeechDelivery(PendingUtterance utterance, Set<String> actualListeners,
+                                 long resolvedAtTick) {}
+
+    private record SpeechCommitCommand(PendingUtterance utterance,
+                                       java.util.function.Consumer<SpeechDelivery> onDelivered) {}
 
     /** P-0814-B：注入无玩家组等待播出完毕超时（SimulationService 构造时显式注入；未注入=默认 30s）。 */
     public void setGroupAwaitTimeoutMs(long ms) {
@@ -582,6 +598,9 @@ public class ConversationManager {
     }
 
     public void tick(long now) {
+        // 此方法由 SimulationWorld 的单一 tick 回调在移动更新之后调用；先提交已完成的 LLM 发言，
+        // 才开始本 tick 的新组识别。这样 resolve 与 delivery 使用同一个最新世界状态。
+        resolvePendingSpeechCommits();
         List<AgentState> allStates = new ArrayList<>(world.getAllStates().values());
         if (allStates.size() < 2) return;
 
@@ -748,6 +767,49 @@ public class ConversationManager {
     }
 
     /**
+     * 世界线程上的 Speech Commit 阶段。仅把发言写入真正听到的角色 perception；
+     * 不改变 Track 成员、不自动加入 Gal 对话，也不复用 LLM 请求时的 listener cache。
+     *
+     * <p>公开用于定向竞态测试；运行时只应由 {@link #tick(long)} 调用。</p>
+     */
+    public int resolvePendingSpeechCommits() {
+        int resolved = 0;
+        SpeechCommitCommand command;
+        while ((command = pendingSpeechCommits.poll()) != null) {
+            PendingUtterance utterance = command.utterance();
+            AgentState speaker = world == null ? null : world.getState(utterance.speakerId());
+            if (speaker == null) {
+                log.debug("Discard speech commit for departed speaker {}", utterance.speakerId());
+                continue;
+            }
+            Set<String> listeners = new LinkedHashSet<>();
+            for (AgentState listener : world.getAllStates().values()) {
+                if (listener == speaker) continue;
+                if (!world.getHearingSystem().canHear(speaker, listener, utterance.volume())) continue;
+                listeners.add(listener.getAgentName());
+                // Perception 与 UI/Track 分离：路过者可以听见，但不会因此进入当前对话组。
+                listener.getVisibleMessages().add("[听见] " + speaker.getAgentName() + "：" + utterance.text());
+            }
+            SpeechDelivery delivery = new SpeechDelivery(utterance, Set.copyOf(listeners), world.getTickCount());
+            try {
+                command.onDelivered().accept(delivery);
+            } catch (Exception e) {
+                log.warn("Speech commit callback failed for {}: {}", utterance.speakerId(), e.getMessage());
+            }
+            resolved++;
+        }
+        return resolved;
+    }
+
+    /** LLM 回调入队入口；调用者不得在此读取或缓存听众集合。 */
+    public void enqueueSpeechCommit(PendingUtterance utterance,
+                                    java.util.function.Consumer<SpeechDelivery> onDelivered) {
+        if (utterance == null || utterance.text() == null || utterance.text().isBlank()) return;
+        pendingSpeechCommits.add(new SpeechCommitCommand(utterance,
+                onDelivered == null ? ignored -> {} : onDelivered));
+    }
+
+    /**
      * 普通 AI 对话的自然离场：每轮结束后按节奏抽样，不打断正在生成的本轮发言。
      * 安全上限仍由策略保留，但正常结束优先由离场/剩余人数决定。
      */
@@ -883,6 +945,7 @@ public class ConversationManager {
             }
         }
 
+        long generationStartedAt = System.currentTimeMillis();
         Map<String, String> responses = new ConcurrentHashMap<>();
         CountDownLatch latch = new CountDownLatch(agentContexts.size());
         AtomicBoolean cancelled = new AtomicBoolean(false);
@@ -985,6 +1048,29 @@ public class ConversationManager {
         responses.replaceAll((name, response) -> decisions.get(name).text());
         responses.entrySet().removeIf(entry -> !decisions.get(entry.getKey()).speak());
 
+        // 只有常规 2D 世界把 LLM 输出改为「入队 → 下一个 world tick resolve → commit」。
+        // 剧本杀/狼人杀讨论使用 roundGate，并不运行 SimulationWorld tick，保持既有同步语义。
+        if (gate == null && world.isRunning() && !responses.isEmpty()) {
+            long generationFinishedAt = System.currentTimeMillis();
+            for (var entry : responses.entrySet()) {
+                SpeechDecision decision = decisions.get(entry.getKey());
+                PendingUtterance utterance = new PendingUtterance(entry.getKey(), entry.getValue(),
+                        decision == null ? SpeechVolume.NORMAL : decision.volume(),
+                        generationStartedAt, generationFinishedAt);
+                enqueueSpeechCommit(utterance, delivery -> commitRoundResults(group, strategy,
+                        Map.of(utterance.speakerId(), utterance.text()), delivery));
+            }
+            return;
+        }
+        commitRoundResults(group, strategy, responses, null);
+    }
+
+    /**
+     * 真正提交一轮已落地的发言。普通 2D 路径只会由 Speech Commit 回调进入这里；
+     * 非 tick 的剧本讨论保持同步直入，避免把其非空间轨道语义耦合到声学投递。
+     */
+    private void commitRoundResults(ConversationGroup group, ConversationStrategy strategy,
+                                    Map<String, String> responses, SpeechDelivery delivery) {
         strategy.processResults(group, responses, llmClient);
 
         // 演讲与广播合并地基：演讲模式（PUBLIC_SPEAKING）产出 → 统一广播管线。
@@ -1012,6 +1098,12 @@ public class ConversationManager {
         convEntry.put("mode", group.getMode().name());
         convEntry.put("tick", world.getTickCount());
         convEntry.put("round", group.getRoundCount());
+        if (delivery != null) {
+            convEntry.put("delivery_tick", delivery.resolvedAtTick());
+            convEntry.put("actual_listeners", new ArrayList<>(delivery.actualListeners()));
+            convEntry.put("generation_started_at", delivery.utterance().generationStartedAt());
+            convEntry.put("generation_finished_at", delivery.utterance().generationFinishedAt());
+        }
         for (var entry : responses.entrySet()) {
             String val = entry.getValue();
             if (val != null && val.length() > 80) val = val.substring(0, 80);

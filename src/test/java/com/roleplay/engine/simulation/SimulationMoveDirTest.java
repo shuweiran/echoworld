@@ -19,7 +19,7 @@ import static org.mockito.Mockito.mock;
  */
 class SimulationMoveDirTest {
 
-    private static final double W = SimulationWorld.WORLD_WIDTH;
+    private static final double W = SimulationWorld.DEFAULT_WORLD_WIDTH;
 
     private SimulationWorld worldWith(String name, double x, double y) {
         SimulationWorld world = new SimulationWorld();

@@ -36,6 +36,9 @@ public class MovementSystem {
         this.spatialGrid = spatialGrid;
     }
 
+    public double getWorldWidth() { return worldWidth; }
+    public double getWorldHeight() { return worldHeight; }
+
     public void setObstacles(List<Obstacle> obs) { this.obstacles = obs; }
 
     public void update(Collection<AgentState> agents, double dt) {

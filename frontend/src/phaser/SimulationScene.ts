@@ -15,6 +15,7 @@ import {
   type SimAgent, type SimSnapshot, type SimGroup, type SimObstacle,
 } from './simulationData';
 import { normalizeMap, tileColor, type ScriptMap, type MapZone } from './mapData';
+import { simChatConfig, truncateText } from './simChatConfig';
 // P-0816-B：地图内容渲染（zones/rooms/spawn/decor）复用 preview 的装饰计划纯函数单源
 import { buildDecorPlan, DEPTH_WATER, C_WATER_BLUE, type DecorCmd } from './decorData';
 
@@ -187,6 +188,8 @@ export class SimulationScene extends Phaser.Scene {
   private conversationPreviews = new Map<string, string>();
   /** agent → 气泡避让层数（重叠时向上抬，硬约束不重叠） */
   private bubbleLanes = new Map<string, number>();
+  /** 当前帧获得 UI 气泡配额的角色；世界发言本身不受该显示配额影响。 */
+  private visibleBubbleNames = new Set<string>();
 
   private callbacks: SceneCallbacks;
 
@@ -217,7 +220,7 @@ export class SimulationScene extends Phaser.Scene {
   private lastMoveDirSent = 0;
   /** P-0814-I：导演模式提示（无玩家角色时点击/方向键控制被禁止的 UI 提示） */
   private directorHint!: Phaser.GameObjects.Text;
-  /** P-0816-A：滚轮缩放基准（对齐 ScriptMapScene：baseZoom ~ 2×baseZoom；zoom=1 全景，>1 跟随玩家） */
+  /** 玩家模式默认近景；导演仍可缩回概览并自由观察。 */
   private baseZoom = 1;
   private zoomFollow = false;
 
@@ -256,6 +259,8 @@ export class SimulationScene extends Phaser.Scene {
     this.agentAnims = agentAnims || {};
     if (tileMap) this.tileMap = normalizeMap(tileMap) ?? tileMap;
     this.playerName = playerName || '';
+    // Viewport 与 World 解耦：玩家进入时先给附近区域，而非把整个世界强制塞进一屏。
+    if (this.playerName) this.baseZoom = 1.35;
     this.approachEnabled = !!approachEnabled;
   }
 
@@ -824,6 +829,14 @@ export class SimulationScene extends Phaser.Scene {
       // C-2：先算气泡避让层（基于本帧位置），再逐个 upsert（renderAgent 读层号）
       this.computeBubbleLanes(s.agents);
       for (const a of s.agents) this.upsertAgent(a);
+      // 首个含玩家的权威快照建立跟随；不等待用户手动滚轮才进入局部视口。
+      if (this.playerName && !this.zoomFollow) {
+        const me = this.agents.get(this.playerName);
+        if (me) {
+          this.cameras.main.startFollow(me, true, 0.15, 0.15);
+          this.zoomFollow = true;
+        }
+      }
       // 后端已移除的角色 → 删除渲染对象
       const alive = new Set(s.agents.map(a => a.agentName));
       for (const name of Array.from(this.agents.keys())) {
@@ -880,7 +893,7 @@ export class SimulationScene extends Phaser.Scene {
   }
 
   /**
-   * C-2：气泡避让层计算（硬约束：角色气泡不能重叠）。
+   * 气泡是空间提示而非完整聊天记录：先按关注/对话/距离取固定配额，再做避让。
    * 收集本帧可见气泡（filter 生效时只看单人），按 y 升序 x 升序确定性排序；
    * 逐个放入已放置矩形集合，重叠则向上抬一层（步进 22px，最多 4 层），
    * 层号存 bubbleLanes 供 renderAgent 使用（气泡锚定 agent 头部上方）。
@@ -893,19 +906,26 @@ export class SimulationScene extends Phaser.Scene {
     const MAX_LANES = 4;
     const FONT = 11;         // 气泡字号（renderAgent 同值）
     const MAX_W = 220;       // 气泡最大宽（renderAgent 同值）
-    const TRUNC = 50;        // 气泡文本截断（renderAgent 同值）
+    const TRUNC = simChatConfig.maxBubbleChars;
 
-    const entries: { name: string; x: number; y: number; w: number }[] = [];
+    const candidates: { name: string; x: number; y: number; w: number; priority: number }[] = [];
     for (const a of agents) {
       if (!a || !a.agentName) continue;
       const msg = this.conversationPreviews.get(a.agentName)
         || (a.currentMessage && !a.currentMessage.startsWith('(主控') ? a.currentMessage : '');
       if (!msg) continue;
       if (!this.conversationPreviews.has(a.agentName) && this.bubbleFilter != null && a.agentName !== this.bubbleFilter) continue;
-      const short = msg.length > TRUNC ? msg.slice(0, TRUNC) + '...' : msg;
+      const short = truncateText(msg, TRUNC);
       const tw = Math.min(short.length * FONT, MAX_W) + 16;
-      entries.push({ name: a.agentName, x: a.x, y: a.y, w: tw });
+      // 当前明确关注者 > 正在会话者 > 普通世界消息；同级取离镜头中心较近者。
+      const focus = this.bubbleFilter === a.agentName ? 100 : 0;
+      const talking = a.inConversation ? 50 : 0;
+      const dist = Math.hypot(a.x - this.cameras.main.midPoint.x, a.y - this.cameras.main.midPoint.y);
+      candidates.push({ name: a.agentName, x: a.x, y: a.y, w: tw, priority: focus + talking - dist / 10000 });
     }
+    candidates.sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name));
+    const entries = candidates.slice(0, simChatConfig.maxVisibleBubbles);
+    this.visibleBubbleNames = new Set(entries.map(e => e.name));
     entries.sort((a, b) => (a.y !== b.y ? a.y - b.y : a.x - b.x));
 
     const placed: { x0: number; x1: number; y0: number; y1: number }[] = [];
@@ -1024,9 +1044,9 @@ export class SimulationScene extends Phaser.Scene {
     // C-2：bubbleFilter 非空时只显示该 agent 气泡（世界内单轨只播一人）；避让层抬升防重叠
     const preview = this.conversationPreviews.get(a.agentName);
     const msg = preview || (a.currentMessage && !a.currentMessage.startsWith('(主控') ? a.currentMessage : '');
-    const showBubble = Boolean(preview) || Boolean(msg && (this.bubbleFilter == null || a.agentName === this.bubbleFilter));
+    const showBubble = Boolean(msg) && this.visibleBubbleNames.has(a.agentName);
     if (showBubble) {
-      const short = msg.length > 50 ? msg.slice(0, 50) + '...' : msg;
+      const short = truncateText(msg, simChatConfig.maxBubbleChars);
       const fontSize = 11;
       const textW = Math.min(short.length * fontSize, 220);
       const tw = textW + 16;

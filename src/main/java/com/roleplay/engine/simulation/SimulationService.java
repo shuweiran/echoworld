@@ -75,7 +75,7 @@ public class SimulationService {
     /** Phase 3 outer orchestrator (需求文档第十四条: Router → Orchestrator → Track/World). */
     private SimulationOrchestrator orchestrator;
     /** Phase 4: 轨道 → 运动约束（纯规则，零 LLM）。 */
-    private final MovementConstraint movementConstraint = new MovementConstraint();
+    private final MovementConstraint movementConstraint;
     /** Phase 4: 最近一次 orchestrator.tick 的轨道分配，供移动 tick 前的约束层使用。 */
     private volatile Map<String, TrackAssignment> lastTrackAssignments = Map.of();
     /** 演讲与广播合并地基：统一公告管线（AI 演讲产出 → 自动选形态 → 优先级队列 → SSE）。 */
@@ -128,6 +128,7 @@ public class SimulationService {
                              com.roleplay.engine.config.AppConfig appConfig,
                              SchedulerService schedulerService) {
         this.world = world;
+        this.movementConstraint = new MovementConstraint(world);
         this.llmClient = llmClient;
         this.databaseService = databaseService;
         this.interruptManager = interruptManager;
@@ -826,8 +827,8 @@ public class SimulationService {
             Object ax = d.get("target_x");
             Object ay = d.get("target_y");
             if (ax instanceof Number && ay instanceof Number) {
-                state.setTargetX(clamp(((Number) ax).doubleValue(), 30, SimulationWorld.WORLD_WIDTH - 30));
-                state.setTargetY(clamp(((Number) ay).doubleValue(), 30, SimulationWorld.WORLD_HEIGHT - 30));
+                state.setTargetX(clamp(((Number) ax).doubleValue(), 30, world.getWorldWidth() - 30));
+                state.setTargetY(clamp(((Number) ay).doubleValue(), 30, world.getWorldHeight() - 30));
                 state.setHasTarget(true);
             }
 
@@ -854,8 +855,13 @@ public class SimulationService {
         for (Map<String, Object> raw : rawEvents) {
             WorldEvent event = WorldEvent.from(raw);
             if (event == null) continue;
+            // SYSTEM 是 Engine 权限。自主 Director 不得用类型字段绕过世界事件限流。
+            if (event.type() == WorldEvent.Type.SYSTEM) {
+                log.warn("Ignoring autonomous DM SYSTEM event");
+                continue;
+            }
             long now = System.currentTimeMillis();
-            boolean bypassCooldown = userTriggered || event.type() == WorldEvent.Type.SYSTEM;
+            boolean bypassCooldown = userTriggered;
             if (!bypassCooldown && now - lastDirectorEventTime < DIRECTOR_EVENT_COOLDOWN_MS) continue;
             world.addWorldEvent(event);
             lastDirectorEventTime = now;
@@ -881,8 +887,8 @@ public class SimulationService {
         StringBuilder sb = new StringBuilder();
         sb.append("你是虚拟世界的导演/主控（DM）。决定世界事件、环境和角色高层目标；不要替角色决定具体说什么或是否说话。\n\n");
 
-        sb.append("世界：").append((int) SimulationWorld.WORLD_WIDTH).append("×")
-                .append((int) SimulationWorld.WORLD_HEIGHT).append("px，Tick #")
+        sb.append("世界：").append((int) world.getWorldWidth()).append("×")
+                .append((int) world.getWorldHeight()).append("px，Tick #")
                 .append(world.getTickCount()).append("，共").append(world.getAgentCount()).append("个角色\n\n");
 
         sb.append("角色状态：\n");
@@ -973,14 +979,14 @@ public class SimulationService {
             return new double[]{100 + Math.random() * 800, 100 + Math.random() * 400};
         }
         for (int i = 0; i < 30; i++) {
-            double x = 40 + Math.random() * (SimulationWorld.WORLD_WIDTH - 80);
-            double y = 40 + Math.random() * (SimulationWorld.WORLD_HEIGHT - 80);
+            double x = 40 + Math.random() * (world.getWorldWidth() - 80);
+            double y = 40 + Math.random() * (world.getWorldHeight() - 80);
             if (!insideAnyObstacle(x, y, obstacles)) return new double[]{x, y};
         }
         // 网格扫描：找第一个可走点
         double step = 30;
-        for (double y = 40; y < SimulationWorld.WORLD_HEIGHT - 40; y += step) {
-            for (double x = 40; x < SimulationWorld.WORLD_WIDTH - 40; x += step) {
+        for (double y = 40; y < world.getWorldHeight() - 40; y += step) {
+            for (double x = 40; x < world.getWorldWidth() - 40; x += step) {
                 if (!insideAnyObstacle(x, y, obstacles)) return new double[]{x, y};
             }
         }
