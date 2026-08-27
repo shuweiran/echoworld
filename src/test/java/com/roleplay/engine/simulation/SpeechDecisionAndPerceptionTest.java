@@ -1,9 +1,13 @@
 package com.roleplay.engine.simulation;
 
+import com.roleplay.engine.agent.Agent;
+import com.roleplay.engine.core.Persona;
+import com.roleplay.engine.simulation.conversation.ConversationManager;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -44,4 +48,95 @@ class SpeechDecisionAndPerceptionTest {
         assertTrue(hearing.canHear(a, b, SpeechVolume.SHOUT));
         assertFalse(hearing.canHear(b, a, SpeechVolume.WHISPER));
     }
+
+    @Test
+    void speechCommitDoesNotDeliverToListenerWhoLeavesWhileLlmIsPending() {
+        Fixture f = fixture("A", 0, 0, "B", 20, 0);
+        enqueue(f, utterance("A", SpeechVolume.NORMAL));
+        f.world.getState("B").setX(500);
+
+        ConversationManager.SpeechDelivery delivery = resolve(f);
+        assertAll(() -> assertTrue(delivery.actualListeners().isEmpty()),
+                () -> assertTrue(f.world.getState("B").getVisibleMessages().isEmpty()));
+    }
+
+    @Test
+    void speechCommitDeliversToListenerWhoEntersWhileLlmIsPending() {
+        Fixture f = fixture("A", 0, 0, "B", 500, 0);
+        enqueue(f, utterance("A", SpeechVolume.NORMAL));
+        f.world.getState("B").setX(20);
+
+        ConversationManager.SpeechDelivery delivery = resolve(f);
+        assertAll(() -> assertEquals(java.util.Set.of("B"), delivery.actualListeners()),
+                () -> assertTrue(f.world.getState("B").getVisibleMessages().getFirst().contains("A：测试发言")));
+    }
+
+    @Test
+    void speechCommitUsesSpeakersCurrentPositionNotGenerationPosition() {
+        Fixture f = fixture("A", 0, 0, "B", 500, 0);
+        enqueue(f, utterance("A", SpeechVolume.NORMAL));
+        f.world.getState("A").setX(480);
+
+        assertEquals(java.util.Set.of("B"), resolve(f).actualListeners());
+    }
+
+    @Test
+    void speechCommitRechecksWallAtDeliveryTime() {
+        Fixture f = fixture("A", 0, 0, "B", 20, 0);
+        enqueue(f, utterance("A", SpeechVolume.NORMAL));
+        f.world.setCustomObstacles(List.of(new Obstacle(Obstacle.Type.WALL, 8, -10, 4, 20, true, "隔墙")), "test-wall");
+
+        assertTrue(resolve(f).actualListeners().isEmpty());
+    }
+
+    @Test
+    void speechCommitUsesUtteranceVolumeRatherThanDefaultRange() {
+        Fixture whisper = fixture("A", 0, 0, "B", 90, 0);
+        enqueue(whisper, utterance("A", SpeechVolume.WHISPER));
+        assertTrue(resolve(whisper).actualListeners().isEmpty());
+
+        Fixture shout = fixture("A", 0, 0, "B", 90, 0);
+        enqueue(shout, utterance("A", SpeechVolume.SHOUT));
+        assertEquals(java.util.Set.of("B"), resolve(shout).actualListeners());
+    }
+
+    @Test
+    void speechCommitResolvesEntireListenerSetAfterConcurrentMovement() {
+        Fixture f = fixture("A", 0, 0, "B", 20, 0, "C", 20, 0, "D", 500, 0);
+        enqueue(f, utterance("A", SpeechVolume.NORMAL));
+        f.world.getState("B").setX(500);
+        f.world.getState("D").setX(20);
+
+        assertEquals(java.util.Set.of("C", "D"), resolve(f).actualListeners());
+    }
+
+    private ConversationManager.PendingUtterance utterance(String speaker, SpeechVolume volume) {
+        return new ConversationManager.PendingUtterance(speaker, "测试发言", volume, 100, 200);
+    }
+
+    private ConversationManager.SpeechDelivery resolve(Fixture fixture) {
+        assertEquals(1, fixture.manager.resolvePendingSpeechCommits());
+        assertNotNull(fixture.delivery.get());
+        return fixture.delivery.get();
+    }
+
+    private void enqueue(Fixture fixture, ConversationManager.PendingUtterance utterance) {
+        fixture.manager.enqueueSpeechCommit(utterance, fixture.delivery::set);
+    }
+
+    private Fixture fixture(Object... agents) {
+        SimulationWorld world = new SimulationWorld();
+        world.setCustomObstacles(List.of(), "test-open");
+        for (int i = 0; i < agents.length; i += 3) {
+            String name = (String) agents[i];
+            world.registerAgent(new Agent(new Persona(name, "测试人格"), "test", null),
+                    ((Number) agents[i + 1]).doubleValue(), ((Number) agents[i + 2]).doubleValue(), 200, 60);
+        }
+        ConversationManager manager = new ConversationManager();
+        manager.init(world, null, world::getAgent, world::getWorldNarration);
+        return new Fixture(world, manager, new AtomicReference<>());
+    }
+
+    private record Fixture(SimulationWorld world, ConversationManager manager,
+                           AtomicReference<ConversationManager.SpeechDelivery> delivery) {}
 }
