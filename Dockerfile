@@ -18,7 +18,7 @@ COPY --from=frontend-build /app/frontend/dist /tmp/frontend-dist
 # Keep backend-served simulation assets while refreshing the React bundle.
 RUN cp -R /tmp/frontend-dist/. src/main/resources/static/ \
     && mvn -q package -DskipTests \
-    && cp target/roleplay-engine-1.0.0-SNAPSHOT.jar /tmp/roleplay-engine.jar
+    && cp target/roleplay-engine-*.jar /tmp/roleplay-engine.jar
 
 FROM eclipse-temurin:21-jre-jammy
 WORKDIR /app
