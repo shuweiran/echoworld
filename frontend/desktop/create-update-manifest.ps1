@@ -9,7 +9,9 @@ $package = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\package.json') 
 $version = $package.version
 if ($version -eq '0.0.0') { throw 'Refusing to create an update manifest for version 0.0.0.' }
 if ($BaseUrl -notmatch '^https://') { throw 'BaseUrl must use HTTPS.' }
-$installer = Get-ChildItem -LiteralPath $ReleaseDir -File -Filter 'HuanjingBook-*-x64.exe' | Where-Object { $_.Name -notlike '*uninstaller*' } | Select-Object -First 1
+$productName = [string]$package.build.productName
+if ([string]::IsNullOrWhiteSpace($productName)) { throw 'package.json build.productName is required.' }
+$installer = Get-ChildItem -LiteralPath $ReleaseDir -File -Filter "$productName-*-x64.exe" | Where-Object { $_.Name -notlike '*uninstaller*' } | Select-Object -First 1
 if ($null -eq $installer) { throw 'Installer was not found in the release directory.' }
 $bytes = [System.IO.File]::ReadAllBytes($installer.FullName)
 $sha512Algorithm = [System.Security.Cryptography.SHA512]::Create()

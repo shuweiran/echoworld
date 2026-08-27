@@ -187,16 +187,10 @@ class ScriptPresentEndpointTest {
         dsBody.put("player", player);
         dsBody.put("player_key", key);
         postJson("/api/script/start_discussion", dsBody);
-        // 讨论自动收束进 VOTE（mock LLM 极快）；等至非 discussion 态
-        String phase = "";
-        for (int i = 0; i < 30; i++) {
-            String stRes = getJson("/api/script/status?player="
-                    + java.net.URLEncoder.encode(player, java.nio.charset.StandardCharsets.UTF_8)
-                    + "&player_key=" + java.net.URLEncoder.encode(key, java.nio.charset.StandardCharsets.UTF_8));
-            phase = mapper.readTree(stRes).path("phase").asText();
-            if (!"discussion".equals(phase)) break;
-            Thread.sleep(100);
-        }
+        // 讨论引擎的异步收束由服务层测试覆盖；HTTP 层直接进入投票，避免把线程调度时机
+        // 误判为 present 端点的回归。
+        JsonNode voteStart = mapper.readTree(postJson("/api/script/start_voting", dsBody));
+        assertEquals("vote", voteStart.path("phase").asText(), "应进入投票阶段");
         body.put("clue_id", "c2"); // 公开线索（无需持有）
         String lateRes = postJson("/api/script/present", body);
         JsonNode late = mapper.readTree(lateRes);

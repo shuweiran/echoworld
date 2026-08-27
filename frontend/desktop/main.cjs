@@ -96,6 +96,8 @@ async function startBackend(port) {
   const jar = engineJar();
   if (!fs.existsSync(jar)) throw new Error(`未找到后端程序：${jar}。请先执行 Maven 打包。`);
   const workspace = backendWorkspace();
+  const unixDomainTempDir = path.join(workspace, 'java-unix-domain');
+  fs.mkdirSync(unixDomainTempDir, { recursive: true });
   const logPath = path.join(workspace, 'backend.log');
   const log = fs.createWriteStream(logPath, { flags: 'a' });
   let exitMessage = '';
@@ -103,6 +105,10 @@ async function startBackend(port) {
     windowsHide: true,
     stdio: 'pipe',
     cwd: workspace,
+    env: {
+      ...process.env,
+      JDK_JAVA_OPTIONS: [process.env.JDK_JAVA_OPTIONS, `-Djdk.net.unixdomain.tmpdir=${unixDomainTempDir}`].filter(Boolean).join(' '),
+    },
   });
   backend.stdout.pipe(log);
   backend.stderr.pipe(log);

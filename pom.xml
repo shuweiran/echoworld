@@ -13,7 +13,7 @@
 
     <groupId>com.roleplay</groupId>
     <artifactId>roleplay-engine</artifactId>
-    <version>0.1.0</version>
+    <version>0.1.1</version>
     <name>EchoWorld</name>
     <description>Spatial multi-agent simulation engine with perception, selective speech and context isolation</description>
 

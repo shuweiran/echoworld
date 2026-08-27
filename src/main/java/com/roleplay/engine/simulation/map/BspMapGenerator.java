@@ -71,7 +71,9 @@ public final class BspMapGenerator {
      */
     public static int scaledZonesCount(int width, int height) {
         int area = Math.max(1, width) * Math.max(1, height);
-        double factor = Math.sqrt(area / (double) (DEFAULT_WIDTH * DEFAULT_HEIGHT));
+        // 热点密度的历史基准是 24×16；DEFAULT_WIDTH/HEIGHT 是一般 2D 世界的显示默认值，
+        // 不能改变显式大图的缩放曲线。
+        double factor = Math.sqrt(area / (double) (24 * 16));
         return Math.max(DEFAULT_ZONES_COUNT, (int) Math.round(DEFAULT_ZONES_COUNT * factor));
     }
 

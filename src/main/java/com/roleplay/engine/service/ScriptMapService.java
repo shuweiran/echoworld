@@ -125,8 +125,10 @@ public class ScriptMapService {
     public MapResult generateMap(String theme, String background, List<String> locations, List<String> clueLocations,
                                  long seed, int width, int height) {
         List<String> fallbackReasons = new ArrayList<>();
-        int effW = width > 0 ? width : BspMapGenerator.DEFAULT_WIDTH;
-        int effH = height > 0 ? height : BspMapGenerator.DEFAULT_HEIGHT;
+        // 剧本杀地图维持既有 24×16 契约；64×40 仅是一般 2D 世界的默认边界，不能让
+        // 未显式尺寸的剧本 LLM 输出突然与校验尺寸不一致。
+        int effW = width > 0 ? width : 24;
+        int effH = height > 0 ? height : 16;
         // P-0817-D（大图支持）：显式尺寸超上限 clamp（scene 预览 / script 双路径统一；默认尺寸不受影响）
         if (effW > mapMaxWidth || effH > mapMaxHeight) {
             int cw = Math.min(effW, mapMaxWidth);
