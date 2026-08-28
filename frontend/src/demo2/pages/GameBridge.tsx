@@ -10,7 +10,7 @@
  *  - 一般·2D探索(general+explore)：LLM 生成地图（POST /api/scenes/map，theme=场景描述；复用角色选择页缓存）→ 注入 /api/simulation 动态模拟（角色自动移动/对话）
  *  - 狼人杀(werewolf)：POST /api/werewolf/init（玩家 + AI 补满 8 人）→ ChatPage(狼人杀面板)
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useDemoStore } from '../store';
 import { useAppStore } from '../../store/appStore';
 import { api } from '../../api/client';
@@ -21,6 +21,8 @@ import { useGalStore } from '../../gal/GalStore';
 import { PhaserSimulationView } from '../../phaser/PhaserSimulationView';
 import type { ScriptMap } from '../../phaser/mapData';
 import type { GeneralScript, RoleCard } from '../types';
+
+const BabylonSimulationView = lazy(() => import('../../babylon/BabylonSimulationView').then(m => ({ default: m.BabylonSimulationView })));
 
 const WW_AI_NAMES = ['AI·白', 'AI·青', 'AI·玄', 'AI·墨', 'AI·雪', 'AI·枫', 'AI·岚', 'AI·渊'];
 
@@ -54,6 +56,7 @@ export function GameBridge() {
   const [chatSessionId, setChatSessionId] = useState('');
   // P-0820-M：一般模式 2D 探索统一使用设置页的结构地图配置（复用角色选择页缓存；无缓存则生成）
   const [exploreMap, setExploreMap] = useState<ScriptMap | null>(null);
+  const [explore3d, setExplore3d] = useState(false);
   const generalSessionId = useAppStore(s => s.sessionId);
   const getGeneralMap = useDemoStore(s => s.getGeneralMap);
   const setGeneralMap = useDemoStore(s => s.setGeneralMap);
@@ -262,7 +265,7 @@ export function GameBridge() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameMode]);
 
-  const title = gameMode === 'murder' ? '剧本杀对局' : gameMode === 'werewolf' ? '狼人杀' : (runMode === 'explore' ? '一般模式 · 2D 探索' : '一般模式 · 自由聊天');
+  const title = gameMode === 'murder' ? '剧本杀对局' : gameMode === 'werewolf' ? '狼人杀' : (runMode === 'explore' ? '一般模式 · 空间探索' : '一般模式 · 自由聊天');
 
   return (
     <div>
@@ -301,17 +304,34 @@ export function GameBridge() {
             /* P-0811-G：一般模式 2D 探索 = LLM 瓦片背景 + 双主控动态模拟（WorldDirector/TrackDirector 调控
                角色移动对话）；玩家角色点击地图可控制移动（SimulationScene.playerName 绑定）；LLM 地图瓦片
                渲染为背景 + 注入障碍。 */
-            <PhaserSimulationView
-              characters={gamePlayers.map(n => {
-                const r = roleByName.get(n);
-                return { name: n, persona: r?.personality || '', voice: r?.tts?.voice || '', background: r?.background || '' };
-              })}
-              scene={exploreMap ? 'custom' : 'park'}
-              map={exploreMap ?? undefined}
-              // P-0816-D：不传固定 height → 自适应模式（地图填满视口剩余高度，Phaser FIT 随容器放大）
-              playerName={withPlayer && playerRole ? playerRole.name : undefined}
-              galChat
-            />
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+                <button className="btn2 btn2-sm" onClick={() => setExplore3d(v => !v)}>
+                  {explore3d ? '🎮 切回 2D 调试视图' : '🌐 切换 3D 游戏视图'}
+                </button>
+              </div>
+              {explore3d ? (
+                <Suspense fallback={<div className="card2" style={{ padding: 32, textAlign: 'center' }}>正在加载 3D 世界…</div>}>
+                  <BabylonSimulationView
+                    map={exploreMap ?? undefined}
+                    playerName={withPlayer && playerRole ? playerRole.name : undefined}
+                    height="calc(100vh - 145px)"
+                  />
+                </Suspense>
+              ) : (
+                <PhaserSimulationView
+                  characters={gamePlayers.map(n => {
+                    const r = roleByName.get(n);
+                    return { name: n, persona: r?.personality || '', voice: r?.tts?.voice || '', background: r?.background || '' };
+                  })}
+                  scene={exploreMap ? 'custom' : 'park'}
+                  map={exploreMap ?? undefined}
+                  // P-0816-D：不传固定 height → 自适应模式（地图填满视口剩余高度，Phaser FIT 随容器放大）
+                  playerName={withPlayer && playerRole ? playerRole.name : undefined}
+                  galChat
+                />
+              )}
+            </div>
           ) : gameMode === 'general' && runMode === 'chat' ? (
             // P-0810-08：一般模式会话呈现入口 = Gal 界面（默认）；右上「经典视图」回退 ChatPage 同会话
             galClassic ? (

@@ -1,0 +1,2 @@
+asset_id,asset_name,source_vendor,source_product_id,author,acquired_date,license_type,commercial_use,attribution_required,modification_allowed,redistribution_restricted,ai_training_restricted,source_format,runtime_format,receipt_reference,notes
+local-private-mmd-avatar,本地私人角色模型,miHoYo,,流云景,2026-08-28,private-personal-use,no,not-specified,yes,yes,not-specified,PMX,GLB,本地使用规则.txt（不随仓库分发）,仅本机私人使用；原始资产与转换产物均受 Git 忽略；禁止商用、二次配布及随公开 Release 分发

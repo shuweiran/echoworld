@@ -4,12 +4,13 @@
  * 职责：内嵌 2D 面板 + 公告横幅（SSE announcement 驱动）+ 加载进度条 + 阶段横幅 +
  * 在场状态条 + 对话消息流（流式打字机渲染）+ 任务分配 + TTS 指示 + 底部输入区。
  */
-import { useEffect, useMemo, useRef } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
 import { api } from '../../api/client';
 import { AnnouncementBanner } from '../AnnouncementBanner';
 import { PhaserSimulationView } from '../../phaser/PhaserSimulationView';
 import { PhaserScriptMapView } from '../../phaser/PhaserScriptMapView';
+const BabylonSimulationView = lazy(() => import('../../babylon/BabylonSimulationView').then(m => ({ default: m.BabylonSimulationView })));
 import { ChatComposer } from './ChatComposer';
 import { MessageView } from './MessageView';
 import { GameAtmosphereBanner } from './GameAtmosphereBanner';
@@ -42,6 +43,7 @@ export interface MessageFlowProps {
 
 export function ChatMessageFlow({ showSimPanel, toggleSimPanel, scriptState, simChars, onRollback, onScriptRefresh, script }: MessageFlowProps) {
   const store = useAppStore();
+  const [simulation3d, setSimulation3d] = useState(false);
   // P-0819-O 稳定性修复：scriptStatus 每 3s 轮询会重渲染父组件；角色名单必须保持引用稳定，
   // 否则 PhaserScriptMapView 会把每次轮询误判为角色配置变化并重建 Phaser.Game。
   const scriptAiCharacters = useMemo(
@@ -150,6 +152,11 @@ export function ChatMessageFlow({ showSimPanel, toggleSimPanel, scriptState, sim
             <span style={{ fontSize: 13, color: 'var(--text-2)' }}>
               {store.mode === 'script' && scriptState?.mode === 'chat' ? '🗺️ 对局地图（氛围展示 · 只读）' : '🗺️ 2D 模拟（左地图 · 右聊天）'}
             </span>
+            {store.mode !== 'script' && (
+              <button className="btn btn-small" onClick={() => setSimulation3d(v => !v)} title="在同一权威模拟状态上切换 2D/3D 表现层">
+                {simulation3d ? '🎮 切回 2D' : '🌐 打开 3D'}
+              </button>
+            )}
             <button className="btn btn-smallall btn-danger" onClick={toggleSimPanel}>✕ 关闭</button>
           </div>
           {/* P-0803-H2：剧本杀对局显示 2D 模拟显示对局地图（PhaserScriptMapView），而非通用 park 场景 */}
@@ -166,6 +173,14 @@ export function ChatMessageFlow({ showSimPanel, toggleSimPanel, scriptState, sim
               onActionComplete={onScriptRefresh}
               decorStates={(scriptState.decor_states && typeof scriptState.decor_states === 'object') ? scriptState.decor_states : undefined}
             />
+          ) : simulation3d ? (
+            <Suspense fallback={<div style={{ padding: 24, color: 'var(--text-2)' }}>正在加载 3D 世界…</div>}>
+              <BabylonSimulationView
+                map={store.currentSceneMap || undefined}
+                playerName={store.currentPlayer}
+                height={420}
+              />
+            </Suspense>
           ) : store.currentSceneMap ? (
             // P-0813-E：一般模式聊天页 2D 视图 —— 只读瓦片图 → 交互式模拟视图
             // （瓦片背景 + 后端障碍注入 + SSE 位置同步 + 点击移动，复用 GameBridge 2D 探索同款链路）

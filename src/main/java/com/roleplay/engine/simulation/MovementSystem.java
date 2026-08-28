@@ -1,7 +1,11 @@
 package com.roleplay.engine.simulation;
 
+import com.roleplay.engine.simulation.navigation.NavigationPathfinder;
+
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 public class MovementSystem {
 
@@ -9,6 +13,9 @@ public class MovementSystem {
     private final double worldHeight;
     private final double margin;
     private final SpatialGrid spatialGrid;
+    private final NavigationPathfinder pathfinder = new NavigationPathfinder();
+    /** 本 tick 从障碍内部恢复的 Agent，本次目标期间不切换到 A*，避免恢复路径被重规划打断。 */
+    private final Set<String> recoveryAgents = new HashSet<>();
 
     public static final double SEPARATION_WEIGHT = 80.0;
     public static final double COHESION_WEIGHT = 30.0;
@@ -45,6 +52,7 @@ public class MovementSystem {
         spatialGrid.rebuild(agents);
 
         for (AgentState self : agents) {
+            if (!self.isHasTarget()) recoveryAgents.remove(self.getAgentName());
             if (self.isInConversation()) {
                 // P-0813-E：对话中的角色 —— AI 自主目标清掉并冻结速度（避免对话中乱跑）；
                 // 玩家手动指定目标（/target 端点 manualTarget，如 2D 点击）保留且不冻结：
@@ -153,8 +161,42 @@ public class MovementSystem {
         }
 
         if (self.isHasTarget()) {
-            double tdx = self.getTargetX() - self.getX();
-            double tdy = self.getTargetY() - self.getY();
+            double finalTargetX = self.getTargetX();
+            double finalTargetY = self.getTargetY();
+            boolean insideObstacle = isInsideObstacle(self);
+            boolean useNavigation = !self.isPlayerControlled()
+                    && !self.hasManualDirection()
+                    && !obstacles.isEmpty()
+                    && !insideObstacle
+                    && !recoveryAgents.contains(self.getAgentName());
+            if (insideObstacle) recoveryAgents.add(self.getAgentName());
+            // 卡在障碍内部时走旧的确定性推出路径，但提高一点牵引力，确保贴边恢复
+            // 不会在 60 tick 回归窗口内停在墙前；正常路径规划不使用该增益。
+            double targetWeight = insideObstacle ? TARGET_WEIGHT * 1.2 : TARGET_WEIGHT;
+            // 方向键是直接控制；点击目标、日程和 AI 目标统一使用服务端路径。
+            // 路径只在目标变化时规划，避免每个 tick 重建地图。
+            if (useNavigation && !self.hasNavigationPlan()
+                    && Math.hypot(finalTargetX - self.getX(), finalTargetY - self.getY()) > 5) {
+                List<NavigationPathfinder.Point> planned = pathfinder.findPath(
+                        self.getX(), self.getY(), finalTargetX, finalTargetY,
+                        worldWidth, worldHeight, obstacles);
+                self.setNavigationPath(planned.stream().map(p -> new double[]{p.x(), p.y()}).toList());
+            }
+            if (useNavigation) {
+                List<double[]> path = self.getNavigationPath();
+                int index = self.getNavigationWaypointIndex();
+                while (index < path.size()
+                        && Math.hypot(path.get(index)[0] - self.getX(), path.get(index)[1] - self.getY()) < 14) {
+                    self.advanceNavigationWaypoint();
+                    index = self.getNavigationWaypointIndex();
+                }
+                if (index < path.size()) {
+                    finalTargetX = path.get(index)[0];
+                    finalTargetY = path.get(index)[1];
+                }
+            }
+            double tdx = finalTargetX - self.getX();
+            double tdy = finalTargetY - self.getY();
             double tdist = Math.sqrt(tdx * tdx + tdy * tdy);
             if (tdist < 5) {
                 self.clearTarget();
@@ -163,7 +205,7 @@ public class MovementSystem {
                 double ny = tdy / tdist;
                 boolean blocked = false;
                 for (Obstacle obs : obstacles) {
-                    if (obs.intersectsLine(self.getX(), self.getY(), self.getTargetX(), self.getTargetY())) {
+                    if (obs.intersectsLine(self.getX(), self.getY(), finalTargetX, finalTargetY)) {
                         blocked = true;
                         // P-0814-I：沿墙绕行——直线被障碍打断时改为「切向滑行」而非原路弹回：
                         // 切向力（300）主导滑行方向，保留 30% 目标力防止被径向斥力（200）钉死，
@@ -175,14 +217,14 @@ public class MovementSystem {
                             forceX += ny * TANGENT_SLIDE_WEIGHT;
                             forceY += -nx * TANGENT_SLIDE_WEIGHT;
                         }
-                        forceX += nx * TARGET_WEIGHT * BLOCKED_TARGET_KEEP;
-                        forceY += ny * TARGET_WEIGHT * BLOCKED_TARGET_KEEP;
+                        forceX += nx * targetWeight * BLOCKED_TARGET_KEEP;
+                        forceY += ny * targetWeight * BLOCKED_TARGET_KEEP;
                         break;
                     }
                 }
                 if (!blocked) {
-                    forceX += nx * TARGET_WEIGHT;
-                    forceY += ny * TARGET_WEIGHT;
+                    forceX += nx * targetWeight;
+                    forceY += ny * targetWeight;
                 }
             }
         }
@@ -210,6 +252,13 @@ public class MovementSystem {
         }
 
         return new double[]{forceX, forceY};
+    }
+
+    private boolean isInsideObstacle(AgentState self) {
+        for (Obstacle obstacle : obstacles) {
+            if (obstacle.contains(self.getX(), self.getY())) return true;
+        }
+        return false;
     }
 
     private void applyForce(AgentState self, double[] force, double dt) {

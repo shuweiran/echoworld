@@ -16,6 +16,9 @@
     "desktop:update-manifest": "powershell -ExecutionPolicy Bypass -File ./desktop/create-update-manifest.ps1"
   },
   "dependencies": {
+    "@babylonjs/core": "^8.56.2",
+    "@babylonjs/loaders": "^8.56.2",
+    "babylon-mmd": "^1.0.0",
     "electron-updater": "^6.8.9",
     "phaser": "^3.90.0",
     "react": "^19.2.7",

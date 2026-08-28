@@ -34,6 +34,10 @@ public class AgentState {
     private volatile boolean playerControlled = false;
     /** P-0813-I：当前日程窗口文案（SchedulerService 每 tick 写入，SSE 可观测 + Agent 系统提示注入源）。 */
     private volatile String scheduleText = "";
+    /** 服务端权威导航路径；Babylon/Phaser 只消费快照，不负责改写路径。 */
+    private volatile List<double[]> navigationPath = List.of();
+    private volatile int navigationWaypointIndex = 0;
+    private volatile boolean navigationAttempted = false;
 
     public enum Stance { FOR, AGAINST, NEUTRAL }
 
@@ -86,10 +90,10 @@ public class AgentState {
     public List<String> getVisibleMessages() { return visibleMessages; }
 
     public double getTargetX() { return targetX; }
-    public void setTargetX(double targetX) { this.targetX = targetX; }
+    public void setTargetX(double targetX) { this.targetX = targetX; invalidateNavigation(); }
 
     public double getTargetY() { return targetY; }
-    public void setTargetY(double targetY) { this.targetY = targetY; }
+    public void setTargetY(double targetY) { this.targetY = targetY; invalidateNavigation(); }
 
     public boolean isHasTarget() { return hasTarget; }
     public void setHasTarget(boolean hasTarget) { this.hasTarget = hasTarget; }
@@ -129,6 +133,29 @@ public class AgentState {
         this.targetX = x;
         this.targetY = y;
         this.hasTarget = true;
+        invalidateNavigation();
+    }
+
+    private void invalidateNavigation() {
+        this.navigationPath = List.of();
+        this.navigationWaypointIndex = 0;
+        this.navigationAttempted = false;
+    }
+
+    public List<double[]> getNavigationPath() { return navigationPath; }
+
+    public boolean hasNavigationPlan() { return navigationAttempted; }
+
+    public int getNavigationWaypointIndex() { return navigationWaypointIndex; }
+
+    public void setNavigationPath(List<double[]> path) {
+        this.navigationPath = path == null ? List.of() : List.copyOf(path);
+        this.navigationWaypointIndex = 0;
+        this.navigationAttempted = true;
+    }
+
+    public void advanceNavigationWaypoint() {
+        if (navigationWaypointIndex < navigationPath.size()) navigationWaypointIndex++;
     }
 
     public Stance getStance() { return stance; }
@@ -152,6 +179,7 @@ public class AgentState {
         this.manualTargetSince = -1L;
         this.manualDirectionX = 0.0;
         this.manualDirectionY = 0.0;
+        invalidateNavigation();
     }
 
     public double distanceTo(AgentState other) {
@@ -183,6 +211,10 @@ public class AgentState {
         map.put("playerControlled", playerControlled);
         map.put("manualTarget", manualTarget);
         map.put("schedule", scheduleText);
+        map.put("navigationWaypoints", navigationPath.stream().map(point -> java.util.Map.of(
+                "x", Math.round(point[0] * 100.0) / 100.0,
+                "y", Math.round(point[1] * 100.0) / 100.0)).toList());
+        map.put("navigationWaypointIndex", navigationWaypointIndex);
         if (hasTarget) {
             map.put("targetX", Math.round(targetX * 100.0) / 100.0);
             map.put("targetY", Math.round(targetY * 100.0) / 100.0);

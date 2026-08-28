@@ -48,6 +48,9 @@ export interface SimObstacle {
 /** 后端 WorldSnapshot.toMap() / GET /api/simulation/state 的子集 */
 export interface SimSnapshot {
   tick?: number;
+  /** P-0827-B：由 MapContract 驱动的后端权威世界像素边界。 */
+  worldWidth?: number;
+  worldHeight?: number;
   agents?: SimAgent[];
   obstacles?: SimObstacle[];
   timestamp?: number;
