@@ -188,7 +188,10 @@ public class LLMClient {
     private String callSyncInternal0(List<Message> messages, String modelOverride,
                                     int maxTokens, double temperature,
                                     CancellationToken token, int timeoutSec) {
-
+        // P-0828-D：modelOverride 传 null/空白（如 ScriptGameService 私聊生成）时归一到当前配置的
+        // 默认模型——旧行为会先发一次 {"model":null} 的无效请求吃 400，再落到 fallback 模型，
+        // 导致该路径永远用不到主模型（ox alpha / glm-5.3-flash）。
+        if (modelOverride == null || modelOverride.isBlank()) modelOverride = defaultModel();
         String[] modelsToTry = {modelOverride, fallbackModel};
         Set<String> seen = new LinkedHashSet<>(Arrays.asList(modelsToTry));
 

@@ -39,9 +39,12 @@ spring:
 
 roleplay:
   llm:
-    api-base: "https://openrouter.ai/api/v1"
+    # P-0828-A（2026-08-28）：原配置 "stealth/ox-alpha"（OpenRouter 匿名隐身模型）测试期已结束，
+    # 官方 404 公告："This model was ZAI's GLM-5.3 Flash"（真身=智谱 GLM 系）。切换为智谱官方端点
+    # 同名模型 glm-5.3-flash（key=ROLEPLAY_LLM_API_KEY，本机为用户环境变量里的智谱 key）。
+    api-base: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     api-key: "${ROLEPLAY_LLM_API_KEY:}"
-    model: "stealth/ox-alpha"
+    model: "glm-5.3-flash"
     # P-0810-19：max-tokens / temperature 为「默认值」语义（旧值 4096/0.9 全源码无消费点=死配置）：
     #   - max-tokens：callJson 未显式传 maxTokens（null）时使用；全部既有调用点显式传值优先
     #     （概略 1200 / 完整剧本 4000 / 地图 8000）
@@ -62,9 +65,10 @@ roleplay:
   # 主控与角色对话分离：仲裁/逻辑整合、地图、角色与场景生成均走此配置。
   # 默认与角色 LLM 同端点同模型；可在设置页单独改为上下文与推理能力更强的模型。
   arbiter-llm:
-    api-base: "https://openrouter.ai/api/v1"
+    # P-0828-A：同上，ox alpha 真身后走智谱官方端点。api-key 缺省沿用 ROLEPLAY_LLM_API_KEY。
+    api-base: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
     api-key: "${ROLEPLAY_ARBITER_LLM_API_KEY:${ROLEPLAY_LLM_API_KEY:}}"
-    model: "stealth/ox-alpha"
+    model: "glm-5.3-flash"
   map-llm:
     # 仅用于可选的地图视觉审核（多模态图像输入）；地图/结构的生成本身改走 arbiter-llm。
     #   api-key 从环境变量 ROLEPLAY_MAP_LLM_API_KEY 注入（部署脚本读 openclaw.json models.providers.xiaomimimo-map.apiKey），不落源码
@@ -77,7 +81,9 @@ roleplay:
   monitor:
     # D26: fallback-model/timeout-seconds 由 LLMClient 从 roleplay.monitor.* 读取（AppConfig.MonitorConfig）——
     #      fallback-model=主模型失败后的兜底模型，timeout-seconds=单次 LLM HTTP 调用超时
-    fallback-model: "deepseek-v4-flash"
+    # P-0828-A：主链路已切智谱端点，兜底模型必须同端点可用（glm-4.7 实测 200）；
+    #      旧值 deepseek-v4-flash 是 OpenRouter 上的 ID，智谱端点不存在，重试兜底会直接失败。
+    fallback-model: "glm-4.7"
     timeout-seconds: 60
   memory:
     short-term-rounds: 20
