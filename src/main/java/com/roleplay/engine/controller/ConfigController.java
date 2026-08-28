@@ -1,5 +1,7 @@
 package com.roleplay.engine.controller;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.roleplay.engine.config.AppConfig;
 import com.roleplay.engine.aiimage.AiImageProperties;
 import com.roleplay.engine.aiimage.ImageGenService;
@@ -8,6 +10,11 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -22,6 +29,9 @@ public class ConfigController {
     private final AiImageProperties imageProperties;
     private final MimoTtsService ttsService;
     private final ImageGenService imageService;
+    private final ObjectMapper mapper = new ObjectMapper();
+    // 延迟创建：纯本地测试/启动不应因 JDK 网络选择器初始化失败而影响配置页。
+    private volatile HttpClient modelHttp;
 
     // In-memory config overrides (replaces api_key.json)
     private final Map<String, Object> runtimeConfig = new ConcurrentHashMap<>();
@@ -228,6 +238,74 @@ public class ConfigController {
             Map.of("id", "gpt-4o-mini", "name", "GPT-4o Mini"),
             Map.of("id", "gpt-4o", "name", "GPT-4o")
         ));
+    }
+
+    /**
+     * 从用户填写的 OpenAI-compatible API 地址读取模型列表。密钥只用于本次请求，
+     * 不写入响应或运行时配置；地址允许带 /v1、/v1/models 或完整 /models 路径。
+     */
+    @PostMapping("/models/discover")
+    public ResponseEntity<Map<String, Object>> discoverModels(@RequestBody Map<String, Object> body) {
+        String base = String.valueOf(body.getOrDefault("base_url", "")).trim();
+        String key = String.valueOf(body.getOrDefault("api_key", "")).trim();
+        try {
+            URI endpoint = modelsEndpoint(base);
+            HttpRequest.Builder request = HttpRequest.newBuilder(endpoint)
+                    .timeout(Duration.ofSeconds(8))
+                    .header("Accept", "application/json")
+                    .GET();
+            if (!key.isBlank()) request.header("Authorization", "Bearer " + key);
+            HttpResponse<String> response = modelHttp().send(request.build(), HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                return ResponseEntity.status(502).body(Map.of("error", "模型服务返回 HTTP " + response.statusCode()));
+            }
+            JsonNode root = mapper.readTree(response.body());
+            JsonNode data = root == null ? null : root.get("data");
+            List<Map<String, String>> models = new ArrayList<>();
+            if (data != null && data.isArray()) {
+                for (JsonNode item : data) {
+                    String id = item.path("id").asText("").trim();
+                    if (!id.isBlank()) models.add(Map.of("id", id, "name", item.path("name").asText(id)));
+                }
+            }
+            models.sort(Comparator.comparing(m -> m.get("id"), String.CASE_INSENSITIVE_ORDER));
+            return ResponseEntity.ok(Map.of("models", models, "endpoint", endpoint.toString()));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        } catch (Exception e) {
+            return ResponseEntity.status(502).body(Map.of("error", "无法连接模型服务，请检查地址和密钥"));
+        }
+    }
+
+    private URI modelsEndpoint(String raw) {
+        if (raw.isBlank()) throw new IllegalArgumentException("请先填写 API 地址");
+        URI input;
+        try { input = URI.create(raw); }
+        catch (IllegalArgumentException e) { throw new IllegalArgumentException("API 地址格式不正确"); }
+        if (!("http".equalsIgnoreCase(input.getScheme()) || "https".equalsIgnoreCase(input.getScheme()))
+                || input.getHost() == null || input.getUserInfo() != null) {
+            throw new IllegalArgumentException("API 地址必须是 http/https 地址");
+        }
+        String path = input.getPath() == null ? "" : input.getPath().replaceAll("/+$", "");
+        if (path.endsWith("/chat/completions")) path = path.substring(0, path.length() - "/chat/completions".length());
+        if (!path.endsWith("/models")) path += path.endsWith("/v1") ? "/models" : "/v1/models";
+        try { return new URI(input.getScheme(), input.getUserInfo(), input.getHost(), input.getPort(), path, null, null); }
+        catch (Exception e) { throw new IllegalArgumentException("API 地址格式不正确"); }
+    }
+
+    private HttpClient modelHttp() {
+        HttpClient current = modelHttp;
+        if (current == null) {
+            synchronized (this) {
+                current = modelHttp;
+                if (current == null) {
+                    current = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(5))
+                            .followRedirects(HttpClient.Redirect.NEVER).build();
+                    modelHttp = current;
+                }
+            }
+        }
+        return current;
     }
 
     @GetMapping("/voice")

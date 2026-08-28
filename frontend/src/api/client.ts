@@ -547,7 +547,10 @@ export const api = {
     request<any>('/api/config/apikey', { method: 'POST', body: JSON.stringify({ api_key: apiKey, api_base: apiBase || '', model: model || '', language: language || 'zh', track_activity: trackActivity || 'auto' }) }),
   getLanguage: () => request<{language: string}>('/api/config/language'),
   setLanguage: (language: string) => request<any>('/api/config/language', { method: 'POST', body: JSON.stringify({ language }) }),
-  getModelRecommendations: () => request<any>('/api/config/models'),
+    getModelRecommendations: () => request<any>('/api/config/models'),
+    discoverModels: (baseUrl: string, apiKey: string) => request<{ models: Array<{ id: string; name?: string }> }>('/api/config/models/discover', {
+      method: 'POST', body: JSON.stringify({ base_url: baseUrl, api_key: apiKey }), timeout: 12000,
+    }),
   getVoiceConfig: () => request<any>('/api/config/voice'),
   setVoiceConfig: (voiceEnabled: boolean) => request<any>('/api/config/voice', { method: 'POST', body: JSON.stringify({ voice_enabled: voiceEnabled }) }),
   /** LLM / 地图 LLM / TTS / ComfyUI 图片生成的统一运行时配置。GET 不返回明文密钥。 */

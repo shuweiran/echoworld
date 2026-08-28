@@ -33,11 +33,38 @@ export function SettingsPage() {
   const [draft, setDraft] = useState<Settings>(settings);
   const [toast, setToast] = useState('');
   const [asset, setAsset] = useState({ name: '', type: '角色头像', path: '' });
+  const [discoveredModels, setDiscoveredModels] = useState<Array<{ id: string; name?: string }>>([]);
+  const [modelsLoading, setModelsLoading] = useState(false);
+  const [modelsMessage, setModelsMessage] = useState('');
 
   // 本地默认配置保持不变；这里只读取后端“外部接入状态”，不把掩码密钥覆盖到表单。
   useEffect(() => {
     api.getIntegrationConfig().catch(() => undefined);
   }, []);
+
+  // API 地址变化后自动探测 OpenAI-compatible /v1/models；失败时不打扰手工输入。
+  useEffect(() => {
+    const baseUrl = draft.llm.apiBase.trim();
+    if (!baseUrl) { setDiscoveredModels([]); setModelsMessage(''); return; }
+    let active = true;
+    const timer = setTimeout(async () => {
+      if (!active) return;
+      setModelsLoading(true);
+      setModelsMessage('正在读取模型…');
+      try {
+        const result = await api.discoverModels(baseUrl, draft.llm.apiKey);
+        if (active) {
+          setDiscoveredModels(result.models || []);
+          setModelsMessage(result.models?.length ? `已找到 ${result.models.length} 个模型` : '服务未返回可选模型');
+        }
+      } catch {
+        if (active) { setDiscoveredModels([]); setModelsMessage('暂未读取到模型，可继续手工填写'); }
+      } finally {
+        if (active) setModelsLoading(false);
+      }
+    }, 500);
+    return () => { active = false; clearTimeout(timer); };
+  }, [draft.llm.apiBase, draft.llm.apiKey]);
 
   const set = (patch: Partial<Settings>) => setDraft(d => ({ ...d, ...patch }));
   const setLlm = (p: Partial<Settings['llm']>) => set({ llm: { ...draft.llm, ...p } });
@@ -88,7 +115,15 @@ export function SettingsPage() {
       {tab === 'llm' && (
         <div className="settings-grid">
           <div className="field"><HintLabel text="🌐 AI 服务地址" detail="AI 服务商提供的接口网址。使用默认服务时不用修改。" /><input value={draft.llm.apiBase} onChange={e => setLlm({ apiBase: e.target.value })} /></div>
-          <div className="field"><HintLabel text="🧠 AI 名称" detail="服务商给出的模型名称，例如 deepseek-chat。不确定时保留默认。" /><input value={draft.llm.model} onChange={e => setLlm({ model: e.target.value })} /></div>
+          <div className="field"><HintLabel text="🧠 AI 名称" detail="服务商给出的模型名称。不填写密钥也可以尝试读取公开模型列表；下拉栏仅在读取到模型后显示。" />
+            <input value={draft.llm.model} onChange={e => setLlm({ model: e.target.value })} list="discovered-llm-models" placeholder="例如 deepseek-chat" />
+            <datalist id="discovered-llm-models">{discoveredModels.map(model => <option key={model.id} value={model.id}>{model.name && model.name !== model.id ? model.name : undefined}</option>)}</datalist>
+            {discoveredModels.length > 0 && <select aria-label="选择已检索到的模型" value={discoveredModels.some(model => model.id === draft.llm.model) ? draft.llm.model : ''} onChange={e => e.target.value && setLlm({ model: e.target.value })}>
+              <option value="">从服务商模型列表选择</option>
+              {discoveredModels.map(model => <option key={model.id} value={model.id}>{model.name && model.name !== model.id ? `${model.name}（${model.id}）` : model.id}</option>)}
+            </select>}
+            <span className="hint">{modelsLoading ? '正在根据 API 地址检索…' : modelsMessage || '填写或修改 API 地址后会自动检索'}</span>
+          </div>
           <div className="field"><HintLabel text="🔑 访问密钥" detail="用于连接你的 AI 服务的私人凭据。仅在使用自己的服务时填写，勿分享给他人。" /><input type="password" value={draft.llm.apiKey} onChange={e => setLlm({ apiKey: e.target.value })} placeholder="sk-..." /></div>
           <div className="field"><HintLabel text={`🌡️ 回答创意度（${draft.llm.temperature}）`} detail="数值越低回答越稳定，越高越有变化。0.7 是平衡选择。" /><input type="range" min={0} max={2} step={0.1} value={draft.llm.temperature} onChange={e => setLlm({ temperature: Number(e.target.value) })} /></div>
           <div className="field"><HintLabel text={`📏 单次回答长度（${draft.llm.maxTokens}）`} detail="AI 一次最多写多少内容。数值越大可写得更长，也会更慢、更耗额度。" /><input type="number" min={256} max={16384} step={256} value={draft.llm.maxTokens} onChange={e => setLlm({ maxTokens: Number(e.target.value) })} /></div>
