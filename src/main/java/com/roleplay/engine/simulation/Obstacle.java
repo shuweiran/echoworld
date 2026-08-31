@@ -10,9 +10,15 @@ public class Obstacle {
     private final double x, y, width, height;
     private final boolean blocksSound;
     private final String label;
+    private final String floorId;
 
     public Obstacle(Type type, double x, double y, double width, double height,
                     boolean blocksSound, String label) {
+        this(type, x, y, width, height, blocksSound, label, "ground");
+    }
+
+    public Obstacle(Type type, double x, double y, double width, double height,
+                    boolean blocksSound, String label, String floorId) {
         this.type = type;
         this.x = x;
         this.y = y;
@@ -20,6 +26,7 @@ public class Obstacle {
         this.height = height;
         this.blocksSound = blocksSound;
         this.label = label != null ? label : "";
+        this.floorId = floorId == null || floorId.isBlank() ? "ground" : floorId;
     }
 
     public Type getType() { return type; }
@@ -29,6 +36,8 @@ public class Obstacle {
     public double getHeight() { return height; }
     public boolean blocksSound() { return blocksSound; }
     public String getLabel() { return label; }
+    public String getFloorId() { return floorId; }
+    public boolean belongsToFloor(String floor) { return floorId.equals(floor == null ? "ground" : floor); }
 
     public double getCenterX() { return x + width / 2; }
     public double getCenterY() { return y + height / 2; }
@@ -76,6 +85,7 @@ public class Obstacle {
         m.put("height", height);
         m.put("blocksSound", blocksSound);
         m.put("label", label);
+        m.put("floorId", floorId);
         return m;
     }
 
@@ -144,6 +154,15 @@ public class Obstacle {
             }
         }
         return out;
+    }
+
+    /** Same deterministic collision merge, tagged for one authoritative floor. */
+    public static List<Obstacle> fromCollisionGrid(int[][] collision, int tileSizePx, String label,
+                                                   double worldWidth, double worldHeight, String floorId) {
+        return fromCollisionGrid(collision, tileSizePx, label, worldWidth, worldHeight).stream()
+                .map(obstacle -> new Obstacle(obstacle.type, obstacle.x, obstacle.y, obstacle.width, obstacle.height,
+                        obstacle.blocksSound, obstacle.label, floorId))
+                .toList();
     }
 
     private static final double WORLD_W = 1000.0;

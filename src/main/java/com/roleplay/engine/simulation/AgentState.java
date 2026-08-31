@@ -4,6 +4,7 @@ import com.roleplay.engine.simulation.spatial.AgentSpatialComponent;
 import com.roleplay.engine.simulation.spatial.ControlAuthority;
 import com.roleplay.engine.simulation.spatial.NavLocation;
 import com.roleplay.engine.simulation.spatial.Transform3D;
+import com.roleplay.engine.simulation.navigation.PathStep;
 import com.roleplay.engine.simulation.world.EntityKind;
 import com.roleplay.engine.simulation.world.WorldEntity;
 
@@ -25,6 +26,8 @@ public class AgentState implements WorldEntity {
     private final List<String> visibleMessages = new CopyOnWriteArrayList<>();
     private volatile double targetX = -1;
     private volatile double targetY = -1;
+    private volatile String targetFloorId = "ground";
+    private volatile String targetSurfaceId = "ground";
     private volatile boolean hasTarget = false;
     /** Phase 4: 手动指定的目标（/target 端点）——MovementConstraint 不得覆盖。 */
     private volatile boolean manualTarget = false;
@@ -41,6 +44,8 @@ public class AgentState implements WorldEntity {
     private volatile List<double[]> navigationPath = List.of();
     private volatile int navigationWaypointIndex = 0;
     private volatile boolean navigationAttempted = false;
+    private volatile List<PathStep> navigationSteps = List.of();
+    private volatile int navigationStepIndex = 0;
 
     public enum Stance { FOR, AGAINST, NEUTRAL }
 
@@ -141,8 +146,14 @@ public class AgentState implements WorldEntity {
     /** Phase 4 便捷方法：设置目标点并标记已有目标。 */
     @Deprecated(forRemoval = false)
     public void setTarget(double x, double y) {
+        setTarget(x, y, navLocation().floorId(), navLocation().surfaceId());
+    }
+
+    public void setTarget(double x, double y, String floorId, String surfaceId) {
         this.targetX = x;
         this.targetY = y;
+        this.targetFloorId = floorId == null || floorId.isBlank() ? navLocation().floorId() : floorId;
+        this.targetSurfaceId = surfaceId == null || surfaceId.isBlank() ? navLocation().surfaceId() : surfaceId;
         this.hasTarget = true;
         invalidateNavigation();
     }
@@ -159,6 +170,14 @@ public class AgentState implements WorldEntity {
         return true;
     }
 
+    public boolean setAutonomousTarget(double x, double y, String floorId, String surfaceId) {
+        if (isPlayerControlled()) return false;
+        this.manualTarget = false;
+        this.manualTargetSince = -1L;
+        setTarget(x, y, floorId, surfaceId);
+        return true;
+    }
+
     /** 显式玩家/外部输入目标；不会被 AI 导航系统重新规划。 */
     public void setPlayerIntentTarget(double x, double y) {
         setTarget(x, y);
@@ -166,9 +185,14 @@ public class AgentState implements WorldEntity {
         setManualTarget(true);
     }
 
+    public String getTargetFloorId() { return targetFloorId; }
+    public String getTargetSurfaceId() { return targetSurfaceId; }
+
     private void invalidateNavigation() {
         this.navigationPath = List.of();
         this.navigationWaypointIndex = 0;
+        this.navigationSteps = List.of();
+        this.navigationStepIndex = 0;
         this.navigationAttempted = false;
     }
 
@@ -182,6 +206,49 @@ public class AgentState implements WorldEntity {
         this.navigationPath = path == null ? List.of() : List.copyOf(path);
         this.navigationWaypointIndex = 0;
         this.navigationAttempted = true;
+    }
+
+    public List<PathStep> getNavigationSteps() { return navigationSteps; }
+    public int getNavigationStepIndex() { return navigationStepIndex; }
+    public void setNavigationSteps(List<PathStep> steps) {
+        this.navigationSteps = steps == null ? List.of() : List.copyOf(steps);
+        this.navigationStepIndex = 0;
+        this.navigationAttempted = true;
+    }
+    public void advanceNavigationStep() {
+        if (navigationStepIndex < navigationSteps.size()) navigationStepIndex++;
+    }
+    public void clearNavigationSteps() { navigationSteps = List.of(); navigationStepIndex = 0; }
+    public void invalidateNavigationRoute() { invalidateNavigation(); }
+
+    /** Called by MovementSystem on the world tick; only a route's portal step may change floor. */
+    public boolean processAuthoritativeRoute() {
+        while (navigationStepIndex < navigationSteps.size()) {
+            PathStep step = navigationSteps.get(navigationStepIndex);
+            double distance = Math.hypot(step.target().x() - getX(), step.target().z() - getY());
+            if (step.type() == PathStep.Type.WALK || step.type() == PathStep.Type.INTERACT) {
+                if (distance > 14.0) return false;
+                advanceNavigationStep();
+                continue;
+            }
+            // A portal step stores its destination. Legality is decided at the entry
+            // represented by the preceding same-floor route step, never by destination XY.
+            if (navigationStepIndex > 0) {
+                PathStep entry = navigationSteps.get(navigationStepIndex - 1);
+                if (!entry.floorId().equals(navLocation().floorId())
+                        || Math.hypot(entry.target().x() - getX(), entry.target().z() - getY()) > 14.0) return false;
+            }
+            if (navLocation().floorId().equals(step.floorId())) {
+                advanceNavigationStep();
+                continue;
+            }
+            setVx(0.0); setVy(0.0);
+            spatial.setNavLocation(new NavLocation(step.surfaceId(), step.floorId(), step.target(), -1L));
+            setX(step.target().x()); setY(step.target().z());
+            advanceNavigationStep();
+            return true; // deterministic invariant: at most one floor transition per world tick
+        }
+        return false;
     }
 
     public void advanceNavigationWaypoint() {
@@ -224,6 +291,8 @@ public class AgentState implements WorldEntity {
         map.put("agentName", agentName);
         map.put("x", Math.round(getX() * 100.0) / 100.0);
         map.put("y", Math.round(getY() * 100.0) / 100.0);
+        map.put("floorId", spatial.navLocation().floorId());
+        map.put("surfaceId", spatial.navLocation().surfaceId());
         // 2026-08-15 P-0815-G（玩家地图运动控制深度调研）：快照补发 vx/vy（px/s）——
         // 前端 SimulationScene.update 的「速度外推」依赖快照 vx/vy（sp>1 才激活），此前 toMap 不含该字段 →
         // 外推恒不生效，SSE 2.5Hz 广播下角色每 400ms 一次「突进+冻结」（移动卡顿/不跟手根因之一）；
@@ -258,13 +327,18 @@ public class AgentState implements WorldEntity {
                 "polygonRef", spatial.navLocation().polygonRef()));
         map.put("manualTarget", manualTarget);
         map.put("schedule", scheduleText);
-        map.put("navigationWaypoints", navigationPath.stream().map(point -> java.util.Map.of(
-                "x", Math.round(point[0] * 100.0) / 100.0,
-                "y", Math.round(point[1] * 100.0) / 100.0)).toList());
+        map.put("navigationWaypoints", navigationSteps.stream().map(step -> java.util.Map.<String, Object>of(
+                "x", Math.round(step.target().x() * 100.0) / 100.0,
+                "y", Math.round(step.target().z() * 100.0) / 100.0,
+                "floorId", step.floorId(), "surfaceId", step.surfaceId(),
+                "transition", step.type() == PathStep.Type.USE_PORTAL,
+                "connectorId", step.worldObjectId())).toList());
         map.put("navigationWaypointIndex", navigationWaypointIndex);
         if (hasTarget) {
             map.put("targetX", Math.round(targetX * 100.0) / 100.0);
             map.put("targetY", Math.round(targetY * 100.0) / 100.0);
+            map.put("targetFloorId", targetFloorId);
+            map.put("targetSurfaceId", targetSurfaceId);
         }
         return map;
     }

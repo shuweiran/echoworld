@@ -17,6 +17,9 @@ export interface SimAgent {
   lifecycleStatus?: string;
   x: number;
   y: number;
+  floorId?: string;
+  surfaceId?: string;
+  track?: string;
   emotion?: string;
   emotionEmoji?: string;
   hearRange?: number;
@@ -26,6 +29,17 @@ export interface SimAgent {
   hasTarget?: boolean;
   targetX?: number;
   targetY?: number;
+  targetFloorId?: string;
+  targetSurfaceId?: string;
+  navigationWaypoints?: Array<{
+    x: number;
+    y: number;
+    floorId: string;
+    surfaceId?: string;
+    transition?: boolean;
+    connectorId?: string;
+  }>;
+  navigationWaypointIndex?: number;
   stance?: string;
   attention?: number;
   playerControlled?: boolean;
@@ -43,6 +57,7 @@ export interface SimObstacle {
   height: number;
   blocksSound?: boolean;
   label?: string;
+  floorId?: string;
 }
 
 /** 后端 WorldSnapshot.toMap() / GET /api/simulation/state 的子集 */
@@ -51,6 +66,8 @@ export interface SimSnapshot {
   /** P-0827-B：由 MapContract 驱动的后端权威世界像素边界。 */
   worldWidth?: number;
   worldHeight?: number;
+  floors?: Array<{ id: string; elevation?: number; width?: number; height?: number }>;
+  connectors?: Array<Record<string, unknown>>;
   agents?: SimAgent[];
   obstacles?: SimObstacle[];
   timestamp?: number;
@@ -60,6 +77,24 @@ export interface SimSnapshot {
   running?: boolean;
   agentCount?: number;
   recentConversations?: unknown[];
+}
+
+/** Pure renderer projection: hiding another floor never mutates authoritative state. */
+export function projectSnapshotToFloor(snapshot: SimSnapshot, floorId: string): SimSnapshot {
+  const floor = floorId || 'ground';
+  return {
+    ...snapshot,
+    agents: (snapshot.agents || []).filter(agent => (agent.floorId || 'ground') === floor),
+    obstacles: (snapshot.obstacles || []).filter(obstacle => (obstacle.floorId || 'ground') === floor),
+  };
+}
+
+export function availableFloorIds(snapshot: SimSnapshot): string[] {
+  const ids = new Set<string>();
+  (snapshot.floors || []).forEach(floor => { if (floor?.id) ids.add(floor.id); });
+  (snapshot.agents || []).forEach(agent => ids.add(agent.floorId || 'ground'));
+  if (ids.size === 0) ids.add('ground');
+  return [...ids].sort((a, b) => a.localeCompare(b));
 }
 
 /** 对话组（conversation-status 载荷子集） */
@@ -209,6 +244,9 @@ export function normalizeAgent(raw: unknown): SimAgent | null {
     lifecycleStatus: typeof a.lifecycleStatus === 'string' ? a.lifecycleStatus : undefined,
     x: Number(a.x ?? 0),
     y: Number(a.y ?? 0),
+    floorId: typeof a.floorId === 'string' && a.floorId.trim() ? a.floorId : 'ground',
+    surfaceId: typeof a.surfaceId === 'string' && a.surfaceId.trim() ? a.surfaceId : 'ground',
+    track: typeof a.track === 'string' ? a.track : undefined,
     emotion: String(a.emotion ?? ''),
     emotionEmoji: String(a.emotionEmoji ?? '😐'),
     hearRange: Number(a.hearRange ?? 200),
@@ -218,6 +256,22 @@ export function normalizeAgent(raw: unknown): SimAgent | null {
     hasTarget: Boolean(a.hasTarget),
     targetX: a.targetX !== undefined ? Number(a.targetX) : undefined,
     targetY: a.targetY !== undefined ? Number(a.targetY) : undefined,
+    targetFloorId: typeof a.targetFloorId === 'string' ? a.targetFloorId : undefined,
+    targetSurfaceId: typeof a.targetSurfaceId === 'string' ? a.targetSurfaceId : undefined,
+    navigationWaypoints: Array.isArray(a.navigationWaypoints) ? a.navigationWaypoints
+      .filter(value => !!value && typeof value === 'object')
+      .map(value => {
+        const waypoint = value as Record<string, unknown>;
+        return {
+          x: Number(waypoint.x ?? 0),
+          y: Number(waypoint.y ?? 0),
+          floorId: typeof waypoint.floorId === 'string' ? waypoint.floorId : 'ground',
+          surfaceId: typeof waypoint.surfaceId === 'string' ? waypoint.surfaceId : undefined,
+          transition: Boolean(waypoint.transition),
+          connectorId: typeof waypoint.connectorId === 'string' ? waypoint.connectorId : undefined,
+        };
+      }) : [],
+    navigationWaypointIndex: a.navigationWaypointIndex !== undefined ? Number(a.navigationWaypointIndex) : 0,
     stance: String(a.stance ?? 'neutral'),
     attention: Number(a.attention ?? 0),
     playerControlled: Boolean(a.playerControlled),
@@ -239,6 +293,7 @@ export function normalizeObstacle(raw: unknown): SimObstacle | null {
     height: Number(o.height ?? 0),
     blocksSound: Boolean(o.blocksSound),
     label: String(o.label ?? ''),
+    floorId: typeof o.floorId === 'string' && o.floorId.trim() ? o.floorId : 'ground',
   };
 }
 
@@ -250,8 +305,12 @@ export function normalizeSnapshot(raw: unknown): SimSnapshot {
   const obstacles = Array.isArray(s.obstacles) ? s.obstacles.map(normalizeObstacle).filter(Boolean) as SimObstacle[] : [];
   return {
     tick: s.tick !== undefined ? Number(s.tick) : 0,
+    worldWidth: s.worldWidth !== undefined ? Number(s.worldWidth) : undefined,
+    worldHeight: s.worldHeight !== undefined ? Number(s.worldHeight) : undefined,
     agents,
     obstacles,
+    floors: Array.isArray(s.floors) ? s.floors.filter(v => !!v && typeof v === 'object') as SimSnapshot['floors'] : undefined,
+    connectors: Array.isArray(s.connectors) ? s.connectors.filter(v => !!v && typeof v === 'object') as Array<Record<string, unknown>> : undefined,
     timestamp: s.timestamp !== undefined ? Number(s.timestamp) : undefined,
     worldNarration: typeof s.worldNarration === 'string' ? s.worldNarration : '',
     directorActive: Boolean(s.directorActive),

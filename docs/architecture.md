@@ -8,7 +8,7 @@ EchoWorld 将确定性空间规则与非确定性语言生成分开：
 
 ```text
 ┌──────────────────────────────────────────────────────────┐
-│ React / Phaser                                           │
+│ React / Phaser / Babylon / Unity                         │
 │ rendering, input, observable state                       │
 └───────────────────────┬──────────────────────────────────┘
                         │ REST / SSE
@@ -66,13 +66,17 @@ EchoWorld 将确定性空间规则与非确定性语言生成分开：
 ## 空间单事实源
 
 - 坐标和运动：`SimulationWorld` / `AgentState` / movement components；
+- 楼层位置：权威领域使用 `floorId + x + y`；客户端高度只是 projection；
 - 邻域：`SpatialGrid`；
 - 可听性与声线遮挡：`HearingSystem`；
 - Track 分配：`SpatialTrackResolver`；
 - 地图结构：`MapContract`；
-- 地图合法性：`simulation.map.MapValidator`。
+- 地图合法性：`simulation.map.MapValidator`；
+- 导航：`MultiFloorNavigationService` 组合每层 Grid A* 与 connector graph，`MovementSystem` 只消费权威路线。
 
 消费者应调用这些组件，不应各自写一套距离常量或遮挡判断。
+
+跨楼层默认声学隔离，只有开放且标记为 acoustic 的 connector 才传播声音。LLM 生成期间的听众只是候选；发言在 world tick commit 时必须按当时的双方楼层、位置、障碍与 connector 状态重新计算 actual listeners。Phaser、Babylon 与 Unity 均不得直接写 `floorId` 或把本地路径/Transform 作为事实回传。
 
 ## 已知技术债
 

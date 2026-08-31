@@ -3,6 +3,7 @@ package com.roleplay.engine.simulation.map;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 地图 JSON 契约校验器 —— bsp.js validateMap 的 Java 等价移植（阶段 2 LLM 输出防线）。
@@ -443,7 +444,54 @@ public final class MapValidator {
             }
         }
 
+        // Multi-floor extension: legacy maps have one implicit ground floor.
+        Map<String, int[]> floorSizes = new java.util.LinkedHashMap<>();
+        Map<String, int[][]> floorCollisions = new java.util.LinkedHashMap<>();
+        Object floors = map.get("floors");
+        if (floors instanceof List<?> floorList) {
+            for (int i = 0; i < floorList.size(); i++) {
+                if (!(floorList.get(i) instanceof Map<?, ?> f)) { errors.add("floors[" + i + "] 必须是对象"); continue; }
+                String id = String.valueOf(f.get("id") == null ? "" : f.get("id")).trim();
+                int fw = MapContract.intOf(f.get("width"), W), fh = MapContract.intOf(f.get("height"), H);
+                if (id.isEmpty()) errors.add("floors[" + i + "] 缺少 id");
+                if (fw <= 0 || fh <= 0) errors.add("floors[" + i + "] width/height 必须为正数");
+                if (!id.isEmpty() && floorSizes.put(id, new int[]{fw, fh}) != null) errors.add("floor 重复 ID: " + id);
+                Object floorCollision = f.get("collision");
+                if (floorCollision == null && f.get("layers") instanceof Map<?, ?> lm) floorCollision = lm.get("collision");
+                int[][] parsedCollision = MapContract.intGrid(floorCollision);
+                if (!id.isEmpty() && parsedCollision != null) floorCollisions.put(id, parsedCollision);
+            }
+        }
+        if (floorSizes.isEmpty() && W > 0 && H > 0) floorSizes.put("ground", new int[]{W, H});
+        if (!floorCollisions.containsKey("ground") && col != null) floorCollisions.put("ground", col);
+        Set<String> connectorIds = new java.util.HashSet<>();
+        Object connectors = map.get("connectors");
+        if (connectors != null && !(connectors instanceof List<?>)) errors.add("connectors 必须为数组");
+        if (connectors instanceof List<?> list) for (int i = 0; i < list.size(); i++) {
+            if (!(list.get(i) instanceof Map<?, ?> c)) { errors.add("connectors[" + i + "] 必须是对象"); continue; }
+            String id = String.valueOf(c.get("id") == null ? "" : c.get("id")).trim();
+            String source = String.valueOf(c.get("sourceFloor") == null ? "ground" : c.get("sourceFloor"));
+            String target = String.valueOf(c.get("targetFloor") == null ? "ground" : c.get("targetFloor"));
+            if (id.isEmpty() || !connectorIds.add(id)) errors.add("connector 重复或缺少 ID: " + id);
+            if (!floorSizes.containsKey(source)) errors.add("connector " + id + " 引用不存在楼层: " + source);
+            if (!floorSizes.containsKey(target)) errors.add("connector " + id + " 引用不存在楼层: " + target);
+            if (!(c.get("bidirectional") instanceof Boolean)) errors.add("connector " + id + " bidirectional 必须为布尔值");
+            validateConnectorPoint(errors, "connectors[" + i + "].source", c.get("source"), floorSizes.get(source), floorCollisions.get(source), id);
+            validateConnectorPoint(errors, "connectors[" + i + "].target", c.get("target"), floorSizes.get(target), floorCollisions.get(target), id);
+        }
         return new Result(errors.isEmpty(), errors, warnings);
+    }
+
+    private static void validateConnectorPoint(List<String> errors, String label, Object raw, int[] size, int[][] collision, String id) {
+        if (!(raw instanceof List<?> p) || p.size() != 2 || !(p.get(0) instanceof Number) || !(p.get(1) instanceof Number)) {
+            errors.add(label + " 必须是 [x,y]"); return;
+        }
+        int x = ((Number) p.get(0)).intValue(), y = ((Number) p.get(1)).intValue();
+        if (size != null && (x < 0 || y < 0 || x >= size[0] || y >= size[1]))
+            errors.add("connector " + id + " 出入口越界");
+        else if (collision != null && y < collision.length && collision[y] != null
+                && x < collision[y].length && collision[y][x] != 0)
+            errors.add("connector " + id + " 出入口落在不可通行格");
     }
 
     private static boolean walkable(int[][] col, int W, int H, int x, int y) {

@@ -585,7 +585,8 @@ public class ConversationManager {
                 assignments = trackDirector.assign(group.getParticipantList(), goals);
             } else {
                 // Legacy Phase 1/2 path: pure spatial resolution (unchanged behavior).
-                SpatialTrackResolver trackResolver = new SpatialTrackResolver(conversationDistance);
+                SpatialTrackResolver trackResolver = new SpatialTrackResolver(conversationDistance, Set.of(),
+                        world == null ? null : world.getHearingSystem());
                 assignments = trackResolver.resolve(group.getParticipantList());
             }
             group.setTrackAssignments(assignments);

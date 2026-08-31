@@ -95,7 +95,11 @@ public class SpatialTrackResolver {
                     continue;
                 }
                 if (dist < conversationDistance) {
-                    mergedPeers.add(other.getAgentName());
+                    if (self.navLocation().floorId().equals(other.navLocation().floorId())) {
+                        mergedPeers.add(other.getAgentName());
+                    } else {
+                        weakPeers.add(other.getAgentName());
+                    }
                 } else if (dist < self.getHearRange()) {
                     weakPeers.add(other.getAgentName());
                 }

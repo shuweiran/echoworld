@@ -3,6 +3,7 @@ package com.roleplay.engine.simulation;
 import com.roleplay.engine.agent.Agent;
 import com.roleplay.engine.simulation.navigation.AiNavigationSystem;
 import com.roleplay.engine.simulation.navigation.GridNavigationService;
+import com.roleplay.engine.simulation.navigation.MultiFloorNavigationService;
 import com.roleplay.engine.simulation.navigation.NavigationService;
 import com.roleplay.engine.simulation.action.ActionDispatcher;
 import com.roleplay.engine.simulation.action.ActionIntent;
@@ -125,6 +126,7 @@ public class SimulationWorld implements ActionMutationPort {
     public SpatialGrid getSpatialGrid() { return spatialGrid; }
     public MovementSystem getMovementSystem() { return movementSystem; }
     public AiNavigationSystem getAiNavigationSystem() { return aiNavigationSystem; }
+    public long getNavigationPlanningCount() { return aiNavigationSystem.planningCount(); }
     public synchronized void installNavigationService(NavigationService navigationService) {
         aiNavigationSystem = new AiNavigationSystem(Objects.requireNonNull(navigationService, "navigationService"),
                 worldWidth, worldHeight);
@@ -323,6 +325,19 @@ public class SimulationWorld implements ActionMutationPort {
             }
         });
         this.worldDefinition = definition;
+        aiNavigationSystem = new AiNavigationSystem(new MultiFloorNavigationService(definition, portalRouter, portalStates), worldWidth, worldHeight);
+        aiNavigationSystem.setObstacles(obstacles);
+        hearingSystem.setSemanticPortals(definition.portals(), portalStates);
+    }
+
+    /** Restores the legacy single-floor runtime before loading a map without WorldDefinition metadata. */
+    public synchronized void clearWorldDefinition() {
+        if (!states.isEmpty() || running) throw new IllegalStateException("world definition reset requires an empty stopped world");
+        worldDefinition = null;
+        portalStates.clear();
+        worldObjects.clear();
+        worldObjectStates.clear();
+        hearingSystem.setSemanticPortals(List.of(), Map.of());
     }
 
     public void registerAgentAtSpawn(Agent agent, String spawnId, double hearRange, double moveSpeed) {
@@ -343,6 +358,11 @@ public class SimulationWorld implements ActionMutationPort {
             throw new IllegalArgumentException("unknown portal: " + state.portalId());
         }
         portalStates.put(state.portalId(), state);
+        if (state.availability() != PortalRuntimeState.Availability.AVAILABLE) {
+            states.values().stream()
+                    .filter(agent -> agent.getNavigationSteps().stream().anyMatch(step -> state.portalId().equals(step.worldObjectId())))
+                    .forEach(AgentState::invalidateNavigationRoute);
+        }
         if (worldObjects.containsKey(state.portalId())) {
             worldObjectStates.computeIfAbsent(state.portalId(), ignored -> new ConcurrentHashMap<>())
                     .put("open", state.availability() == PortalRuntimeState.Availability.AVAILABLE ? "true" : "false");
@@ -361,9 +381,12 @@ public class SimulationWorld implements ActionMutationPort {
         worldWidth = width;
         worldHeight = height;
         spatialGrid = new SpatialGrid(width, height, GRID_CELL_SIZE);
+        hearingSystem.setSpatialGrid(spatialGrid);
         movementSystem = new MovementSystem(width, height, WORLD_MARGIN, spatialGrid);
         aiNavigationSystem = new AiNavigationSystem(new GridNavigationService(), width, height);
         obstacles = Obstacle.createScene(currentScene, width, height);
+        movementSystem.setObstacles(obstacles);
+        aiNavigationSystem.setObstacles(obstacles);
         hearingSystem.setObstacles(obstacles);
     }
 
@@ -592,14 +615,37 @@ public class SimulationWorld implements ActionMutationPort {
         for (Obstacle o : obstacles) {
             obsList.add(o.toMap());
         }
+        List<Map<String, Object>> floors = worldDefinition == null ? List.of() : worldDefinition.floors().stream()
+                .map(f -> Map.<String, Object>of("id", f.id(), "name", f.name(), "elevation", f.elevation(),
+                        "width", f.bounds().max().x() - f.bounds().min().x(), "height", f.bounds().max().z() - f.bounds().min().z())).toList();
+        List<Map<String, Object>> connectors = worldDefinition == null ? List.of() : worldDefinition.portals().stream()
+                .map(p -> {
+                    Map<String, Object> connector = new LinkedHashMap<>();
+                    connector.put("id", p.id()); connector.put("kind", p.kind().name());
+                    connector.put("sourceFloor", p.endpointA().floorId()); connector.put("sourceSurface", p.endpointA().surfaceId());
+                    connector.put("sourceX", p.endpointA().worldPosition().x()); connector.put("sourceY", p.endpointA().worldPosition().z());
+                    connector.put("targetFloor", p.endpointB().floorId()); connector.put("targetSurface", p.endpointB().surfaceId());
+                    connector.put("targetX", p.endpointB().worldPosition().x()); connector.put("targetY", p.endpointB().worldPosition().z());
+                    connector.put("bidirectional", p.bidirectional());
+                    PortalRuntimeState state = portalStates.get(p.id());
+                    connector.put("availability", state == null ? PortalRuntimeState.Availability.AVAILABLE.name() : state.availability().name());
+                    return connector;
+                }).toList();
         return new WorldSnapshot(tickCount, agentStates, obsList, System.currentTimeMillis(),
-                worldNarration, directorActive, currentScene, worldWidth, worldHeight);
+                worldNarration, directorActive, currentScene, worldWidth, worldHeight, floors, connectors);
     }
 
     public record WorldSnapshot(int tick, List<Map<String, Object>> agents,
                                 List<Map<String, Object>> obstacles, long timestamp,
                                 String worldNarration, boolean directorActive, String scene,
-                                double worldWidth, double worldHeight) {
+                                double worldWidth, double worldHeight,
+                                List<Map<String, Object>> floors, List<Map<String, Object>> connectors) {
+        public WorldSnapshot(int tick, List<Map<String, Object>> agents, List<Map<String, Object>> obstacles,
+                             long timestamp, String worldNarration, boolean directorActive, String scene,
+                             double worldWidth, double worldHeight) {
+            this(tick, agents, obstacles, timestamp, worldNarration, directorActive, scene,
+                    worldWidth, worldHeight, List.of(), List.of());
+        }
         public Map<String, Object> toMap() {
             Map<String, Object> map = new LinkedHashMap<>();
             map.put("tick", tick);
@@ -611,6 +657,8 @@ public class SimulationWorld implements ActionMutationPort {
             map.put("scene", scene);
             map.put("worldWidth", worldWidth);
             map.put("worldHeight", worldHeight);
+            if (!floors.isEmpty()) map.put("floors", floors);
+            if (!connectors.isEmpty()) map.put("connectors", connectors);
             return map;
         }
     }

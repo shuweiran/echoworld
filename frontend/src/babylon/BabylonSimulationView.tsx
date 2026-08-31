@@ -19,6 +19,7 @@ import {
 import type { PrivateMmdAvatar } from './privateMmdAvatar';
 import { PlayerCameraRig } from './playerCameraRig';
 import type { PlayerCameraMode } from './playerCameraRig';
+import { floorElevation, FLOOR_HEIGHT_METERS } from './floorProjection';
 
 export interface BabylonSimulationViewProps {
   map?: ScriptMap;
@@ -51,7 +52,6 @@ interface WorldProjection {
 const TILE_METERS = 2;
 const EXTRAPOLATE_MS = 150;
 const MOVE_INTERVAL_MS = 120;
-
 function makeMaterial(scene: Scene, name: string, color: string, alpha = 1) {
   const m = new StandardMaterial(name, scene);
   m.diffuseColor = Color3.FromHexString(color);
@@ -77,8 +77,8 @@ function projectionOf(snapshot: SimSnapshot, map?: ScriptMap): WorldProjection {
   return { sceneWidth, sceneDepth, scaleX: sceneWidth / worldWidth, scaleZ: sceneDepth / worldHeight };
 }
 
-function toScenePosition(x: number, y: number, p: WorldProjection): Vector3 {
-  return new Vector3(x * p.scaleX - p.sceneWidth / 2, 0, y * p.scaleZ - p.sceneDepth / 2);
+function toScenePosition(x: number, y: number, p: WorldProjection, floorId?: string, floors?: SimSnapshot['floors']): Vector3 {
+  return new Vector3(x * p.scaleX - p.sceneWidth / 2, floorElevation(floorId, floors), y * p.scaleZ - p.sceneDepth / 2);
 }
 
 function toServerPosition(point: Vector3, p: WorldProjection) {
@@ -209,11 +209,11 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
       .catch(() => setStatus('移动指令发送失败'));
   }, [playerName]);
 
-  const sendTarget = useCallback((point: Vector3) => {
+  const sendTarget = useCallback((point: Vector3, floorId = 'ground') => {
     if (!playerName) return;
     const target = toServerPosition(point, projectionRef.current);
     void fetch(`/api/simulation/target/${encodeURIComponent(playerName)}`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(target),
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...target, floorId }),
     }).then(res => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setStatus(`目标：${Math.round(target.x)}, ${Math.round(target.y)}`);
@@ -300,7 +300,9 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
       if (cameraModeRef.current === 'first-person') return;
       const agentName = mesh?.metadata?.echoworldAgent as string | undefined;
       if (agentName) { setSelectedName(agentName); return; }
-      if (mesh?.metadata?.echoworldGround && pointer.pickInfo.pickedPoint) sendTarget(pointer.pickInfo.pickedPoint);
+      if (mesh?.metadata?.echoworldGround && pointer.pickInfo.pickedPoint) {
+        sendTarget(pointer.pickInfo.pickedPoint, String(mesh.metadata.floorId || 'ground'));
+      }
     });
 
     engine.runRenderLoop(() => {
@@ -368,8 +370,10 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
     if (!scene) return;
     const p = projectionOf(snapshot, map);
     projectionRef.current = p;
-    const obstacleSignature = (snapshot.obstacles || []).map(o => `${o.type}:${o.x}:${o.y}:${o.width}:${o.height}`).join('|');
-    const key = map ? `${map.map_id}:${map.width}:${map.height}:${map.tile_size}` : `${p.sceneWidth}:${p.sceneDepth}:${obstacleSignature}`;
+    const obstacleSignature = (snapshot.obstacles || []).map(o => `${o.floorId}:${o.type}:${o.x}:${o.y}:${o.width}:${o.height}`).join('|');
+    const floorSignature = (snapshot.floors || []).map(f => `${f.id}:${f.elevation}`).join('|');
+    const connectorSignature = (snapshot.connectors || []).map(c => `${c.id}:${c.availability}`).join('|');
+    const key = `${map ? `${map.map_id}:${map.width}:${map.height}:${map.tile_size}` : `${p.sceneWidth}:${p.sceneDepth}:${obstacleSignature}`}:${floorSignature}:${connectorSignature}`;
     if (key === staticKeyRef.current) return;
     staticMeshesRef.current.forEach(mesh => mesh.dispose());
     staticMaterialsRef.current.forEach(mat => mat.dispose());
@@ -377,9 +381,29 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
     const floorMat = makeMaterial(scene, '3d-floor', map?.theme?.includes('night') ? '#18233a' : '#365847');
     const wallMat = makeMaterial(scene, '3d-wall', '#3f4f67');
     staticMaterialsRef.current.push(floorMat, wallMat);
-    const ground = MeshBuilder.CreateGround('world-floor', { width: p.sceneWidth, height: p.sceneDepth }, scene);
-    ground.material = floorMat; ground.metadata = { echoworldGround: true }; ground.isPickable = true;
-    staticMeshesRef.current.push(ground);
+    const floors = snapshot.floors?.length ? snapshot.floors : [{ id: 'ground', elevation: 0 }];
+    floors.forEach((floor, index) => {
+      const ground = MeshBuilder.CreateGround(`world-floor-${floor.id}`, { width: p.sceneWidth, height: p.sceneDepth }, scene);
+      ground.position.y = index * FLOOR_HEIGHT_METERS;
+      ground.material = floorMat; ground.metadata = { echoworldGround: true, floorId: floor.id }; ground.isPickable = true;
+      staticMeshesRef.current.push(ground);
+    });
+    const connectorMat = makeMaterial(scene, '3d-connectors', '#eab308');
+    const disabledConnectorMat = makeMaterial(scene, '3d-connectors-disabled', '#7f1d1d');
+    staticMaterialsRef.current.push(connectorMat, disabledConnectorMat);
+    (snapshot.connectors || []).forEach((connector, index) => {
+      const sx = Number(connector.sourceX ?? 0), sy = Number(connector.sourceY ?? 0);
+      const tx = Number(connector.targetX ?? sx), ty = Number(connector.targetY ?? sy);
+      const a = toScenePosition(sx, sy, p, String(connector.sourceFloor || 'ground'), floors);
+      const b = toScenePosition(tx, ty, p, String(connector.targetFloor || 'ground'), floors);
+      const height = Math.max(0.25, Math.abs(b.y - a.y));
+      const marker = MeshBuilder.CreateCylinder(`connector-${String(connector.id || index)}`, { height, diameter: 0.45, tessellation: 8 }, scene);
+      marker.position.set((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+      marker.material = connector.availability === 'AVAILABLE' ? connectorMat : disabledConnectorMat;
+      marker.metadata = { echoworldConnector: connector.id, availability: connector.availability };
+      marker.isPickable = false;
+      staticMeshesRef.current.push(marker);
+    });
 
     if (map) {
       const roomMat = makeMaterial(scene, '3d-room-floor', '#6b5541');
@@ -443,7 +467,9 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
         const depth = Math.max(0.3, obstacle.height * p.scaleZ);
         const height3d = obstacle.type === 'TREE' ? 3.5 : obstacle.type === 'BUILDING' || obstacle.type === 'WALL' ? 2.5 : 0.9;
         const mesh = MeshBuilder.CreateBox(`obstacle-${i}`, { width, depth, height: height3d }, scene);
-        mesh.position.set((obstacle.x + obstacle.width / 2) * p.scaleX - p.sceneWidth / 2, height3d / 2, (obstacle.y + obstacle.height / 2) * p.scaleZ - p.sceneDepth / 2);
+        mesh.position.set((obstacle.x + obstacle.width / 2) * p.scaleX - p.sceneWidth / 2,
+          floorElevation(obstacle.floorId, floors) + height3d / 2,
+          (obstacle.y + obstacle.height / 2) * p.scaleZ - p.sceneDepth / 2);
         mesh.material = group.material; mesh.isPickable = false; group.meshes.push(mesh);
       });
       obstacleGroups.forEach((group, keyPart) => {
@@ -470,12 +496,12 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
         body.parent = root; body.position.y = 0.9;
         body.material = makeMaterial(scene, `agent-mat-${i}`, agent.playerControlled ? '#fbbf24' : agent.ambient ? '#64748b' : '#38bdf8');
         body.metadata = { echoworldAgent: agent.agentName }; body.isPickable = true;
-        const initial = toScenePosition(agent.x, agent.y, p);
+        const initial = toScenePosition(agent.x, agent.y, p, agent.floorId, snapshot.floors);
         root.position.copyFrom(initial);
         visual = { root, body, target: initial, velocity: Vector3.Zero(), heading: 0, lastSnapshotAt: now, phase: i * 0.7, semantic: 'idle', agent };
         agentsRef.current.set(agent.agentName, visual);
       }
-      visual.target = toScenePosition(agent.x, agent.y, p);
+      visual.target = toScenePosition(agent.x, agent.y, p, agent.floorId, snapshot.floors);
       visual.velocity.set((agent.vx || 0) * p.scaleX, 0, (agent.vy || 0) * p.scaleZ);
       if (visual.velocity.lengthSquared() > 0.0001) visual.heading = Math.atan2(visual.velocity.x, visual.velocity.z);
       visual.lastSnapshotAt = now; visual.semantic = motionSemantic(agent); visual.agent = agent;

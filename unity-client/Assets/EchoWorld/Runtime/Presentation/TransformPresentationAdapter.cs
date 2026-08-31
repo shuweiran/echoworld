@@ -35,7 +35,11 @@ namespace EchoWorld.Client.Presentation
 
             _targetPosition = new Vector3(state.X, state.Y, state.Z);
             var rotation = new Quaternion(state.RotationX, state.RotationY, state.RotationZ, state.RotationW);
-            _targetRotation = rotation.sqrMagnitude < 0.0001f ? Quaternion.identity : rotation.normalized;
+            var rotationSqrMagnitude = rotation.x * rotation.x
+                + rotation.y * rotation.y
+                + rotation.z * rotation.z
+                + rotation.w * rotation.w;
+            _targetRotation = rotationSqrMagnitude < 0.0001f ? Quaternion.identity : rotation.normalized;
 
             if (!_hasTarget || Vector3.Distance(transform.position, _targetPosition) > teleportDistance)
             {
@@ -64,4 +68,3 @@ namespace EchoWorld.Client.Presentation
         }
     }
 }
-

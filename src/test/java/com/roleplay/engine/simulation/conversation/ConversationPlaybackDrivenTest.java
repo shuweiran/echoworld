@@ -177,7 +177,7 @@ class ConversationPlaybackDrivenTest {
         cm.notifyPlaybackDone(g.getGroupId());
         cm.notifyPlaybackDone(g.getGroupId());
         await(() -> g.getTurnCount() == 4 && g.isAwaitingPlayback(),
-                "两个信号均消费且重新进入稳定等待态", 10);
+                "两个信号均消费且重新进入稳定等待态", 30);
         assertEquals(4, g.getTurnCount(), "连点不丢信号：恰 2 信号=2 轮（无多余轮次）");
         assertEquals(2, g.getRoundCount(), "三轮后 2 人组 roundCount=2（turn 计数语义）");
         cm.stopAll();

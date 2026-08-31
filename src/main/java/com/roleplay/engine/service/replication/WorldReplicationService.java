@@ -17,6 +17,7 @@ public class WorldReplicationService {
     private static final double CELL_SIZE = 100.0;
     private static final Set<String> SAFE_AGENT_FIELDS = Set.of(
             "agentName", "x", "y", "vx", "vy", "emotion", "emotionEmoji",
+            "floorId", "surfaceId", "navigationWaypoints", "navigationWaypointIndex",
             "inConversation", "stance", "locomotionState", "controlAuthority", "transform", "navLocation");
 
     private final SimulationWorld world;
@@ -156,10 +157,11 @@ public class WorldReplicationService {
             String id = String.valueOf(raw.getOrDefault("agentName", ""));
             if (id.isBlank()) continue;
             double x = number(raw.get("x")), y = number(raw.get("y"));
+            String floorId = raw.get("floorId") == null ? "ground" : String.valueOf(raw.get("floorId"));
             Map<String, Object> safe = new LinkedHashMap<>();
             SAFE_AGENT_FIELDS.forEach(key -> { if (raw.get(key) != null) safe.put(key, raw.get(key)); });
             result.add(new ReplicaEntity(id, "AGENT", snapshot.tick(),
-                    new SpatialCell("world", "ground", (int) Math.floor(x / CELL_SIZE), (int) Math.floor(y / CELL_SIZE)),
+                    new SpatialCell("world", floorId, (int) Math.floor(x / CELL_SIZE), (int) Math.floor(y / CELL_SIZE)),
                     "", PerceptionScope.publicScope(), Set.of(), safe));
         }
         return List.copyOf(result);

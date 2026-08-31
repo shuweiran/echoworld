@@ -76,3 +76,6 @@ src/main/resources/static/ai-images/
 
 # 独立项目站点仓库（自带 git 与私有远程），不并入主仓库
 site/
+
+# Unity batchmode 临时产物（Temp/UnityLockfile），不入库
+Temp/

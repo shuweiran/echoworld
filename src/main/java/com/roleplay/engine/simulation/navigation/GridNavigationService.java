@@ -27,7 +27,8 @@ public final class GridNavigationService implements NavigationService {
         NavProfile profile = request.profile() == null ? NavProfile.humanoid() : request.profile();
         List<NavigationPathfinder.Point> points = pathfinder.findPath(
                 from.x(), from.z(), to.x(), to.z(),
-                request.worldWidth(), request.worldHeight(), request.obstacles(), profile.radius());
+                request.worldWidth(), request.worldHeight(), request.obstacles().stream()
+                        .filter(obstacle -> obstacle.belongsToFloor(request.from().floorId())).toList(), profile.radius());
         if (points.isEmpty() && from.groundDistance(to) > 5.0) {
             return PathPlan.unreachable("grid-a-star", "no walkable route");
         }

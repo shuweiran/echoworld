@@ -38,6 +38,15 @@ namespace EchoWorld.Client.Tests
         }
 
         [Test]
+        public void ZeroQuaternion_FallsBackToIdentity()
+        {
+            _adapter.ApplyAuthoritativeTarget(new WorldTransformDto());
+
+            Assert.That(_adapter.TargetRotation, Is.EqualTo(Quaternion.identity));
+            Assert.That(_gameObject.transform.rotation, Is.EqualTo(Quaternion.identity));
+        }
+
+        [Test]
         public void SubsequentTransform_IsSmoothedWithoutMutatingDto()
         {
             _adapter.ApplyAuthoritativeTarget(new WorldTransformDto { RotationW = 1f });
@@ -51,4 +60,3 @@ namespace EchoWorld.Client.Tests
         }
     }
 }
-

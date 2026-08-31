@@ -34,17 +34,25 @@ try {
 
 $forbiddenDirectories = @('Library', 'Temp', 'Obj', 'Build', 'Builds', 'Logs', 'UserSettings')
 foreach ($name in $forbiddenDirectories) {
-    if (Test-Path -LiteralPath (Join-Path $projectRoot $name)) {
-        $failures.Add("Generated Unity directory must not be committed: $name")
+    $tracked = @(& git -C $projectRoot ls-files -- $name 2>$null)
+    if ($LASTEXITCODE -ne 0) {
+        $failures.Add("Unable to verify Git tracking state for generated Unity directory: $name")
+    } elseif ($tracked.Count -gt 0) {
+        $failures.Add("Generated Unity directory contains tracked files: $name")
     }
 }
 
 $binaryExtensions = @('.dll', '.exe', '.pdb', '.mdb', '.so', '.dylib', '.fbx', '.blend', '.psd')
-$binaries = Get-ChildItem -LiteralPath $projectRoot -Recurse -File | Where-Object {
-    $binaryExtensions -contains $_.Extension.ToLowerInvariant()
+$trackedFiles = @(& git -C $projectRoot ls-files -- . 2>$null)
+if ($LASTEXITCODE -ne 0) {
+    $failures.Add('Unable to list tracked Unity project files.')
+    $trackedFiles = @()
 }
-foreach ($binary in $binaries) {
-    $failures.Add("Binary/private asset is outside this skeleton's scope: $($binary.FullName)")
+$trackedBinaries = $trackedFiles | Where-Object {
+    $binaryExtensions -contains [System.IO.Path]::GetExtension($_).ToLowerInvariant()
+}
+foreach ($binary in $trackedBinaries) {
+    $failures.Add("Tracked binary/private asset is outside this skeleton's scope: $binary")
 }
 
 $sourceChecks = @(
@@ -83,8 +91,18 @@ $forbiddenContractText = @(
     'replication.full_snapshot',
     'command.resync'
 )
-$contractFiles = Get-ChildItem -LiteralPath $projectRoot -Recurse -File | Where-Object {
-    $_.Extension -in @('.cs', '.md', '.ps1', '.json') -and $_.FullName -ne $PSCommandPath
+$contractFiles = @()
+foreach ($relativeRoot in @('Assets', 'Packages', 'ProjectSettings', 'Tools')) {
+    $contractRoot = Join-Path $projectRoot $relativeRoot
+    if (Test-Path -LiteralPath $contractRoot) {
+        $contractFiles += Get-ChildItem -LiteralPath $contractRoot -Recurse -File | Where-Object {
+            $_.Extension -in @('.cs', '.md', '.ps1', '.json') -and $_.FullName -ne $PSCommandPath
+        }
+    }
+}
+$readme = Join-Path $projectRoot 'README.md'
+if (Test-Path -LiteralPath $readme) {
+    $contractFiles += Get-Item -LiteralPath $readme
 }
 foreach ($forbidden in $forbiddenContractText) {
     foreach ($contractFile in $contractFiles) {
@@ -102,5 +120,5 @@ if ($failures.Count -gt 0) {
 Write-Output 'Unity static contract verification passed.'
 Write-Output "Required files: $($required.Count)"
 Write-Output "C# source files: $((Get-ChildItem -LiteralPath (Join-Path $projectRoot 'Assets') -Recurse -Filter '*.cs').Count)"
-Write-Output 'Generated directories: none'
-Write-Output 'Binary/private assets: none'
+Write-Output 'Tracked generated directories: none'
+Write-Output 'Tracked binary/private assets: none'

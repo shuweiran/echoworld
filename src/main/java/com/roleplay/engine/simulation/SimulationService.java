@@ -23,6 +23,8 @@ import com.roleplay.engine.simulation.schedule.SchedulerService;
 import com.roleplay.engine.simulation.social.SocialState;
 import com.roleplay.engine.simulation.track.InteractionDetector;
 import com.roleplay.engine.simulation.track.TrackAssignment;
+import com.roleplay.engine.simulation.spatial.NavLocation;
+import com.roleplay.engine.simulation.worlddefinition.WorldDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -182,6 +184,7 @@ public class SimulationService {
         // P-0815-A：轨道空间会话距离配置接线（roleplay.track.conversation-distance，px）——
         // 重建 TrackDirectorService 内部 SpatialTrackResolver（默认 70px，修正原 5.0「格」错位）。
         trackDirector.setConversationDistance(cfg.getTrack().getConversationDistance());
+        trackDirector.setHearingSystem(world.getHearingSystem());
         conversationManager.setConversationDistance(cfg.getTrack().getConversationDistance());
         this.orchestrator = new SimulationOrchestrator(world, worldDirector, trackDirector, conversationManager, eventBus);
         // Phase 4: 移动 tick 前应用轨道运动约束（使用上一 tick 的轨道分配，延迟一拍）。
@@ -340,9 +343,16 @@ public class SimulationService {
                 ? identityService.resolveCharacterName(playerId).orElse(null) : null;
         // P-0811-G：自定义障碍（LLM 地图）时出生点避开障碍，防角色初始卡进墙内/偏移
         List<Obstacle> spawnObstacles = customObstacles;
+        int personaIndex = 0;
         for (Persona p : personas) {
             Agent agent = new Agent(p, "npc", llmClient);
-            double[] spawn = pickSpawnPoint(spawnObstacles);
+            WorldDefinition definition = world.getWorldDefinition();
+            WorldDefinition.SpawnPoint authoredSpawn = definition == null || definition.spawnPoints().isEmpty()
+                    ? null : definition.spawnPoints().get(personaIndex % definition.spawnPoints().size());
+            boolean fixedAuthoredSpawn = authoredSpawn != null && !authoredSpawn.tags().contains("default");
+            double[] spawn = !fixedAuthoredSpawn
+                    ? pickSpawnPoint(spawnObstacles)
+                    : new double[]{authoredSpawn.position().x(), authoredSpawn.position().z()};
             double x = spawn[0], y = spawn[1];
             // 大地图社会实验：原 180~260px 会跨越整栋建筑；收敛为近距离交谈尺度。
             double hearRange = 85 + Math.random() * 25;
@@ -352,6 +362,11 @@ public class SimulationService {
             socialState.registerAgent(p.getName());
             AgentState state = world.getState(p.getName());
             if (state != null) {
+                if (authoredSpawn != null) {
+                    double elevation = authoredSpawn.position().y();
+                    state.getSpatial().setNavLocation(new NavLocation(authoredSpawn.surfaceId(), authoredSpawn.floorId(),
+                            new com.roleplay.engine.simulation.spatial.Vec3(x, elevation, y), -1L));
+                }
                 state.setEmotion(Emotion.NEUTRAL);
                 // Mark player-controlled agents: 显式 playerName（P0-1）、playerId 解析名（P-0802-P2）或旧规则名字 "me"
                 boolean isPlayerControlled = explicitPlayer
@@ -364,6 +379,7 @@ public class SimulationService {
                     state.setMoveSpeed(moveSpeedPlayerBase + Math.random() * moveSpeedPlayerRandomRange);
                 }
             }
+            personaIndex++;
         }
 
         ensureSchedulesAndSuppliers();

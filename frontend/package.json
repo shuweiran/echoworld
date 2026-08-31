@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "oxlint src desktop/main.cjs desktop/preload.cjs",
+    "test:projection": "node --test tools/floor-projection.test.mjs",
     "preview": "vite preview",
     "desktop:dev": "npm run build && electron ./desktop/main.cjs",
     "desktop:dist": "npm run build && electron-builder --win nsis zip",

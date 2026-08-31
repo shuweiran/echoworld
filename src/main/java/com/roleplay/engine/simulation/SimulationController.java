@@ -6,7 +6,9 @@ import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.SessionRegistry;
 import com.roleplay.engine.service.world.WorldRuntimeService;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
+import com.roleplay.engine.simulation.map.MapWorldDefinitionAdapter;
 import com.roleplay.engine.simulation.map.SocialExperimentMap;
+import com.roleplay.engine.simulation.worlddefinition.WorldDefinition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -116,27 +118,22 @@ public class SimulationController {
         String mapLabel = null;
         double mapWorldWidth = SimulationWorld.DEFAULT_WORLD_WIDTH;
         double mapWorldHeight = SimulationWorld.DEFAULT_WORLD_HEIGHT;
+        WorldDefinition mapDefinition = null;
         if (body.get("map") instanceof Map<?, ?> m && !m.isEmpty()) {
             try {
-                int[][] collision = mapCollisionGrid(m);
-                if (collision != null) {
-                    int tileSize = m.get("tile_size") instanceof Number n ? n.intValue() : 32;
-                    int width = m.get("width") instanceof Number n ? n.intValue() : collision[0].length;
-                    int height = m.get("height") instanceof Number n ? n.intValue() : collision.length;
-                    if (width != collision[0].length || height != collision.length || width <= 0 || height <= 0) {
-                        throw new IllegalArgumentException("map dimensions do not match collision grid");
-                    }
-                    Object nameObj = m.get("name");
-                    String mapName = nameObj == null ? "LLM地图" : String.valueOf(nameObj);
-                    mapWorldWidth = (double) width * tileSize;
-                    mapWorldHeight = (double) height * tileSize;
-                    customObstacles = Obstacle.fromCollisionGrid(collision, tileSize, mapName, mapWorldWidth, mapWorldHeight);
-                    mapLabel = mapName;
-                }
+                MapWorldDefinitionAdapter.AdaptedWorld adapted =
+                        MapWorldDefinitionAdapter.adapt((Map<String, Object>) m);
+                mapDefinition = adapted.definition();
+                customObstacles = adapted.obstacles();
+                mapWorldWidth = adapted.worldWidth();
+                mapWorldHeight = adapted.worldHeight();
+                mapLabel = adapted.definition().metadata().name();
             } catch (Exception e) {
                 // 地图解析失败 → 回退预置场景（不阻塞加载）
                 customObstacles = null;
                 mapLabel = null;
+                mapDefinition = null;
+                log.warn("MapContract rejected, using legacy scene: {}", e.getMessage());
             }
         }
 
@@ -156,10 +153,16 @@ public class SimulationController {
         final String selectedMapLabel = mapLabel;
         final double selectedWorldWidth = mapWorldWidth;
         final double selectedWorldHeight = mapWorldHeight;
+        final WorldDefinition selectedDefinition = mapDefinition;
         Runnable load = () -> {
             // 必须先清空旧角色，运行时边界才可安全替换；无地图则回退兼容默认尺寸。
             simulationService.clearAll();
-            world.setWorldBounds(selectedWorldWidth, selectedWorldHeight);
+            if (selectedDefinition != null) {
+                world.loadWorldDefinition(selectedDefinition);
+            } else {
+                world.clearWorldDefinition();
+                world.setWorldBounds(selectedWorldWidth, selectedWorldHeight);
+            }
             simulationService.initWithPersonas(personas, sceneName, playerName, playerId, selectedObstacles, selectedMapLabel);
         };
         if (worldRuntime != null) worldRuntime.replaceSimulationWorld(load);
@@ -307,11 +310,15 @@ public class SimulationController {
     @PostMapping("/target/{agentName}")
     public Map<String, Object> setTarget(
             @PathVariable String agentName,
-            @RequestBody Map<String, Double> body) {
+            @RequestBody Map<String, Object> body) {
         AgentState state = world.getState(agentName);
         if (state == null) return Map.of("status", "error", "message", "Agent not found");
-        double x = body.getOrDefault("x", state.getX());
-        double y = body.getOrDefault("y", state.getY());
+        String floorId = body.get("floorId") == null ? state.navLocation().floorId() : String.valueOf(body.get("floorId"));
+        if (!floorId.equals(state.navLocation().floorId())) {
+            return Map.of("status", "error", "message", "cross-floor click targets are forbidden; use a legal connector");
+        }
+        double x = body.get("x") instanceof Number n ? n.doubleValue() : state.getX();
+        double y = body.get("y") instanceof Number n ? n.doubleValue() : state.getY();
         x = Math.max(10, Math.min(world.getWorldWidth() - 10, x));
         y = Math.max(10, Math.min(world.getWorldHeight() - 10, y));
         state.setPlayerIntentTarget(x, y);

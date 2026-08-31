@@ -4,15 +4,15 @@ EchoWorld V2 的 Unity 6 正式客户端最小骨架。它只消费 Java 权威�
 
 ## 工程版本
 
-- Unity `6000.0` LTS（`ProjectVersion.txt` 固定为 `6000.0.58f2`）
-- Addressables `2.7.6`
-- AI Navigation `2.0.9`，仅用于 authoring/预览/契约验证，不是权威导航
-- Newtonsoft JSON `3.2.1`
-- Unity Test Framework `1.4.5`
+- Unity `6000.3.23f1`
+- Addressables `2.9.1`
+- AI Navigation `2.0.14`，仅用于 authoring/预览/契约验证，不是权威导航
+- Newtonsoft JSON `3.2.2`
+- Unity Test Framework `1.6.0`
 
 ## 运行
 
-1. 用 Unity Hub 的 Unity 6.0 LTS 打开本目录。
+1. 用 Unity Hub 的 Unity 6000.3.23f1 打开本目录。
 2. 等待 Package Manager 恢复依赖；不要提交 `Library/`、`Temp/`、`Obj/`、`Logs/` 或 IDE 生成文件。
 3. 打开 `Assets/Scenes/Bootstrap.unity` 并进入 Play Mode。运行时会自动建立客户端根对象、相机、灯光和 primitive 资产降级。
 4. 默认不自动连接。需要连接已运行的 Java 服务时设置：
@@ -151,20 +151,26 @@ Unity 可以：
 
 ## 测试与静态核查
 
-有 Unity 时运行 EditMode 测试：
+本机 Unity 6000.3.23f1 路径如下；Unity Test Framework 会在测试结束后自行退出，命令中不要额外传 `-quit`：
 
 ```powershell
-& '<Unity.exe>' -batchmode -nographics -projectPath 'D:\echoworld\unity-client' `
+& 'D:\Unity\Editors\6000.3.23f1\Editor\Unity.exe' -batchmode -nographics -projectPath 'D:\echoworld\unity-client' `
   -runTests -testPlatform EditMode `
-  -testResults 'D:\echoworld\unity-client\TestResults.xml' -quit
+  -testResults 'D:\echoworld\unity-client\EditModeResults.xml'
+
+& 'D:\Unity\Editors\6000.3.23f1\Editor\Unity.exe' -batchmode -nographics -projectPath 'D:\echoworld\unity-client' `
+  -runTests -testPlatform PlayMode `
+  -testResults 'D:\echoworld\unity-client\PlayModeResults.xml'
 ```
 
-无 Unity 时运行：
+未具备 Editor 或许可证时，可先运行静态核查：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Tools\verify-static.ps1
 ```
 
-静态脚本验证工程文件和 manifest、Unity 6/必需包、`/ws/world`、协议版本 1、Java 字段/包装形状、`hello/interest/ack/replay`、root motion 关闭、命令层不写 Transform、无旧 endpoint/自拟字段、无 `Library`/二进制/私有资产。
+静态脚本验证工程文件和 manifest、Unity 6/必需包、`/ws/world`、协议版本 1、Java 字段/包装形状、`hello/interest/ack/replay`、root motion 关闭、命令层不写 Transform、无旧 endpoint/自拟字段，以及生成目录/二进制资产未被 Git 跟踪。
 
-EditMode 测试覆盖 sequence 0 full snapshot、包装后的 create/update/remove、缺帧 replay、未知实体原子拒绝、重复帧、防御性复制、Java JSON fixture 解码、无 payload error，以及 Transform 表现平滑。后续应增加真实 WebSocket 断线重连、interest 信息泄漏、Addressables 远程 catalog 和 50/100/200 View 性能基线。
+截至 2026-08-31，工程已在 Unity 6000.3.23f1 完成导入和脚本编译；EchoWorld 自有 EditMode **13/13** 通过（XML 总计 14/14，含 Addressables 包测试桩 1 项），PlayMode **1/1** 通过。PlayMode 使用真实 `ClientWebSocketTransport` 和最小 RFC 6455 环回服务器，覆盖 `hello → full_snapshot → WorldReplica → ACK`。
+
+Java `/ws/world` 已由 JDK WebSocket 客户端在 Spring RANDOM_PORT 环境验证 `hello/full_snapshot/ack_result/UNKNOWN_MESSAGE`。后续仍应增加 Unity 客户端直连该 Java 测试实例、interest 信息泄漏、replay/断线重连、场景切换、Addressables 远程 catalog 和 50/100/200 View 性能基线。

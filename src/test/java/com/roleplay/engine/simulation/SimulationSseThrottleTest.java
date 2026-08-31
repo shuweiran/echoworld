@@ -28,17 +28,19 @@ class SimulationSseThrottleTest {
 
     /** 反射读取 emitter 缓冲的全部事件文本（未绑定响应时 send 缓冲于此）。 */
     private static String earlyAttemptText(SseEmitter emitter) throws Exception {
-        Field f = ResponseBodyEmitter.class.getDeclaredField("earlySendAttempts");
-        f.setAccessible(true);
-        Collection<?> attempts = (Collection<?>) f.get(emitter);
-        StringBuilder sb = new StringBuilder();
-        for (Object a : attempts) {
-            Field df = a.getClass().getDeclaredField("data");
-            df.setAccessible(true);
-            Object data = df.get(a);
-            if (data != null) sb.append(data);
+        synchronized (emitter) {
+            Field f = ResponseBodyEmitter.class.getDeclaredField("earlySendAttempts");
+            f.setAccessible(true);
+            Collection<?> attempts = (Collection<?>) f.get(emitter);
+            StringBuilder sb = new StringBuilder();
+            for (Object a : attempts) {
+                Field df = a.getClass().getDeclaredField("data");
+                df.setAccessible(true);
+                Object data = df.get(a);
+                if (data != null) sb.append(data);
+            }
+            return sb.toString();
         }
-        return sb.toString();
     }
 
     private static int countEvents(String text, String eventName) {

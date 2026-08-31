@@ -24,6 +24,6 @@ class AgentSpatialComponentTest {
         assertEquals(200.0, position.get("x"));
         assertEquals(3.2, position.get("y"));
         assertEquals(400.0, position.get("z"));
-        assertEquals("floor-0", ((Map<String, Object>) state.toMap().get("navLocation")).get("floorId"));
+        assertEquals("ground", ((Map<String, Object>) state.toMap().get("navLocation")).get("floorId"));
     }
 }

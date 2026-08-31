@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Phaser from 'phaser';
 import { SimulationScene, type SceneCallbacks, type AgentAnim } from './SimulationScene';
-import { AVAILABLE_SCENES, type SimGroup } from './simulationData';
+import { AVAILABLE_SCENES, availableFloorIds, normalizeAgent, normalizeSnapshot, projectSnapshotToFloor, type SimAgent, type SimGroup, type SimSnapshot } from './simulationData';
 import type { ScriptMap } from './mapData';
 import { simChatConfig, cleanWorldText, truncateText, simChatConfigSummary, simChatPlaybackTiming } from './simChatConfig';
 import { AnnouncementBanner } from '../components/AnnouncementBanner';
@@ -106,6 +106,12 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   const [status, setStatus] = useState('初始化中...');
   const [currentScene, setCurrentScene] = useState(scene);
   const [running, setRunning] = useState(false);
+  const [selectedFloor, setSelectedFloor] = useState('ground');
+  const [floorIds, setFloorIds] = useState<string[]>(['ground']);
+  const selectedFloorRef = useRef('ground');
+  selectedFloorRef.current = selectedFloor;
+  const lastWorldSnapshotRef = useRef<SimSnapshot | null>(null);
+  const lastPlayerFloorRef = useRef<string | null>(null);
   // ── C-1：右侧聊天面板（对话历史 + 发言输入）──
   const [conversations, setConversations] = useState<any[]>([]);   // 后端 recentConversations（世界对话）
   const [localMsgs, setLocalMsgs] = useState<SimChatMsg[]>([]);    // 玩家发言 + 系统提示
@@ -190,7 +196,7 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     void simulationRequest(`/api/simulation/target/${encodeURIComponent(agentName)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ x, y }),
+      body: JSON.stringify({ x, y, floorId: selectedFloorRef.current }),
     }).catch(() => {});
   };
 
@@ -344,20 +350,39 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
     // P-0824-L：群演是轻量世界投影，不进入后端完整 Agent/轨道/记忆列表。
     // 每次权威世界快照都在渲染前合并最近的群演投影，避免 SSE 高频快照把群演移除。
     let lastWorldSnapshot: Record<string, any> | null = null;
-    let ambientAgents: Array<Record<string, any>> = [];
+    let ambientAgents: SimAgent[] = [];
     const applyWorldSnapshot = (snapshot: Record<string, any>) => {
       lastWorldSnapshot = snapshot;
-      const realAgents = Array.isArray(snapshot.agents) ? snapshot.agents : [];
-      scene().applySnapshot({ ...snapshot, agents: [...realAgents, ...ambientAgents] });
+      const normalized = normalizeSnapshot(snapshot);
+      lastWorldSnapshotRef.current = normalized;
+      const ids = availableFloorIds(normalized);
+      setFloorIds(prev => prev.length === ids.length && prev.every((id, i) => id === ids[i]) ? prev : ids);
+      const player = playerNameRef.current
+        ? normalized.agents?.find(agent => agent.agentName === playerNameRef.current)
+        : undefined;
+      const playerFloorChanged = Boolean(player?.floorId && player.floorId !== lastPlayerFloorRef.current);
+      const floor = playerFloorChanged ? player!.floorId! : (selectedFloorRef.current || 'ground');
+      if (player?.floorId && playerFloorChanged) {
+        selectedFloorRef.current = player.floorId;
+        setSelectedFloor(player.floorId);
+      }
+      lastPlayerFloorRef.current = player?.floorId || null;
+      const realAgents = projectSnapshotToFloor(normalized, floor).agents || [];
+      const floorAmbient = ambientAgents.filter(agent => String(agent.floorId || 'ground') === floor);
+      const projected = projectSnapshotToFloor(normalized, floor);
+      scene().applySnapshot({ ...projected, agents: [...realAgents, ...floorAmbient] });
     };
     const fetchAmbient = async () => {
       try {
         const state = await simulationJson('/api/world/state?session_id=simulation');
-        ambientAgents = Array.isArray(state.ambient_agents) ? state.ambient_agents : [];
+        const rawAmbient: unknown[] = Array.isArray(state.ambient_agents) ? state.ambient_agents : [];
+        ambientAgents = rawAmbient
+          .map((value: unknown) => normalizeAgent(value))
+          .filter((agent: SimAgent | null): agent is SimAgent => agent !== null);
         ambientByNameRef.current = new Map(
-          ambientAgents
-            .filter(a => typeof a?.agentName === 'string' && typeof a?.roleId === 'string')
-            .map(a => [a.agentName, { roleId: a.roleId }]),
+          ambientAgents.flatMap(agent => typeof agent.roleId === 'string'
+            ? [[agent.agentName, { roleId: agent.roleId }] as const]
+            : []),
         );
         if (lastWorldSnapshot) applyWorldSnapshot(lastWorldSnapshot);
       } catch { /* 新后端未部署或自治世界关闭时保持原 2D 行为 */ }
@@ -381,7 +406,13 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
         // SSE 每 400ms 一次全量快照，无条件 setState 会每 400ms 全量重渲染。
         if (Array.isArray(d.recentConversations)) {
           setConversations(prev => {
-            const next = d.recentConversations;
+            const floorAgents = new Set((Array.isArray(d.agents) ? d.agents : [])
+              .filter((agent: any) => String(agent.floorId || 'ground') === selectedFloorRef.current)
+              .map((agent: any) => String(agent.agentName || '')));
+            const next = d.recentConversations.filter((entry: any) => {
+              const speakers = Object.keys(entry || {}).filter(key => !SKIP_CONV_KEYS.has(key) && typeof entry[key] === 'string');
+              return speakers.length === 0 || speakers.some(name => floorAgents.has(name));
+            });
             if (prev.length === next.length &&
                 (prev.length === 0 || JSON.stringify(prev[prev.length - 1]) === JSON.stringify(next[next.length - 1]))) {
               return prev;
@@ -404,7 +435,13 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
           // P-0815-F：内容未变化时不 setState（返回同一引用 → React bail out）——
           // 原实现每 3s 轮询无条件 setConversations → 整个组件每 3s 全量重渲染（含全部 useMemo 链）
           setConversations(prev => {
-            const next = d.recentConversations;
+            const floorAgents = new Set((Array.isArray(d.agents) ? d.agents : [])
+              .filter((agent: any) => String(agent.floorId || 'ground') === selectedFloorRef.current)
+              .map((agent: any) => String(agent.agentName || '')));
+            const next = d.recentConversations.filter((entry: any) => {
+              const speakers = Object.keys(entry || {}).filter(key => !SKIP_CONV_KEYS.has(key) && typeof entry[key] === 'string');
+              return speakers.length === 0 || speakers.some(name => floorAgents.has(name));
+            });
             if (prev.length === next.length &&
                 (prev.length === 0 || JSON.stringify(prev[prev.length - 1]) === JSON.stringify(next[next.length - 1]))) {
               return prev;
@@ -1069,6 +1106,25 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
         >
           {AVAILABLE_SCENES.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
+        <label style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 12, color: 'var(--text-2)' }}>
+          楼层
+          <select
+            className="input"
+            style={{ width: 100, padding: '3px 6px', fontSize: 12 }}
+            value={selectedFloor}
+            onChange={event => {
+              const floor = event.target.value;
+              selectedFloorRef.current = floor;
+              setSelectedFloor(floor);
+              const snapshot = lastWorldSnapshotRef.current;
+              const activeScene = gameRef.current?.scene.getScene('SimulationScene') as SimulationScene | undefined;
+              if (snapshot && activeScene) activeScene.applySnapshot(projectSnapshotToFloor(snapshot, floor));
+            }}
+            title="仅改变观察楼层，不修改服务器位置"
+          >
+            {floorIds.map(id => <option key={id} value={id}>{id}</option>)}
+          </select>
+        </label>
         <button className="btn btn-small" disabled={running} onClick={() => control('start', '开始')}>▶ 开始</button>
         <button className="btn btn-small" disabled={!running} onClick={() => control('stop', '暂停')}>⏸ 暂停</button>
         <button className="btn btn-small btn-danger" onClick={() => control('reset', '重置')}>🔄 重置</button>

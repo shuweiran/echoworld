@@ -72,6 +72,13 @@ public final class MapContract {
         m.put("tile_size", intOf(raw.get("tile_size"), DEFAULT_TILE_SIZE));
         m.put("width", intOf(raw.get("width"), 0));
         m.put("height", intOf(raw.get("height"), 0));
+        // Multi-floor extension: legacy maps omit both keys and remain ground-floor maps.
+        Object floors = raw.get("floors");
+        m.put("floors", floors instanceof List<?> ? floors : List.of(Map.of(
+                "id", "ground", "width", intOf(raw.get("width"), 0),
+                "height", intOf(raw.get("height"), 0), "tile_size", intOf(raw.get("tile_size"), DEFAULT_TILE_SIZE))));
+        Object connectors = raw.get("connectors");
+        m.put("connectors", connectors instanceof List<?> ? connectors : List.of());
 
         if (raw.get("tileset") instanceof Map<?, ?> ts) {
             m.put("tileset", ts);
@@ -162,6 +169,8 @@ public final class MapContract {
         m.put("decor", List.of());
         m.put("spawnMarkers", Map.of());
         m.put("warps", List.of());
+        m.put("floors", List.of(Map.of("id", "ground", "width", width, "height", height, "tile_size", tileSize)));
+        m.put("connectors", List.of());
         m.put("generator", Map.of("kind", "empty", "note", "空地图兜底"));
         return m;
     }

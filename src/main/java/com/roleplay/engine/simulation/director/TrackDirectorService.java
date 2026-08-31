@@ -2,6 +2,7 @@ package com.roleplay.engine.simulation.director;
 
 import com.roleplay.engine.core.Track;
 import com.roleplay.engine.simulation.AgentState;
+import com.roleplay.engine.simulation.HearingSystem;
 import com.roleplay.engine.simulation.track.InteractionDetector;
 import com.roleplay.engine.simulation.track.SpatialTrackResolver;
 import com.roleplay.engine.simulation.track.TrackAssignment;
@@ -57,6 +58,8 @@ public class TrackDirectorService {
 
     private final InteractionDetector detector = new InteractionDetector();
     private SpatialTrackResolver spatialResolver;
+    private volatile HearingSystem hearingSystem;
+    private volatile double conversationDistance = SpatialTrackResolver.DEFAULT_CONVERSATION_DISTANCE;
 
     /** 秘密任务成员：强制 ISOLATED。 */
     private final Set<String> secretAgents = ConcurrentHashMap.newKeySet();
@@ -81,8 +84,14 @@ public class TrackDirectorService {
      * 缺省/非法值回退 {@link SpatialTrackResolver#DEFAULT_CONVERSATION_DISTANCE}。
      */
     public void setConversationDistance(double conversationDistance) {
-        this.spatialResolver = new SpatialTrackResolver(conversationDistance);
+        this.conversationDistance = conversationDistance > 0 ? conversationDistance : SpatialTrackResolver.DEFAULT_CONVERSATION_DISTANCE;
+        this.spatialResolver = new SpatialTrackResolver(this.conversationDistance, Set.of(), hearingSystem);
         log.info("TrackDirector conversationDistance -> {} px", this.spatialResolver.getConversationDistance());
+    }
+
+    public void setHearingSystem(HearingSystem hearingSystem) {
+        this.hearingSystem = hearingSystem;
+        this.spatialResolver = new SpatialTrackResolver(conversationDistance, Set.of(), hearingSystem);
     }
 
     // ── 秘密任务注入 ───────────────────────────────────────────
@@ -134,7 +143,20 @@ public class TrackDirectorService {
 
         // 无敏感触发且无目标冲突 → 公开聊天：全部 MERGED（需求文档：不需要 → 全部 MERGED）。
         if (!score.triggered() && conflicted.isEmpty()) {
-            return allMerged(agents);
+            if (hearingSystem == null) return allMerged(agents);
+            Map<String, TrackAssignment> physical = spatialResolver.resolve(agents);
+            Map<String, TrackAssignment> safe = new LinkedHashMap<>();
+            for (AgentState agent : agents) {
+                TrackAssignment assignment = physical.get(agent.getAgentName());
+                if (assignment == null || assignment.type() == Track.Mode.ISOLATED || assignment.type() == Track.Mode.WEAK) {
+                    safe.put(agent.getAgentName(), assignment == null
+                            ? TrackAssignment.isolated(agent.getAgentName(), "物理听觉隔离") : assignment);
+                } else {
+                    safe.put(agent.getAgentName(), TrackAssignment.of(agent.getAgentName(), Track.Mode.MERGED,
+                            assignment.visibleAgents(), "公开聊天（受权威听觉边界约束）"));
+                }
+            }
+            return safe;
         }
 
         // 需要 Track 模式 → 空间分配作为基线（距离 → MERGED / WEAK / ISOLATED）。

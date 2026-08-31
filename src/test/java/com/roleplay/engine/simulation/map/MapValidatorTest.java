@@ -459,4 +459,44 @@ class MapValidatorTest {
         assertEquals(List.of(), m.get("zones"));
         assertTrue(m.get("layers") instanceof Map);
     }
+
+    @Test
+    @DisplayName("旧地图归一为 ground；三层 connector 合法且非法引用/越界/阻挡被拒绝")
+    void multiFloorConnectorContract() {
+        Map<String, Object> legacy = MapContract.normalize(validMap());
+        assertEquals("ground", ((Map<?, ?>) ((List<?>) legacy.get("floors")).getFirst()).get("id"));
+        assertEquals(List.of(), legacy.get("connectors"));
+
+        Map<String, Object> map = validMap();
+        List<List<Integer>> open = List.of(List.of(0, 0, 0), List.of(0, 0, 0), List.of(0, 0, 0));
+        map.put("floors", List.of(
+                Map.of("id", "f1", "width", 3, "height", 3, "collision", open),
+                Map.of("id", "f2", "width", 3, "height", 3, "collision", open),
+                Map.of("id", "f3", "width", 3, "height", 3, "collision", open)));
+        map.put("connectors", List.of(
+                Map.of("id", "s12", "sourceFloor", "f1", "source", List.of(1, 1),
+                        "targetFloor", "f2", "target", List.of(1, 1), "bidirectional", true),
+                Map.of("id", "s23", "sourceFloor", "f2", "source", List.of(2, 1),
+                        "targetFloor", "f3", "target", List.of(2, 1), "bidirectional", true)));
+        assertTrue(MapValidator.validateMap(map).ok(), () -> MapValidator.validateMap(map).errors().toString());
+
+        Map<String, Object> badFloor = new LinkedHashMap<>(map);
+        badFloor.put("connectors", List.of(Map.of("id", "bad", "sourceFloor", "missing", "source", List.of(1, 1),
+                "targetFloor", "f2", "target", List.of(1, 1), "bidirectional", true)));
+        assertFalse(MapValidator.validateMap(badFloor).ok());
+
+        Map<String, Object> outOfBounds = new LinkedHashMap<>(map);
+        outOfBounds.put("connectors", List.of(Map.of("id", "bad", "sourceFloor", "f1", "source", List.of(9, 1),
+                "targetFloor", "f2", "target", List.of(1, 1), "bidirectional", true)));
+        assertTrue(MapValidator.validateMap(outOfBounds).errors().stream().anyMatch(e -> e.contains("越界")));
+
+        List<List<Integer>> blocked = List.of(List.of(0, 0, 0), List.of(0, 1, 0), List.of(0, 0, 0));
+        Map<String, Object> blockedEntrance = new LinkedHashMap<>(map);
+        blockedEntrance.put("floors", List.of(
+                Map.of("id", "f1", "width", 3, "height", 3, "collision", blocked),
+                Map.of("id", "f2", "width", 3, "height", 3, "collision", open)));
+        blockedEntrance.put("connectors", List.of(Map.of("id", "bad", "sourceFloor", "f1", "source", List.of(1, 1),
+                "targetFloor", "f2", "target", List.of(1, 1), "bidirectional", true)));
+        assertTrue(MapValidator.validateMap(blockedEntrance).errors().stream().anyMatch(e -> e.contains("不可通行")));
+    }
 }

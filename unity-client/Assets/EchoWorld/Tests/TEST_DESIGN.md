@@ -7,6 +7,7 @@
 - `WorldReplicaTests`：sequence 0 full snapshot、Java wrapper 形状的 create/update/remove、乱序/丢帧、未知实体更新、重复帧幂等、返回值防御性复制。
 - `ProtocolCodecTests`：外层 `{type,payload}`、hello、Java replication fixture、无 payload error、非法 JSON。
 - `TransformPresentationAdapterTests`：首帧建立基线、后续平滑、DTO 不被表现层回写。
+- `WebSocketReplicationFlowTests`（PlayMode）：通过本机真实 WebSocket 环回连接运行 `ClientWebSocketTransport`，验证 `hello → full_snapshot → WorldReplica → ack` 运行时组件链路和 Java v1 wire shape。
 
 ## 接入服务端协议后的契约用例
 
@@ -17,4 +18,4 @@
 5. `assetId` 未登记时必须生成 primitive fallback；登记时实例化 Addressable，但二者均不得改变 replica。
 6. Animator fixture 验证 `applyRootMotion == false`，Locomotion/ActionPhase 只写表现参数。
 
-PlayMode/端到端测试应增加：`/ws/world` hello、interest、ACK/replay、断线重连、场景切换、Addressables 远程 catalog，以及 50/100/200 个 View 的帧时间和 Animator culling 基线。Gameplay movement/interaction 必须等服务端公开对应 handler 契约后再接。
+后续 PlayMode/端到端测试仍应增加：Java RANDOM_PORT 实例直连、interest 信息泄漏、replay/断线重连、场景切换、Addressables 远程 catalog，以及 50/100/200 个 View 的帧时间和 Animator culling 基线。Gameplay movement/interaction 必须等服务端公开对应 handler 契约后再接。

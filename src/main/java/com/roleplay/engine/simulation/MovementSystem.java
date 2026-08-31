@@ -52,6 +52,12 @@ public class MovementSystem {
         spatialGrid.rebuild(agents);
 
         for (AgentState self : agents) {
+            if (self.processAuthoritativeRoute()) {
+                // The transition tick is discrete: old-floor velocity is discarded and
+                // acceleration on the destination floor starts on the next world tick.
+                clampToWorld(self);
+                continue;
+            }
             if (!self.isHasTarget()) recoveryAgents.remove(self.getAgentName());
             // 玩家与 AI 是互斥执行链。玩家只消费显式输入，永远不进入下方 AI 力场/导航/漫步。
             if (self.isPlayerControlled()) {
@@ -83,6 +89,7 @@ public class MovementSystem {
         }
     }
 
+
     private double[] computeForce(AgentState self) {
         double perception = Math.max(self.getHearRange() * 2.5, 200);
         List<AgentState> neighbors = spatialGrid.queryNearby(self, perception);
@@ -93,6 +100,7 @@ public class MovementSystem {
         int sepCount = 0, cohCount = 0, aliCount = 0;
 
         for (AgentState other : neighbors) {
+                if (!self.navLocation().floorId().equals(other.navLocation().floorId())) continue;
                 double dist = self.distanceTo(other);
                 if (dist < 0.01) continue;
 
@@ -178,6 +186,7 @@ public class MovementSystem {
                 double ny = tdy / tdist;
                 boolean blocked = false;
                 for (Obstacle obs : obstacles) {
+                    if (!obs.belongsToFloor(self.navLocation().floorId())) continue;
                     if (obs.intersectsLine(self.getX(), self.getY(), finalTargetX, finalTargetY)) {
                         blocked = true;
                         // P-0814-I：沿墙绕行——直线被障碍打断时改为「切向滑行」而非原路弹回：
@@ -208,6 +217,7 @@ public class MovementSystem {
         }
 
         for (Obstacle obs : obstacles) {
+            if (!obs.belongsToFloor(self.navLocation().floorId())) continue;
             double ox = obs.getCenterX();
             double oy = obs.getCenterY();
             double dx = self.getX() - ox;
@@ -226,6 +236,7 @@ public class MovementSystem {
 
     private boolean isInsideObstacle(AgentState self) {
         for (Obstacle obstacle : obstacles) {
+            if (!obstacle.belongsToFloor(self.navLocation().floorId())) continue;
             if (obstacle.contains(self.getX(), self.getY())) return true;
         }
         return false;
@@ -278,6 +289,7 @@ public class MovementSystem {
         if (self.getY() > worldHeight - m) { self.setY(worldHeight - m); self.setVy(-Math.abs(self.getVy()) * 0.3); }
 
         for (Obstacle obs : obstacles) {
+            if (!obs.belongsToFloor(self.navLocation().floorId())) continue;
             if (!obs.intersectsCircle(self.getX(), self.getY(), COLLISION_RADIUS)) continue;
             double cx = self.getX();
             double cy = self.getY();

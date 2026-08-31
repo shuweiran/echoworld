@@ -1,12 +1,20 @@
 package com.roleplay.engine.simulation;
 
+import com.roleplay.engine.simulation.navigation.portal.PortalRuntimeState;
+import com.roleplay.engine.simulation.navigation.portal.SemanticPortal;
+
 import java.util.*;
 
 public class HearingSystem {
 
-    private final SpatialGrid spatialGrid;
+    private static final double CONNECTOR_ATTENUATION = 0.45;
+    private static final double CONNECTOR_ROUTE_PENALTY = 80.0;
+
+    private volatile SpatialGrid spatialGrid;
     /** 当前地图的实体障碍；墙体和建筑的直线遮挡会阻断普通对话和听觉。 */
     private volatile List<Obstacle> obstacles = List.of();
+    private volatile List<SemanticPortal> semanticPortals = List.of();
+    private volatile Map<String, PortalRuntimeState> portalStates = Map.of();
 
     public record HearingResult(String speakerName, String listenerName,
                                  double distance, double volume,
@@ -16,18 +24,128 @@ public class HearingSystem {
     }
 
     public HearingSystem(SpatialGrid spatialGrid) {
-        this.spatialGrid = spatialGrid;
+        this.spatialGrid = Objects.requireNonNull(spatialGrid, "spatialGrid");
+    }
+
+    public void setSpatialGrid(SpatialGrid spatialGrid) {
+        this.spatialGrid = Objects.requireNonNull(spatialGrid, "spatialGrid");
     }
 
     public void setObstacles(List<Obstacle> obstacles) {
         this.obstacles = obstacles == null ? List.of() : List.copyOf(obstacles);
     }
 
-    private boolean soundBlocked(AgentState a, AgentState b) {
+    /** Installs the same server-owned connector facts used by navigation. */
+    public void setSemanticPortals(List<SemanticPortal> portals, Map<String, PortalRuntimeState> states) {
+        semanticPortals = portals == null ? List.of() : List.copyOf(portals);
+        portalStates = states == null ? Map.of() : states;
+    }
+
+    private boolean soundBlocked(String floorId, double ax, double ay, double bx, double by) {
         for (Obstacle obstacle : obstacles) {
-            if (obstacle.blocksSound() && obstacle.intersectsLine(a.getX(), a.getY(), b.getX(), b.getY())) return true;
+            if (!obstacle.belongsToFloor(floorId)) continue;
+            if (obstacle.blocksSound() && obstacle.intersectsLine(ax, ay, bx, by)) return true;
         }
         return false;
+    }
+
+    private boolean soundBlocked(AgentState a, AgentState b) {
+        if (!a.navLocation().floorId().equals(b.navLocation().floorId())) return acousticPath(a, b) == null;
+        return soundBlocked(a.navLocation().floorId(), a.getX(), a.getY(), b.getX(), b.getY());
+    }
+
+    /**
+     * Computes the deterministic acoustic route through connector endpoints. Same-floor
+     * edges are admitted only when the server-owned sound obstacles allow line of sight;
+     * connector edges use the same live availability facts as navigation.
+     */
+    private AcousticPath acousticPath(AgentState source, AgentState listener) {
+        AcousticNode start = new AcousticNode("@source", source.navLocation().floorId(), source.getX(), source.getY());
+        AcousticNode goal = new AcousticNode("@listener", listener.navLocation().floorId(), listener.getX(), listener.getY());
+        if (start.floorId().equals(goal.floorId())) {
+            return soundBlocked(start.floorId(), start.x(), start.y(), goal.x(), goal.y())
+                    ? null : new AcousticPath(Math.hypot(goal.x() - start.x(), goal.y() - start.y()), 0);
+        }
+
+        List<AcousticNode> nodes = new ArrayList<>();
+        nodes.add(start);
+        nodes.add(goal);
+        Map<String, int[]> portalNodeIndexes = new LinkedHashMap<>();
+        for (SemanticPortal portal : semanticPortals) {
+            if (!isAcoustic(portal) || !isAvailable(portal.id())) continue;
+            int a = nodes.size();
+            nodes.add(new AcousticNode(portal.id() + ":a", portal.endpointA().floorId(),
+                    portal.endpointA().worldPosition().x(), portal.endpointA().worldPosition().z()));
+            int b = nodes.size();
+            nodes.add(new AcousticNode(portal.id() + ":b", portal.endpointB().floorId(),
+                    portal.endpointB().worldPosition().x(), portal.endpointB().worldPosition().z()));
+            portalNodeIndexes.put(portal.id(), new int[]{a, b});
+        }
+        if (portalNodeIndexes.isEmpty()) return null;
+
+        double[] scores = new double[nodes.size()];
+        double[] distances = new double[nodes.size()];
+        int[] hops = new int[nodes.size()];
+        Arrays.fill(scores, Double.POSITIVE_INFINITY);
+        scores[0] = 0;
+        PriorityQueue<AcousticVisit> queue = new PriorityQueue<>(Comparator.comparingDouble(AcousticVisit::score));
+        queue.add(new AcousticVisit(0, 0));
+        while (!queue.isEmpty()) {
+            AcousticVisit visit = queue.remove();
+            int current = visit.nodeIndex();
+            if (visit.score() > scores[current]) continue;
+            if (current == 1) return new AcousticPath(distances[current], hops[current]);
+            AcousticNode from = nodes.get(current);
+
+            for (int next = 0; next < nodes.size(); next++) {
+                if (next == current) continue;
+                AcousticNode to = nodes.get(next);
+                if (!from.floorId().equals(to.floorId())
+                        || soundBlocked(from.floorId(), from.x(), from.y(), to.x(), to.y())) continue;
+                double segment = Math.hypot(to.x() - from.x(), to.y() - from.y());
+                relax(queue, scores, distances, hops, current, next, segment, 0);
+            }
+            for (SemanticPortal portal : semanticPortals) {
+                int[] endpoints = portalNodeIndexes.get(portal.id());
+                if (endpoints == null) continue;
+                if (current == endpoints[0]) relax(queue, scores, distances, hops, current, endpoints[1], 0, 1);
+                if (portal.bidirectional() && current == endpoints[1]) {
+                    relax(queue, scores, distances, hops, current, endpoints[0], 0, 1);
+                }
+            }
+        }
+        return null;
+    }
+
+    private static void relax(PriorityQueue<AcousticVisit> queue, double[] scores, double[] distances, int[] hops,
+                              int current, int next, double segmentDistance, int connectorHops) {
+        double nextDistance = distances[current] + segmentDistance;
+        int nextHops = hops[current] + connectorHops;
+        double nextScore = nextDistance + nextHops * CONNECTOR_ROUTE_PENALTY;
+        if (nextScore + 1e-9 >= scores[next]) return;
+        scores[next] = nextScore;
+        distances[next] = nextDistance;
+        hops[next] = nextHops;
+        queue.add(new AcousticVisit(next, nextScore));
+    }
+
+    private boolean isAvailable(String portalId) {
+        PortalRuntimeState state = portalStates.get(portalId);
+        return state == null || state.availability() == PortalRuntimeState.Availability.AVAILABLE;
+    }
+
+    private static boolean isAcoustic(SemanticPortal portal) {
+        if (portal.tags().contains("acoustic")) return true;
+        return switch (portal.kind()) {
+            case STAIRS, ELEVATOR, LADDER, DOOR -> true;
+            case TELEPORT, LINK -> false;
+        };
+    }
+
+    private record AcousticNode(String id, String floorId, double x, double y) {}
+    private record AcousticVisit(int nodeIndex, double score) {}
+    private record AcousticPath(double distance, int connectorHops) {
+        double attenuation() { return Math.pow(CONNECTOR_ATTENUATION, connectorHops); }
     }
 
     public List<HearingResult> computeAudibility(Collection<AgentState> agents) {
@@ -49,10 +167,12 @@ public class HearingSystem {
 
             for (AgentState listener : nearby) {
                 if (listener == speaker) continue;
-                if (soundBlocked(speaker, listener)) continue;
-                double dist = speaker.distanceTo(listener);
+                AcousticPath path = acousticPath(speaker, listener);
+                if (path == null) continue;
+                double connectorLoss = path.attenuation();
+                double dist = path.distance();
                 double attenuation = 1.0 / (1.0 + dist * dist * 0.0001);
-                double effectiveRange = rawRange * attenuation * listener.getHearRange() / 200.0;
+                double effectiveRange = rawRange * attenuation * connectorLoss * listener.getHearRange() / 200.0;
 
                 results.add(new HearingResult(
                         speaker.getAgentName(), listener.getAgentName(),
@@ -82,17 +202,12 @@ public class HearingSystem {
 
     public Set<String> findAudiblePeers(AgentState self, Collection<AgentState> allAgents) {
         Set<String> audible = new LinkedHashSet<>();
-        double volume = computeVolume(self);
-        double rawRange = self.getHearRange() * volume;
+        double rawRange = self.getHearRange() * computeVolume(self);
         List<AgentState> nearby = spatialGrid.queryNearby(self, rawRange * 1.5);
 
         for (AgentState other : nearby) {
             if (other == self) continue;
-            if (soundBlocked(self, other)) continue;
-            double dist = self.distanceTo(other);
-            double attenuation = 1.0 / (1.0 + dist * dist * 0.0001);
-            double effectiveRange = rawRange * attenuation * other.getHearRange() / 200.0;
-            if (dist <= effectiveRange) {
+            if (canHear(self, other, SpeechVolume.NORMAL)) {
                 audible.add(other.getAgentName());
             }
         }
@@ -105,11 +220,14 @@ public class HearingSystem {
 
     /** 单向发言判定：speaker 的本次音量决定 listener 是否实际听到。 */
     public boolean canHear(AgentState speaker, AgentState listener, SpeechVolume utteranceVolume) {
-        if (speaker == null || listener == null || soundBlocked(speaker, listener)) return false;
-        double distance = speaker.distanceTo(listener);
+        if (speaker == null || listener == null) return false;
+        AcousticPath path = acousticPath(speaker, listener);
+        if (path == null) return false;
+        double connectorLoss = path.attenuation();
+        double distance = path.distance();
         double volume = computeVolume(speaker) * (utteranceVolume == null ? 1.0 : utteranceVolume.multiplier());
         double attenuation = 1.0 / (1.0 + distance * distance * 0.0001);
-        double effectiveRange = speaker.getHearRange() * volume * attenuation * listener.getHearRange() / 200.0;
+        double effectiveRange = speaker.getHearRange() * volume * attenuation * connectorLoss * listener.getHearRange() / 200.0;
         return distance <= effectiveRange;
     }
 
@@ -129,8 +247,11 @@ public class HearingSystem {
      * 不把普通持续交流的距离衰减规则误用于“玩家找最近 AI 建组”这一入口。
      */
     public boolean canAutoDyadWithinDistance(AgentState a, AgentState b, double maxDistance) {
-        if (a == null || b == null || soundBlocked(a, b)) return false;
-        return a.distanceTo(b) < maxDistance;
+        if (a == null || b == null) return false;
+        AcousticPath path = acousticPath(a, b);
+        // Auto-DYAD intentionally uses its explicit social distance threshold rather
+        // than the normal volume falloff, while still requiring a legal acoustic path.
+        return path != null && path.distance() < maxDistance;
     }
 
     private double computeVolume(AgentState agent) {

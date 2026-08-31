@@ -3,11 +3,15 @@ package com.roleplay.engine.simulation;
 import com.roleplay.engine.agent.Agent;
 import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.simulation.conversation.ConversationManager;
+import com.roleplay.engine.simulation.navigation.portal.*;
+import com.roleplay.engine.simulation.spatial.NavLocation;
+import com.roleplay.engine.simulation.spatial.Vec3;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -110,8 +114,57 @@ class SpeechDecisionAndPerceptionTest {
         assertEquals(java.util.Set.of("C", "D"), resolve(f).actualListeners());
     }
 
+    @Test
+    void speechCommitDropsListenerWhoChangesToSealedFloorWhilePending() {
+        Fixture f = fixture("A", 0, 0, "B", 20, 0);
+        enqueue(f, utterance("A", SpeechVolume.NORMAL));
+        setFloor(f.world.getState("B"), "f2", "s2");
+        assertTrue(resolve(f).actualListeners().isEmpty());
+    }
+
+    @Test
+    void speechCommitAddsListenerWhoReturnsToSpeakersFloorWhilePending() {
+        Fixture f = fixture("A", 0, 0, "B", 20, 0);
+        setFloor(f.world.getState("B"), "f2", "s2");
+        enqueue(f, utterance("A", SpeechVolume.NORMAL));
+        setFloor(f.world.getState("B"), "ground", "ground");
+        assertEquals(java.util.Set.of("B"), resolve(f).actualListeners());
+    }
+
+    @Test
+    void speechCommitUsesSpeakersCommitTimeFloor() {
+        Fixture f = fixture("A", 0, 0, "B", 20, 0);
+        enqueue(f, utterance("A", SpeechVolume.NORMAL));
+        setFloor(f.world.getState("A"), "f2", "s2");
+        assertTrue(resolve(f).actualListeners().isEmpty());
+    }
+
+    @Test
+    void speechCommitRechecksConnectorStateAtDelivery() {
+        Fixture f = fixture("A", 0, 0, "B", 20, 0);
+        setFloor(f.world.getState("B"), "f2", "s2");
+        SemanticPortal stairs = stairs();
+        ConcurrentHashMap<String, PortalRuntimeState> states = new ConcurrentHashMap<>();
+        states.put("stairs", PortalRuntimeState.available("stairs"));
+        f.world.getHearingSystem().setSemanticPortals(List.of(stairs), states);
+        enqueue(f, utterance("A", SpeechVolume.NORMAL));
+        states.put("stairs", new PortalRuntimeState("stairs", PortalRuntimeState.Availability.DISABLED, 1, "closed"));
+        assertTrue(resolve(f).actualListeners().isEmpty());
+    }
+
     private ConversationManager.PendingUtterance utterance(String speaker, SpeechVolume volume) {
         return new ConversationManager.PendingUtterance(speaker, "测试发言", volume, 100, 200);
+    }
+
+    private static void setFloor(AgentState state, String floor, String surface) {
+        state.getSpatial().setNavLocation(new NavLocation(surface, floor,
+                new Vec3(state.getX(), 0, state.getY()), -1L));
+    }
+
+    private static SemanticPortal stairs() {
+        return new SemanticPortal("stairs", SemanticPortal.Kind.STAIRS,
+                new PortalEndpoint("ground", "ground", new Vec3(10, 0, 10)),
+                new PortalEndpoint("f2", "s2", new Vec3(10, 3, 10)), true, 10, "", java.util.Set.of("acoustic"));
     }
 
     private ConversationManager.SpeechDelivery resolve(Fixture fixture) {
