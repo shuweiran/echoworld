@@ -1,6 +1,6 @@
 package com.roleplay.engine.simulation;
 
-import com.roleplay.engine.simulation.navigation.NavigationPathfinder;
+import com.roleplay.engine.simulation.movement.PlayerMovementExecutor;
 
 import java.util.Collection;
 import java.util.HashSet;
@@ -13,7 +13,7 @@ public class MovementSystem {
     private final double worldHeight;
     private final double margin;
     private final SpatialGrid spatialGrid;
-    private final NavigationPathfinder pathfinder = new NavigationPathfinder();
+    private final PlayerMovementExecutor playerMovement = new PlayerMovementExecutor();
     /** 本 tick 从障碍内部恢复的 Agent，本次目标期间不切换到 A*，避免恢复路径被重规划打断。 */
     private final Set<String> recoveryAgents = new HashSet<>();
 
@@ -53,6 +53,12 @@ public class MovementSystem {
 
         for (AgentState self : agents) {
             if (!self.isHasTarget()) recoveryAgents.remove(self.getAgentName());
+            // 玩家与 AI 是互斥执行链。玩家只消费显式输入，永远不进入下方 AI 力场/导航/漫步。
+            if (self.isPlayerControlled()) {
+                playerMovement.update(self, dt);
+                clampToWorld(self);
+                continue;
+            }
             if (self.isInConversation()) {
                 // P-0813-E：对话中的角色 —— AI 自主目标清掉并冻结速度（避免对话中乱跑）；
                 // 玩家手动指定目标（/target 端点 manualTarget，如 2D 点击）保留且不冻结：
@@ -61,40 +67,13 @@ public class MovementSystem {
                     self.clearTarget();
                 }
                 if (self.isManualTarget()) {
-                    if (self.isPlayerControlled() && self.hasManualDirection()) {
-                        applyManualDirection(self, dt);
-                    } else {
-                        double[] force = computeForce(self);
-                        applyForce(self, force, dt);
-                    }
+                    double[] force = computeForce(self);
+                    applyForce(self, force, dt);
                     clampToWorld(self);
                 } else {
                     self.setVx(0);
                     self.setVy(0);
                 }
-                continue;
-            }
-
-            // P-0816-A：玩家角色无手动目标 → 速度恒 0、位置完全静止（自走根治）。
-            // computeForce 的障碍斥力（OBSTACLE_REPULSION=200）与 clampToWorld 的反弹残余速度
-            // （0.3 保留）只对 AI 生效——玩家无输入时即使贴着墙/障碍也绝不产生 vx/vy；
-            // clampToWorld 仍执行（边界/障碍推挤防卡墙，但速度归零）。非手动目标一并清掉
-            // （对齐 isInConversation 分支语义：玩家不持有任何 AI 指派目标）。
-            if (self.isPlayerControlled() && !self.isManualTarget()) {
-                if (self.isHasTarget()) {
-                    self.clearTarget();
-                }
-                self.setVx(0);
-                self.setVy(0);
-                clampToWorld(self);
-                continue;
-            }
-
-            // P-0820-R：WASD/方向键走确定性方向，不经过 AI 惯性、群体力和障碍斥力。
-            // 碰撞只会把位置推出/停在边界，不反向改写输入，避免偏航、反向和原地打转。
-            if (self.isPlayerControlled() && self.isManualTarget() && self.hasManualDirection()) {
-                applyManualDirection(self, dt);
-                clampToWorld(self);
                 continue;
             }
 
@@ -113,11 +92,7 @@ public class MovementSystem {
         double aliX = 0, aliY = 0;
         int sepCount = 0, cohCount = 0, aliCount = 0;
 
-        // P-0815-H：玩家角色（isPlayerControlled）不参与群体 flocking（分离/聚合/对齐）——
-        // 这些是 AI 自主行为力，玩家角色无输入时必须完全静止（主人反馈「不控制时自己乱动」）；
-        // AI 仍会把玩家当作邻居（互相避让不穿人），只是玩家自己不受这些力的推挤/牵引。
-        if (!self.isPlayerControlled()) {
-            for (AgentState other : neighbors) {
+        for (AgentState other : neighbors) {
                 double dist = self.distanceTo(other);
                 if (dist < 0.01) continue;
 
@@ -142,7 +117,6 @@ public class MovementSystem {
                     aliY += other.getVy();
                     aliCount++;
                 }
-            }
         }
 
         double forceX = 0, forceY = 0;
@@ -164,24 +138,20 @@ public class MovementSystem {
             double finalTargetX = self.getTargetX();
             double finalTargetY = self.getTargetY();
             boolean insideObstacle = isInsideObstacle(self);
-            boolean useNavigation = !self.isPlayerControlled()
+            boolean autonomousNavigation = !self.isPlayerControlled()
                     && !self.hasManualDirection()
-                    && !obstacles.isEmpty()
                     && !insideObstacle
                     && !recoveryAgents.contains(self.getAgentName());
+            boolean useNavigation = autonomousNavigation
+                    && self.hasNavigationPlan()
+                    && !self.getNavigationPath().isEmpty();
+            boolean unreachable = autonomousNavigation
+                    && self.hasNavigationPlan()
+                    && self.getNavigationPath().isEmpty();
             if (insideObstacle) recoveryAgents.add(self.getAgentName());
             // 卡在障碍内部时走旧的确定性推出路径，但提高一点牵引力，确保贴边恢复
             // 不会在 60 tick 回归窗口内停在墙前；正常路径规划不使用该增益。
             double targetWeight = insideObstacle ? TARGET_WEIGHT * 1.2 : TARGET_WEIGHT;
-            // 方向键是直接控制；点击目标、日程和 AI 目标统一使用服务端路径。
-            // 路径只在目标变化时规划，避免每个 tick 重建地图。
-            if (useNavigation && !self.hasNavigationPlan()
-                    && Math.hypot(finalTargetX - self.getX(), finalTargetY - self.getY()) > 5) {
-                List<NavigationPathfinder.Point> planned = pathfinder.findPath(
-                        self.getX(), self.getY(), finalTargetX, finalTargetY,
-                        worldWidth, worldHeight, obstacles);
-                self.setNavigationPath(planned.stream().map(p -> new double[]{p.x(), p.y()}).toList());
-            }
             if (useNavigation) {
                 List<double[]> path = self.getNavigationPath();
                 int index = self.getNavigationWaypointIndex();
@@ -198,7 +168,10 @@ public class MovementSystem {
             double tdx = finalTargetX - self.getX();
             double tdy = finalTargetY - self.getY();
             double tdist = Math.sqrt(tdx * tdx + tdy * tdy);
-            if (tdist < 5) {
+            if (unreachable) {
+                self.setVx(0.0);
+                self.setVy(0.0);
+            } else if (tdist < 5) {
                 self.clearTarget();
             } else {
                 double nx = tdx / tdist;
@@ -213,10 +186,8 @@ public class MovementSystem {
                         // P-0815-H：切向滑行对玩家禁用（AI 绕行设计，玩家点墙会沿墙滑离目标点——
                         // 实测 36.6px/400ms 持续滑行 = 方向漂移/失控滑行）；玩家保留 30% 目标力
                         // 走到墙边停下（可控、可预期），不再自主绕行。
-                        if (!self.isPlayerControlled()) {
-                            forceX += ny * TANGENT_SLIDE_WEIGHT;
-                            forceY += -nx * TANGENT_SLIDE_WEIGHT;
-                        }
+                        forceX += ny * TANGENT_SLIDE_WEIGHT;
+                        forceY += -nx * TANGENT_SLIDE_WEIGHT;
                         forceX += nx * targetWeight * BLOCKED_TARGET_KEEP;
                         forceY += ny * targetWeight * BLOCKED_TARGET_KEEP;
                         break;
@@ -231,8 +202,7 @@ public class MovementSystem {
 
         // P-0815-H：随机漫步是 AI 自主行为，玩家角色跳过——玩家无目标且无外力时速度必须恒为 0
         // （完全静止，不漂移）；AI 角色保持原有 wander 行为不变。
-        if (!self.isPlayerControlled()
-                && Math.abs(forceX) < 0.5 && Math.abs(forceY) < 0.5 && !self.isHasTarget()) {
+        if (Math.abs(forceX) < 0.5 && Math.abs(forceY) < 0.5 && !self.isHasTarget()) {
             forceX += (Math.random() - 0.5) * WANDER_STRENGTH;
             forceY += (Math.random() - 0.5) * WANDER_STRENGTH;
         }
@@ -279,14 +249,6 @@ public class MovementSystem {
         self.setVx(targetVx * damping);
         self.setVy(targetVy * damping);
 
-        self.setX(self.getX() + self.getVx() * dt);
-        self.setY(self.getY() + self.getVy() * dt);
-    }
-
-    private void applyManualDirection(AgentState self, double dt) {
-        double speed = Math.max(0.0, self.getMoveSpeed());
-        self.setVx(self.getManualDirectionX() * speed);
-        self.setVy(self.getManualDirectionY() * speed);
         self.setX(self.getX() + self.getVx() * dt);
         self.setY(self.getY() + self.getVy() * dt);
     }

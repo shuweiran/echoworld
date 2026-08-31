@@ -27,4 +27,34 @@ class ArchitectureTest {
     static final ArchRule coreModelDoesNotDependOnWebControllers = noClasses()
             .that().resideInAnyPackage("..core..", "..agent..")
             .should().dependOnClassesThat().resideInAnyPackage("..controller..");
+
+    @ArchTest
+    static final ArchRule movementDoesNotPlanRoutes = noClasses()
+            .that().haveSimpleName("MovementSystem")
+            .should().dependOnClassesThat().resideInAnyPackage("..simulation.navigation..");
+
+    @ArchTest
+    static final ArchRule worldKernelDoesNotDependOnWebControllers = noClasses()
+            .that().resideInAnyPackage(
+                    "..simulation.navigation..",
+                    "..simulation.spatial..",
+                    "..simulation.action..",
+                    "..simulation.worldobject..")
+            .should().dependOnClassesThat().resideInAnyPackage("..controller..");
+
+    @ArchTest
+    static final ArchRule v2DomainModulesDoNotDependOnSpringOrAdapters = noClasses()
+            .that().resideInAnyPackage(
+                    "..simulation.agentruntime..",
+                    "..simulation.worlddefinition..",
+                    "..simulation.replication..",
+                    "..simulation.persistence..",
+                    "..simulation.observability..",
+                    "..simulation.navigation.portal..")
+            .should().dependOnClassesThat().resideInAnyPackage(
+                    "..controller..",
+                    "..service..",
+                    "org.springframework..",
+                    "jakarta.persistence..",
+                    "javax.persistence..");
 }

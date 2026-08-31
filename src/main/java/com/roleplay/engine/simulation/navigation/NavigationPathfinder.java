@@ -22,7 +22,7 @@ import java.util.PriorityQueue;
 public final class NavigationPathfinder {
 
     public static final double DEFAULT_CELL_SIZE = 32.0;
-    private static final double AGENT_RADIUS = 12.0;
+    private static final double DEFAULT_AGENT_RADIUS = 12.0;
     private static final int MAX_EXPANDED_NODES = 20_000;
 
     public record Point(double x, double y) { }
@@ -34,11 +34,22 @@ public final class NavigationPathfinder {
                                 double targetX, double targetY,
                                 double worldWidth, double worldHeight,
                                 List<Obstacle> obstacles) {
+        return findPath(startX, startY, targetX, targetY, worldWidth, worldHeight,
+                obstacles, DEFAULT_AGENT_RADIUS);
+    }
+
+    public List<Point> findPath(double startX, double startY,
+                                double targetX, double targetY,
+                                double worldWidth, double worldHeight,
+                                List<Obstacle> obstacles,
+                                double agentRadius) {
         if (worldWidth <= 0 || worldHeight <= 0) return List.of();
+        if (!Double.isFinite(agentRadius) || agentRadius < 0) return List.of();
         double cellSize = DEFAULT_CELL_SIZE;
         int columns = Math.max(1, (int) Math.ceil(worldWidth / cellSize));
         int rows = Math.max(1, (int) Math.ceil(worldHeight / cellSize));
-        boolean[][] blocked = buildBlocked(columns, rows, cellSize, worldWidth, worldHeight, obstacles);
+        boolean[][] blocked = buildBlocked(columns, rows, cellSize, worldWidth, worldHeight,
+                obstacles, agentRadius);
         Cell start = nearestWalkable(toCell(startX, startY, cellSize), blocked);
         Cell goal = nearestWalkable(toCell(targetX, targetY, cellSize), blocked);
         if (start == null || goal == null) return List.of();
@@ -76,7 +87,8 @@ public final class NavigationPathfinder {
 
     private boolean[][] buildBlocked(int columns, int rows, double cellSize,
                                      double worldWidth, double worldHeight,
-                                     List<Obstacle> obstacles) {
+                                     List<Obstacle> obstacles,
+                                     double agentRadius) {
         boolean[][] blocked = new boolean[rows][columns];
         List<Obstacle> safeObstacles = obstacles == null ? List.of() : obstacles;
         for (int y = 0; y < rows; y++) {
@@ -84,10 +96,10 @@ public final class NavigationPathfinder {
                 double cx = Math.min(worldWidth - 1, (x + 0.5) * cellSize);
                 double cy = Math.min(worldHeight - 1, (y + 0.5) * cellSize);
                 for (Obstacle obstacle : safeObstacles) {
-                    if (cx >= obstacle.getX() - AGENT_RADIUS
-                            && cx <= obstacle.getX() + obstacle.getWidth() + AGENT_RADIUS
-                            && cy >= obstacle.getY() - AGENT_RADIUS
-                            && cy <= obstacle.getY() + obstacle.getHeight() + AGENT_RADIUS) {
+                    if (cx >= obstacle.getX() - agentRadius
+                            && cx <= obstacle.getX() + obstacle.getWidth() + agentRadius
+                            && cy >= obstacle.getY() - agentRadius
+                            && cy <= obstacle.getY() + obstacle.getHeight() + agentRadius) {
                         blocked[y][x] = true;
                         break;
                     }

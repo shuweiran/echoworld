@@ -209,7 +209,7 @@ public class SchedulerService {
                 // 区域内游荡：无目标或目标已离开区域 → 选新随机点（到达后 MovementSystem 清目标 → 下 tick 重选）
                 if (!s.isHasTarget() || !targetInRegion(s, w.region())) {
                     double[] p = randomPointInRegion(w.region(), s.getAgentName(), now);
-                    s.setTarget(p[0], p[1]);
+                    s.setAutonomousTarget(p[0], p[1]);
                 }
             }
             case SOLO, WORK -> {
@@ -217,7 +217,7 @@ public class SchedulerService {
                 double[] p = fixedPointInRegion(w.region(), s.getAgentName(), w.slot());
                 double d = distance(s, p);
                 if (d > ARRIVE_EPSILON) {
-                    if (!s.isHasTarget() || !targetEquals(s, p)) s.setTarget(p[0], p[1]);
+                    if (!s.isHasTarget() || !targetEquals(s, p)) s.setAutonomousTarget(p[0], p[1]);
                 } else if (s.isHasTarget()) {
                     s.clearTarget(); // 已到点：清目标站立（独处/工作静置）
                 }

@@ -156,7 +156,7 @@ public class MovementConstraint {
             if (s == null || s.isPlayerControlled() || s.isManualTarget() || s.isInConversation()) {
                 continue;
             }
-            s.setTarget(t.targetX(), t.targetY());
+            s.setAutonomousTarget(t.targetX(), t.targetY());
         }
     }
 

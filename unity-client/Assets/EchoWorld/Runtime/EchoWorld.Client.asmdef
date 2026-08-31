@@ -1,0 +1,19 @@
+{
+  "name": "EchoWorld.Client",
+  "rootNamespace": "EchoWorld.Client",
+  "references": [
+    "Unity.Addressables",
+    "Unity.ResourceManager",
+    "Unity.Newtonsoft.Json"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
+

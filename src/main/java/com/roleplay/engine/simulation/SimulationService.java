@@ -827,9 +827,9 @@ public class SimulationService {
             Object ax = d.get("target_x");
             Object ay = d.get("target_y");
             if (ax instanceof Number && ay instanceof Number) {
-                state.setTargetX(clamp(((Number) ax).doubleValue(), 30, world.getWorldWidth() - 30));
-                state.setTargetY(clamp(((Number) ay).doubleValue(), 30, world.getWorldHeight() - 30));
-                state.setHasTarget(true);
+                state.setAutonomousTarget(
+                        clamp(((Number) ax).doubleValue(), 30, world.getWorldWidth() - 30),
+                        clamp(((Number) ay).doubleValue(), 30, world.getWorldHeight() - 30));
             }
 
             String action = (String) d.get("action");

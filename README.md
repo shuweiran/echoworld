@@ -19,10 +19,17 @@ EchoWorld 是一个 Java 21 / Spring Boot / React / Phaser / Babylon.js 项目�
 
 ```text
 Phaser 2D ─┐
-           ├─ React → REST + SSE → Spring adapters → Simulation runtime
-Babylon 3D ┘                                      ├─ deterministic world rules
-                                                  └─ LLM adapters for language only
+Babylon 3D ├─ React debug client → REST + SSE ─┐
+           │                                   ├─ Spring adapters → Java World Runtime
+Unity 6 ───┘ formal client → WebSocket delta ─┘                    ├─ deterministic rules
+                                                                   └─ optional LLM planning/language
 ```
+
+世界内核按职责分层：静态 `WorldDefinition` 与运行态事实分离，`Transform3D/NavLocation` 保存权威空间，Grid 或 baked NavMesh 后端负责平面路径，Semantic Portal 负责跨楼层连接，`MovementSystem` 只执行；玩家输入与 AI 自主链路互斥。Utility/Skill/可选 LLM Planner 只能提交 `ActionIntent`，请求进入世界 tick 的单写入者 FSM，并在执行及跨 tick 推进前按 world version、控制权、目标和 Affordance 复验，最后产生确定性的 `ActionResult/Event`。
+
+客户端只持有投影。WebSocket v1 提供 interest-filtered full snapshot、delta frame、ACK/replay/full-resync；慢客户端发送在有界复制 worker 中执行，不阻塞权威 tick。世界 checkpoint、低频 durable event、运行指标和 JFR 事件用于恢复与诊断。
+
+Babylon 3D 支持第一人称与第三人称即时切换：第一人称绑定玩家眼位并隐藏自身模型，第三人称提供跟随、自由观察、缩放和摄像机碰撞。两种视角的 WASD 都只转换为镜头相对的显式玩家输入，摄像机和 AI 都不能直接修改玩家位置。
 
 核心调用链为：`SimulationOrchestrator` → `SpatialTrackResolver` → `ConversationManager` → `SpeechGate` → `TrackStrategy` → `LLMClient`。详细职责、依赖边界和已知技术债见 [Architecture](docs/architecture.md)。
 
@@ -34,7 +41,9 @@ Babylon 3D ┘                                      ├─ deterministic world r
 - 非法地图被拒绝或走确定性降级；
 - SSE 重连不泄漏其他会话状态。
 - 2D/3D 切换不改变服务器位置、碰撞、听觉或 Track 判定。
-- AI 目标与点击目标由服务端确定性 A* 绕障，LLM 只提出意图；路径航点作为世界快照的一部分供 3D 调试与表现层消费。
+- AI 目标由服务端 NavigationService 规划；当前 Grid A* 是可替换后端。玩家输入不进入 AI 导航、日程、导演或群体力系统。路径航点作为世界快照的一部分供 3D 调试与表现层消费。
+- WebSocket 只复制服务端允许的字段；客户端不能提交坐标、门状态或 Action 成功结果，缺帧必须 ACK/replay 或 full resync。
+- 50/100/200 Agent cognitive LOD 档位有确定性 smoke test；远距 Agent 进入 Macro 模式，不调用 LLM 或逐步 Skill。
 
 对应入口：[Context Track](docs/concepts/context-routing.md)、[Testing](docs/testing.md)、[Evaluation](docs/evaluation.md)。固定三角色演示规范见 [Three-agent demo](docs/demo-three-agent.md)；它目前是可复现规格，公开录屏仍在 Roadmap 中。
 
@@ -60,18 +69,19 @@ npm run build
 
 ## Scope and limitations
 
-- Designed for small-to-medium Agent populations; large-scale capacity still needs profiling.
-- Babylon.js 提供程序化低模场景、Capsule 回退角色，以及本机私有 GLB/PMX 玩家模型加载与程序化 Idle/Walk/Run/Talk 骨骼表现；私有模型目录受 Git 忽略且不随公开仓库分发。服务端导航已具备 2.5D A* MVP，多楼层 NavMesh、可公开分发的标准角色资产与正式动画片段仍在后续阶段。
+- 50/100/200 Agent 已覆盖认知 LOD smoke profile；这不是生产规模、长时在线或多机扩展承诺，仍需持续压测。
+- Babylon.js 提供程序化低模场景、Capsule 回退角色，以及本机私有 GLB/PMX 玩家模型加载与程序化 Idle/Walk/Run/Talk 骨骼表现；私有模型目录受 Git 忽略且不随公开仓库分发。服务端已有 baked NavMesh 图查询和多楼层 Semantic Portal；离线 Recast 烘焙工具链、Crowd/动态 TileCache、公开标准角色资产与正式动画片段仍待完成。
+- `unity-client/` 是已对齐 WebSocket v1 的 Unity 6 最小正式客户端骨架；当前环境只完成静态契约核查，尚无 Unity Editor/PlayMode/真实服务器联调结论。
 - Language generation is nondeterministic; movement, permissions, collision, Track and game state are deterministic.
 - H2 is the local single-machine persistence choice, not a production database claim.
 - This is not a GIS or remote-sensing production system: CRS, GeoJSON/Shapefile, raster processing and hydrological models are not implemented.
-- `SimulationService`, `SimulationController` and `ConversationManager` remain planned responsibility-splitting targets.
+- `SimulationService`, `SimulationController` and `ConversationManager` remain planned responsibility-splitting targets；旧入口通过 strangler adapter 逐步迁移，不做一次性重写。
 
 ## Roadmap
 
 - Record the 20–30 second three-agent spatial-context demo.
-- Add architecture-dependency tests and focused frontend state tests.
-- Publish capacity and latency baselines for small/medium simulations.
+- 在装有 Unity 6 的环境执行 EditMode/PlayMode、真实 WebSocket 重连与 Addressables 远程资源验证。
+- 补离线 Recast/NavMesh 烘焙工具链、Crowd/动态障碍，并发布持续负载下的容量与延迟基线。
 - 接入许可清晰、可公开分发的标准 GLB 人物资产，并用正式 Idle/Walk/Run/Talk 动画片段、动画混合与 LOD 替换本机程序化降级表现。
 
 ## Assets and license

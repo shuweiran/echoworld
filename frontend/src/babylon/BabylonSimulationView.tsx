@@ -4,7 +4,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ArcRotateCamera, Color3, DirectionalLight, Engine, HemisphericLight,
+  Color3, DirectionalLight, Engine, HemisphericLight,
   Mesh, MeshBuilder, PointerEventTypes, Scene, StandardMaterial,
   TransformNode, Vector3,
 } from '@babylonjs/core';
@@ -17,6 +17,8 @@ import {
   updatePrivateMmdAvatar,
 } from './privateMmdAvatar';
 import type { PrivateMmdAvatar } from './privateMmdAvatar';
+import { PlayerCameraRig } from './playerCameraRig';
+import type { PlayerCameraMode } from './playerCameraRig';
 
 export interface BabylonSimulationViewProps {
   map?: ScriptMap;
@@ -118,7 +120,7 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const engineRef = useRef<Engine | null>(null);
   const sceneRef = useRef<Scene | null>(null);
-  const cameraRef = useRef<ArcRotateCamera | null>(null);
+  const cameraRigRef = useRef<PlayerCameraRig | null>(null);
   const agentsRef = useRef<Map<string, AgentVisual>>(new Map());
   const snapshotRef = useRef<SimSnapshot>({});
   const projectionRef = useRef<WorldProjection>(projectionOf({}, map));
@@ -128,6 +130,7 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
   const keysRef = useRef<Set<string>>(new Set());
   const moveChainRef = useRef<Promise<void>>(Promise.resolve());
   const followRef = useRef(true);
+  const cameraModeRef = useRef<PlayerCameraMode>('third-person');
   const selectedNameRef = useRef(playerName || '');
   const avatarLoadRef = useRef<{ scene: Scene; playerName: string; cancelled: boolean } | null>(null);
 
@@ -136,11 +139,17 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
   const [running, setRunning] = useState(false);
   const [debug, setDebug] = useState(false);
   const [followPlayer, setFollowPlayer] = useState(true);
+  const [cameraMode, setCameraMode] = useState<PlayerCameraMode>(() => {
+    if (!playerName) return 'third-person';
+    try { return localStorage.getItem('echoworld-3d-camera-mode') === 'first-person' ? 'first-person' : 'third-person'; }
+    catch { return 'third-person'; }
+  });
   const [selectedName, setSelectedName] = useState(playerName || '');
   const [renderStats, setRenderStats] = useState('');
   const [modelStatus, setModelStatus] = useState<'waiting' | 'loading' | 'ready' | 'fallback'>('waiting');
   const [modelSource, setModelSource] = useState('');
   followRef.current = followPlayer;
+  cameraModeRef.current = cameraMode;
   selectedNameRef.current = selectedName;
 
   const selectedAgent = useMemo(
@@ -222,6 +231,11 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
     };
     const onDown = (event: KeyboardEvent) => {
       const key = event.key.toLowerCase();
+      if (key === 'v' && !event.repeat && !editable(event.target)) {
+        setCameraMode(mode => mode === 'first-person' ? 'third-person' : 'first-person');
+        event.preventDefault();
+        return;
+      }
       if (!movementKeys.has(key) || editable(event.target)) return;
       pressedKeys.add(key); event.preventDefault();
     };
@@ -238,8 +252,12 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
     const timer = setInterval(() => {
       const keys = pressedKeys;
       const dx = (keys.has('d') || keys.has('arrowright') ? 1 : 0) - (keys.has('a') || keys.has('arrowleft') ? 1 : 0);
-      const dy = (keys.has('s') || keys.has('arrowdown') ? 1 : 0) - (keys.has('w') || keys.has('arrowup') ? 1 : 0);
-      if (dx || dy) sendMoveDir(dx, dy);
+      const forward = (keys.has('w') || keys.has('arrowup') ? 1 : 0) - (keys.has('s') || keys.has('arrowdown') ? 1 : 0);
+      if (dx || forward) {
+        const direction = cameraRigRef.current?.cameraRelativeGroundDirection(dx, forward)
+          ?? new Vector3(dx, 0, forward).normalize();
+        sendMoveDir(direction.x, direction.z);
+      }
     }, MOVE_INTERVAL_MS);
     return () => {
       clearInterval(timer); pressedKeys.clear();
@@ -261,17 +279,25 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
     const scene = new Scene(engine);
     scene.clearColor = new Color3(0.025, 0.045, 0.075).toColor4();
     scene.skipPointerMovePicking = true;
-    const camera = new ArcRotateCamera('camera', -Math.PI / 2, 1.02, 32, new Vector3(0, 0.7, 0), scene);
-    camera.attachControl(canvas, true);
-    camera.lowerRadiusLimit = 7; camera.upperRadiusLimit = 120; camera.wheelPrecision = 45;
+    scene.collisionsEnabled = true;
+    const cameraRig = new PlayerCameraRig(scene, canvas);
     new HemisphericLight('ambient', new Vector3(0, 1, 0), scene).intensity = 0.82;
     const sun = new DirectionalLight('sun', new Vector3(-0.4, -1, -0.35), scene);
     sun.position = new Vector3(20, 40, 20); sun.intensity = 0.65;
-    engineRef.current = engine; sceneRef.current = scene; cameraRef.current = camera;
+    engineRef.current = engine; sceneRef.current = scene; cameraRigRef.current = cameraRig;
+
+    const captureFirstPersonPointer = () => {
+      canvas.focus();
+      if (cameraModeRef.current === 'first-person' && document.pointerLockElement !== canvas) {
+        void canvas.requestPointerLock?.();
+      }
+    };
+    canvas.addEventListener('click', captureFirstPersonPointer);
 
     scene.onPointerObservable.add(pointer => {
       if (pointer.type !== PointerEventTypes.POINTERPICK || !pointer.pickInfo?.hit) return;
       const mesh = pointer.pickInfo.pickedMesh;
+      if (cameraModeRef.current === 'first-person') return;
       const agentName = mesh?.metadata?.echoworldAgent as string | undefined;
       if (agentName) { setSelectedName(agentName); return; }
       if (mesh?.metadata?.echoworldGround && pointer.pickInfo.pickedPoint) sendTarget(pointer.pickInfo.pickedPoint);
@@ -297,10 +323,8 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
           visual.body.scaling.set(talkScale, 1, talkScale);
         }
       });
-      if (followRef.current && playerName) {
-        const player = agentsRef.current.get(playerName);
-        if (player) camera.target.copyFrom(Vector3.Lerp(camera.target, player.root.position.add(new Vector3(0, 0.65, 0)), 1 - Math.exp(-6 * dt)));
-      }
+      const player = playerName ? agentsRef.current.get(playerName) : undefined;
+      cameraRig.update(player?.root.position, player?.heading ?? 0, dt, followRef.current);
       scene.render();
     });
     const resize = () => engine.resize();
@@ -313,14 +337,31 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
     const staticMaterials = staticMaterialsRef.current;
     return () => {
       clearInterval(statsTimer); window.removeEventListener('resize', resize);
+      canvas.removeEventListener('click', captureFirstPersonPointer);
+      if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+      cameraRig.dispose();
       if (avatarLoadRef.current?.scene === scene) avatarLoadRef.current.cancelled = true;
       agentVisuals.forEach(visual => {
         if (visual.avatar) disposePrivateMmdAvatar(visual.avatar);
       });
       agentVisuals.clear(); staticMeshes.length = 0; staticMaterials.length = 0; staticKeyRef.current = '';
-      scene.dispose(); engine.dispose(); sceneRef.current = null; engineRef.current = null; cameraRef.current = null; canvasRef.current = null;
+      scene.dispose(); engine.dispose(); sceneRef.current = null; engineRef.current = null; cameraRigRef.current = null; canvasRef.current = null;
     };
   }, [playerName, sendTarget]);
+
+  useEffect(() => {
+    if (!playerName && cameraMode === 'first-person') {
+      setCameraMode('third-person');
+      return;
+    }
+    cameraModeRef.current = cameraMode;
+    try { localStorage.setItem('echoworld-3d-camera-mode', cameraMode); } catch { /* storage unavailable */ }
+    const player = playerName ? agentsRef.current.get(playerName) : undefined;
+    cameraRigRef.current?.setMode(cameraMode, player?.root.position, player?.heading ?? 0);
+    if (cameraMode === 'third-person' && document.pointerLockElement === canvasRef.current) document.exitPointerLock?.();
+    if (cameraMode === 'first-person') setStatus('第一人称：点击画面锁定鼠标，Esc 释放');
+    canvasRef.current?.focus();
+  }, [cameraMode, playerName]);
 
   useEffect(() => {
     const scene = sceneRef.current;
@@ -363,7 +404,9 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
           wall.material = wallMat; wall.isPickable = false; wallMeshes.push(wall); x++;
         }
       }
-      staticMeshesRef.current.push(...mergeStatic(wallMeshes, 'walls-merged'));
+      const mergedWalls = mergeStatic(wallMeshes, 'walls-merged');
+      mergedWalls.forEach(mesh => { mesh.checkCollisions = true; });
+      staticMeshesRef.current.push(...mergedWalls);
       const decorLimit = Math.min(300, map.decor?.length || 0);
       const decorGroups = new Map<string, { material: StandardMaterial; meshes: Mesh[] }>();
       for (let i = 0; i < decorLimit; i++) {
@@ -403,7 +446,11 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
         mesh.position.set((obstacle.x + obstacle.width / 2) * p.scaleX - p.sceneWidth / 2, height3d / 2, (obstacle.y + obstacle.height / 2) * p.scaleZ - p.sceneDepth / 2);
         mesh.material = group.material; mesh.isPickable = false; group.meshes.push(mesh);
       });
-      obstacleGroups.forEach((group, keyPart) => staticMeshesRef.current.push(...mergeStatic(group.meshes, `obstacles-${keyPart}-merged`)));
+      obstacleGroups.forEach((group, keyPart) => {
+        const mergedObstacles = mergeStatic(group.meshes, `obstacles-${keyPart}-merged`);
+        if (!keyPart.endsWith(':water')) mergedObstacles.forEach(mesh => { mesh.checkCollisions = true; });
+        staticMeshesRef.current.push(...mergedObstacles);
+      });
     }
     staticKeyRef.current = key;
   }, [map, snapshot]);
@@ -432,7 +479,9 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
       visual.velocity.set((agent.vx || 0) * p.scaleX, 0, (agent.vy || 0) * p.scaleZ);
       if (visual.velocity.lengthSquared() > 0.0001) visual.heading = Math.atan2(visual.velocity.x, visual.velocity.z);
       visual.lastSnapshotAt = now; visual.semantic = motionSemantic(agent); visual.agent = agent;
-      visual.root.setEnabled(!agent.ambient || debug || agent.agentName === playerName || !playerName);
+      const locallyVisible = !agent.ambient || debug || agent.agentName === playerName || !playerName;
+      const hideFirstPersonBody = cameraMode === 'first-person' && agent.agentName === playerName;
+      visual.root.setEnabled(locallyVisible && !hideFirstPersonBody);
       const mat = visual.body.material as StandardMaterial;
       mat.emissiveColor = agent.agentName === selectedName ? new Color3(0.18, 0.14, 0.02) : Color3.Black();
       if (playerName && agent.agentName === playerName && !visual.avatar && avatarLoadRef.current?.playerName !== playerName) {
@@ -467,7 +516,7 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
         agentsRef.current.delete(name);
       }
     });
-  }, [snapshot, map, debug, playerName, selectedName]);
+  }, [snapshot, map, debug, playerName, selectedName, cameraMode]);
 
   const control = async (action: 'start' | 'stop' | 'reset') => {
     try {
@@ -486,7 +535,9 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
       <button className="btn btn-small" disabled={running} onClick={() => void control('start')}>▶ 开始</button>
       <button className="btn btn-small" disabled={!running} onClick={() => void control('stop')}>⏸ 暂停</button>
       <button className="btn btn-small btn-danger" onClick={() => void control('reset')}>🔄 重置</button>
-      <button className={`btn btn-small ${followPlayer ? 'btn-primary' : ''}`} onClick={() => setFollowPlayer(v => !v)}>🎥 {followPlayer ? '跟随玩家' : '自由镜头'}</button>
+      <button className={`btn btn-small ${cameraMode === 'third-person' ? 'btn-primary' : ''}`} onClick={() => setCameraMode('third-person')}>🎥 第三人称</button>
+      <button className={`btn btn-small ${cameraMode === 'first-person' ? 'btn-primary' : ''}`} disabled={!playerName} title={playerName ? '切换第一人称（快捷键 V）' : '导演模式没有玩家实体，不能进入第一人称'} onClick={() => setCameraMode('first-person')}>👁 第一人称</button>
+      <button className={`btn btn-small ${followPlayer ? 'btn-primary' : ''}`} disabled={cameraMode === 'first-person'} onClick={() => setFollowPlayer(v => !v)}>🎯 {cameraMode === 'first-person' ? '玩家眼位' : followPlayer ? '跟随玩家' : '自由观察'}</button>
       <button className={`btn btn-small ${debug ? 'btn-primary' : ''}`} onClick={() => setDebug(v => !v)}>👁 {debug ? '显示群演' : '局部视图'}</button>
       <span style={{ fontSize: 12, color: 'var(--text-2)' }}>{status}</span>
       <span style={{ fontSize: 11, color: modelStatus === 'ready' ? '#86efac' : modelStatus === 'fallback' ? '#fca5a5' : '#fde68a' }}>
@@ -496,8 +547,14 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
     </div>
     <div style={{ position: 'relative' }}>
       <div ref={hostRef} style={{ width: '100%', height, minHeight: 280 }} />
+      {cameraMode === 'first-person' && <div aria-hidden="true" style={{ position: 'absolute', left: '50%', top: '50%', width: 14, height: 14, marginLeft: -7, marginTop: -7, pointerEvents: 'none' }}>
+        <span style={{ position: 'absolute', left: 6, top: 1, width: 2, height: 12, background: 'rgba(255,255,255,.75)', borderRadius: 2 }} />
+        <span style={{ position: 'absolute', left: 1, top: 6, width: 12, height: 2, background: 'rgba(255,255,255,.75)', borderRadius: 2 }} />
+      </div>}
       <div style={{ position: 'absolute', left: 10, bottom: 10, padding: '6px 10px', borderRadius: 7, background: 'rgba(15,23,42,.82)', color: '#cbd5e1', fontSize: 11, pointerEvents: 'none' }}>
-        点击地面移动 · WASD/方向键连续移动 · 拖拽旋转 · 滚轮缩放
+        {cameraMode === 'first-person'
+          ? '第一人称 · 点击锁定鼠标 · 鼠标观察 · WASD/方向键移动 · V 切换视角 · Esc 释放'
+          : '第三人称 · 点击地面移动 · WASD/方向键移动 · 拖拽旋转 · 滚轮缩放 · V 切换视角'}
         {selectedAgent && <span style={{ marginLeft: 12, color: '#fbbf24' }}>选中：{selectedAgent.agentName} · {selectedSemantic} · {Math.round(Math.hypot(selectedAgent.vx || 0, selectedAgent.vy || 0))} px/s</span>}
       </div>
     </div>

@@ -73,3 +73,6 @@ __pycache__/
 # å¤§æ¨¡å‹/è¿è¡Œæ—¶äº§ç‰©ä¸å…¥åº“
 models/
 src/main/resources/static/ai-images/
+
+# ¶ÀÁ¢ÏîÄ¿Õ¾µã²Ö¿â£¨×Ô´ø git ÓëË½ÓĞÔ¶³Ì£©£¬²»²¢ÈëÖ÷²Ö¿â
+site/

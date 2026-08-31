@@ -314,13 +314,7 @@ public class SimulationController {
         double y = body.getOrDefault("y", state.getY());
         x = Math.max(10, Math.min(world.getWorldWidth() - 10, x));
         y = Math.max(10, Math.min(world.getWorldHeight() - 10, y));
-        state.setTargetX(x);
-        state.setTargetY(y);
-        state.setHasTarget(true);
-        // 点击目标与方向键是两种互斥控制源，点击后清掉上一次方向输入。
-        state.setManualDirection(0.0, 0.0);
-        // Phase 4: 手动目标标记——MovementConstraint 不得覆盖玩家手动指定。
-        state.setManualTarget(true);
+        state.setPlayerIntentTarget(x, y);
         return Map.of("status", "ok");
     }
 

@@ -1,16 +1,20 @@
 package com.roleplay.engine.simulation;
 
+import com.roleplay.engine.simulation.spatial.AgentSpatialComponent;
+import com.roleplay.engine.simulation.spatial.ControlAuthority;
+import com.roleplay.engine.simulation.spatial.NavLocation;
+import com.roleplay.engine.simulation.spatial.Transform3D;
+import com.roleplay.engine.simulation.world.EntityKind;
+import com.roleplay.engine.simulation.world.WorldEntity;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 
-public class AgentState {
+public class AgentState implements WorldEntity {
     /** P-0802-P3（改造方案 Phase 3）：去 final —— 局中改名时 {@link #rename} 原地改键（toMap 依赖对象引用一致性）。 */
     private volatile String agentName;
-    private volatile double x;
-    private volatile double y;
-    private volatile double vx;
-    private volatile double vy;
+    private final AgentSpatialComponent spatial;
     private volatile Emotion emotion = Emotion.NEUTRAL;
     private volatile double hearRange = 200.0;
     private volatile double moveSpeed = 80.0;
@@ -31,7 +35,6 @@ public class AgentState {
     private volatile long manualTargetSince = -1L;
     private volatile Stance stance = Stance.NEUTRAL;
     private volatile double attention = 1.0;
-    private volatile boolean playerControlled = false;
     /** P-0813-I：当前日程窗口文案（SchedulerService 每 tick 写入，SSE 可观测 + Agent 系统提示注入源）。 */
     private volatile String scheduleText = "";
     /** 服务端权威导航路径；Babylon/Phaser 只消费快照，不负责改写路径。 */
@@ -43,28 +46,35 @@ public class AgentState {
 
     public AgentState(String agentName, double startX, double startY) {
         this.agentName = agentName;
-        this.x = startX;
-        this.y = startY;
+        this.spatial = new AgentSpatialComponent(startX, startY);
     }
 
     public String getAgentName() { return agentName; }
+
+    @Override public String id() { return agentName; }
+    @Override public EntityKind kind() { return EntityKind.AGENT; }
+    @Override public Transform3D transform() { return spatial.transform(); }
+    @Override public NavLocation navLocation() { return spatial.navLocation(); }
+    @Override public ControlAuthority controlAuthority() { return spatial.authority(); }
 
     /** P-0802-P3（改造方案 §4.2.2）：局中改名 —— 原地改 agentName（位置/情绪/标记等全字段保留）。 */
     public void rename(String newName) {
         this.agentName = newName;
     }
 
-    public double getX() { return x; }
-    public void setX(double x) { this.x = x; }
+    public AgentSpatialComponent getSpatial() { return spatial; }
 
-    public double getY() { return y; }
-    public void setY(double y) { this.y = y; }
+    public double getX() { return spatial.transform().position().x(); }
+    public void setX(double x) { spatial.setGroundPosition(x, getY()); }
 
-    public double getVx() { return vx; }
-    public void setVx(double vx) { this.vx = vx; }
+    public double getY() { return spatial.transform().position().z(); }
+    public void setY(double y) { spatial.setGroundPosition(getX(), y); }
 
-    public double getVy() { return vy; }
-    public void setVy(double vy) { this.vy = vy; }
+    public double getVx() { return spatial.velocity().x(); }
+    public void setVx(double vx) { spatial.setVelocity(vx, spatial.velocity().y(), getVy()); }
+
+    public double getVy() { return spatial.velocity().z(); }
+    public void setVy(double vy) { spatial.setVelocity(getVx(), spatial.velocity().y(), vy); }
 
     public Emotion getEmotion() { return emotion; }
     public void setEmotion(Emotion emotion) { this.emotion = emotion; }
@@ -129,11 +139,31 @@ public class AgentState {
     void setManualTargetSinceForTest(long ts) { this.manualTargetSince = ts; }
 
     /** Phase 4 便捷方法：设置目标点并标记已有目标。 */
+    @Deprecated(forRemoval = false)
     public void setTarget(double x, double y) {
         this.targetX = x;
         this.targetY = y;
         this.hasTarget = true;
         invalidateNavigation();
+    }
+
+    /**
+     * AI/日程/导演唯一允许使用的目标入口。玩家控制实体在这里是硬拒绝，
+     * 因而调用方即使漏掉前置判断，也无法接管玩家。
+     */
+    public boolean setAutonomousTarget(double x, double y) {
+        if (isPlayerControlled()) return false;
+        this.manualTarget = false;
+        this.manualTargetSince = -1L;
+        setTarget(x, y);
+        return true;
+    }
+
+    /** 显式玩家/外部输入目标；不会被 AI 导航系统重新规划。 */
+    public void setPlayerIntentTarget(double x, double y) {
+        setTarget(x, y);
+        setManualDirection(0.0, 0.0);
+        setManualTarget(true);
     }
 
     private void invalidateNavigation() {
@@ -164,8 +194,11 @@ public class AgentState {
     public double getAttention() { return attention; }
     public void setAttention(double attention) { this.attention = Math.max(0, Math.min(1, attention)); }
 
-    public boolean isPlayerControlled() { return playerControlled; }
-    public void setPlayerControlled(boolean playerControlled) { this.playerControlled = playerControlled; }
+    public boolean isPlayerControlled() { return spatial.authority() == ControlAuthority.PLAYER_INPUT; }
+    public void setPlayerControlled(boolean playerControlled) {
+        spatial.setAuthority(playerControlled ? ControlAuthority.PLAYER_INPUT : ControlAuthority.AI_AUTONOMOUS);
+        if (playerControlled && hasTarget && !manualTarget) clearTarget();
+    }
 
     /** P-0813-I：当前日程窗口文案（无窗口/未接管 → 空串）。 */
     public String getScheduleText() { return scheduleText; }
@@ -183,22 +216,20 @@ public class AgentState {
     }
 
     public double distanceTo(AgentState other) {
-        double dx = this.x - other.x;
-        double dy = this.y - other.y;
-        return Math.sqrt(dx * dx + dy * dy);
+        return spatial.transform().position().groundDistance(other.spatial.transform().position());
     }
 
     public java.util.Map<String, Object> toMap() {
         java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
         map.put("agentName", agentName);
-        map.put("x", Math.round(x * 100.0) / 100.0);
-        map.put("y", Math.round(y * 100.0) / 100.0);
+        map.put("x", Math.round(getX() * 100.0) / 100.0);
+        map.put("y", Math.round(getY() * 100.0) / 100.0);
         // 2026-08-15 P-0815-G（玩家地图运动控制深度调研）：快照补发 vx/vy（px/s）——
         // 前端 SimulationScene.update 的「速度外推」依赖快照 vx/vy（sp>1 才激活），此前 toMap 不含该字段 →
         // 外推恒不生效，SSE 2.5Hz 广播下角色每 400ms 一次「突进+冻结」（移动卡顿/不跟手根因之一）；
         // 实测（CDP 真机 A/B）：注入 vx/vy 后视觉滞后 p50 50.4px → 23.8px（减半）。
-        map.put("vx", Math.round(vx * 100.0) / 100.0);
-        map.put("vy", Math.round(vy * 100.0) / 100.0);
+        map.put("vx", Math.round(getVx() * 100.0) / 100.0);
+        map.put("vy", Math.round(getVy() * 100.0) / 100.0);
         map.put("emotion", emotion.getLabel());
         map.put("emotionEmoji", emotion.getEmoji());
         map.put("hearRange", hearRange);
@@ -208,7 +239,23 @@ public class AgentState {
         map.put("hasTarget", hasTarget);
         map.put("stance", stance.name().toLowerCase());
         map.put("attention", Math.round(attention * 100.0) / 100.0);
-        map.put("playerControlled", playerControlled);
+        map.put("playerControlled", isPlayerControlled());
+        map.put("controlAuthority", spatial.authority().name());
+        map.put("locomotionState", spatial.locomotion().name());
+        map.put("transform", java.util.Map.of(
+                "position", java.util.Map.of(
+                        "x", spatial.transform().position().x(),
+                        "y", spatial.transform().position().y(),
+                        "z", spatial.transform().position().z()),
+                "rotation", java.util.Map.of(
+                        "x", spatial.transform().rotation().x(),
+                        "y", spatial.transform().rotation().y(),
+                        "z", spatial.transform().rotation().z(),
+                        "w", spatial.transform().rotation().w())));
+        map.put("navLocation", java.util.Map.of(
+                "surfaceId", spatial.navLocation().surfaceId(),
+                "floorId", spatial.navLocation().floorId(),
+                "polygonRef", spatial.navLocation().polygonRef()));
         map.put("manualTarget", manualTarget);
         map.put("schedule", scheduleText);
         map.put("navigationWaypoints", navigationPath.stream().map(point -> java.util.Map.of(

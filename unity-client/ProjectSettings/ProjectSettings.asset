@@ -1,0 +1,39 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!129 &1
+PlayerSettings:
+  m_ObjectHideFlags: 0
+  serializedVersion: 28
+  productGUID: 4f7e6dd7275d48c5a9cd08ce8c6cb9bd
+  AndroidProfiler: 0
+  companyName: EchoWorld
+  productName: EchoWorld Unity Client
+  defaultCursor: {fileID: 0}
+  cursorHotspot: {x: 0, y: 0}
+  m_SplashScreenBackgroundColor: {r: 0.02, g: 0.025, b: 0.04, a: 1}
+  m_ShowUnitySplashScreen: 0
+  m_ShowUnitySplashLogo: 0
+  defaultScreenWidth: 1280
+  defaultScreenHeight: 720
+  runInBackground: 1
+  captureSingleScreen: 0
+  usePlayerLog: 1
+  resizableWindow: 1
+  visibleInBackground: 1
+  allowFullscreenSwitch: 1
+  forceSingleInstance: 0
+  useFlipModelSwapchain: 1
+  bundleVersion: 0.1.0
+  applicationIdentifier:
+    Standalone: com.echoworld.client
+  stripEngineCode: 1
+  scriptingBackend:
+    Standalone: 1
+  il2cppCompilerConfiguration:
+    Standalone: 0
+  apiCompatibilityLevelPerPlatform:
+    Standalone: 6
+  activeInputHandler: 0
+  gcIncremental: 1
+  assemblyVersionValidation: 1
+

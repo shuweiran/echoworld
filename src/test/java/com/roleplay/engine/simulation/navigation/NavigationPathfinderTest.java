@@ -37,4 +37,17 @@ class NavigationPathfinderTest {
 
         assertTrue(path.isEmpty(), "完整横向障碍阻断时应明确返回不可达");
     }
+
+    @Test
+    void honorsAgentSpecificClearanceRadius() {
+        Obstacle wall = new Obstacle(Obstacle.Type.WALL, 128, 64, 64, 32, true, "wall");
+
+        List<NavigationPathfinder.Point> path = pathfinder.findPath(
+                32, 32, 288, 192, 320, 224, List.of(wall), 40);
+
+        assertFalse(path.isEmpty(), "大体型角色仍应绕过可绕行障碍");
+        assertTrue(path.stream().noneMatch(p -> p.x() >= 88 && p.x() <= 232
+                        && p.y() >= 24 && p.y() <= 136),
+                "航点必须避开按 NavProfile 半径膨胀后的障碍");
+    }
 }
