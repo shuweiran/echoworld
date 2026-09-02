@@ -1,0 +1,406 @@
+server:
+  port: 8000
+  # 桌面/本机应用默认只接受本机连接；对外部署必须经过显式受控反向代理。
+  address: 127.0.0.1
+
+spring:
+  mvc:
+    async:
+      request-timeout: 300000  # SSE 长连接超时（与 SSEController SSE_TIMEOUT_MS 一致，覆盖 Tomcat 默认 30s）
+  datasource:
+    url: jdbc:h2:file:./data/roleplay;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  h2:
+    console:
+      # 生产默认关闭；需要排障时仅在独立 dev profile 临时开启。
+      enabled: false
+      path: /h2-console
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+  # P-0817-L：前端静态资源禁用缓存（index.html 每次拉最新 hash，防旧构建被浏览器缓存导致 UI 不更新）
+  web:
+    resources:
+      cache:
+        cachecontrol:
+          no-cache: true
+          no-store: true
+          must-revalidate: true
+
+roleplay:
+  gameplay:
+    # 主控物品/数值入口默认关闭；启用时从环境变量注入，并在请求头 X-Gameplay-Master-Key 提供。
+    master-key: "${ROLEPLAY_GAMEPLAY_MASTER_KEY:}"
+  llm:
+    # P-0828-A（2026-08-28）：原配置 "stealth/ox-alpha"（OpenRouter 匿名隐身模型）测试期已结束，
+    # 官方 404 公告："This model was ZAI's GLM-5.3 Flash"（真身=智谱 GLM 系）。切换为智谱官方端点
+    # 同名模型 glm-5.3-flash（key=ROLEPLAY_LLM_API_KEY，本机为用户环境变量里的智谱 key）。
+    api-base: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    api-key: "${ROLEPLAY_LLM_API_KEY:}"
+    model: "glm-5.3-flash"
+    # P-0810-19：max-tokens / temperature 为「默认值」语义（旧值 4096/0.9 全源码无消费点=死配置）：
+    #   - max-tokens：callJson 未显式传 maxTokens（null）时使用；全部既有调用点显式传值优先
+    #     （概略 1200 / 完整剧本 4000 / 地图 8000）
+    #   - temperature：callJson 等结构化生成路径使用；对话主链路 callSync 显式 0.7 不受影响
+    max-tokens: 4000
+    # P-0810-21-D：对话主链路 max_tokens（callSync 无参/带 token 入口 + callStream）——原硬编码
+    # 300 偏短（AI 发言常截断，P-0804-F 曾见 finish=length 内容不完整）；提升为 700 默认、可配；
+    # 显式传值的调用点（地图/剧本/审批等）优先不受影响
+    dialogue-max-tokens: 700
+    temperature: 0.1
+    # seed（DeepSeek 兼容 OpenAI seed，P-0810-19）：非空时所有 chat 请求携带 seed 字段——
+    # 同 seed + 同 temperature 下同主题多次生成输出更稳定（复现/调试用）；默认 null=不启用（行为不变）
+    seed: null
+    # P-0810-23-D2：AI 角色单次发言中文字数提醒阈值——发言中文字数 > 该值 → 下一轮自动注入
+    # 该角色系统提示「你上一轮发言超过 N 字，本轮请精简输出」（仅下一轮生效，之后清除；不广播、无前端 UI）；
+    # <=0 关闭检测。
+    remind-threshold: 150
+  # 主控与角色对话分离：仲裁/逻辑整合、地图、角色与场景生成均走此配置。
+  # 默认与角色 LLM 同端点同模型；可在设置页单独改为上下文与推理能力更强的模型。
+  arbiter-llm:
+    # P-0828-A：同上，ox alpha 真身后走智谱官方端点。api-key 缺省沿用 ROLEPLAY_LLM_API_KEY。
+    api-base: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    api-key: "${ROLEPLAY_ARBITER_LLM_API_KEY:${ROLEPLAY_LLM_API_KEY:}}"
+    model: "glm-5.3-flash"
+  map-llm:
+    # 仅用于可选的地图视觉审核（多模态图像输入）；地图/结构的生成本身改走 arbiter-llm。
+    #   api-key 从环境变量 ROLEPLAY_MAP_LLM_API_KEY 注入（部署脚本读 openclaw.json models.providers.xiaomimimo-map.apiKey），不落源码
+    #   model 实测平台可用（token-plan-cn /v1/models）：mimo-v2.5 / mimo-v2.5-pro / mimo-v2.5-asr / mimo-v2.5-tts*
+    api-key: "${ROLEPLAY_MAP_LLM_API_KEY:}"
+    base-url: "https://token-plan-cn.xiaomimimo.com/v1"
+    model: "mimo-v2.5"
+    # 视觉审核单次调用预算（30-300 秒）；客户端结构生成请求需覆盖最多两轮审核。
+    visual-audit-timeout-seconds: 180
+  monitor:
+    # D26: fallback-model/timeout-seconds 由 LLMClient 从 roleplay.monitor.* 读取（AppConfig.MonitorConfig）——
+    #      fallback-model=主模型失败后的兜底模型，timeout-seconds=单次 LLM HTTP 调用超时
+    # P-0828-A：主链路已切智谱端点，兜底模型必须同端点可用（glm-4.7 实测 200）；
+    #      旧值 deepseek-v4-flash 是 OpenRouter 上的 ID，智谱端点不存在，重试兜底会直接失败。
+    fallback-model: "glm-4.7"
+    timeout-seconds: 60
+  memory:
+    short-term-rounds: 20
+    summary-interval: 10
+  round:
+    parallel-agents: true
+    # C-2 一般模式串行调度开关（P-0802-G 已开启）：false=保持并行（零破坏）；true=同轮按序生成、
+    # 每个角色输出完成立即入史，后发言者上下文包含前面角色本轮已完成的发言
+    # （主人 2026-08-02 反馈“前端还是并联输出”→ 确认根因即本开关默认 false，现按需求开启串行；
+    #  如需切回并行只改回 false 并重启服务即可）
+    serial: true
+    # P-0813-A: 一般模式自动续轮延时（毫秒；0=禁用；默认 3000）——每轮完成后延时自动跑下一轮
+    # （导演模式 AI 自主推进），玩家发言打断 pending 任务；狼人杀/剧本杀走各自状态机不误触发
+    # P-0814-A: playback-driven=true（默认）时本键被忽略——不再定时自续，改为等「播出完毕」信号
+    auto-continue-ms: 3000
+    # 无玩家的 2D 社会实验按节奏自主续聊，旁听只负责呈现，不能成为 AI 对话的生命线。
+    # 玩家实际加入会话时仍可随时打断、离场；false=按 pacing 间隔自动进入下一轮。
+    playback-driven: false
+    # P-0814-B: 2D 对话组「等待播出完毕」超时（毫秒；默认 30000）——无玩家成员组（AI-AI/单 AI）
+    # 等待超时自动解散（防 awaitPlayback 永久阻塞角色冻结）；有玩家成员组不自动解散（玩家输入/点击唤醒）
+    group-await-timeout-ms: 30000
+    # P-0813-B: 校准轮间隔（0=禁用；默认 10）——每 N 个 AI 自主推进轮（无玩家输入）注入校准提醒
+    # （layer0 前 3 条 + 反差 + 角色关系，Author's Note 式防漂移；玩家发言轮不计数；会话重建计数重置）
+    # P-0813-C: 默认 6→10（调低校准注入频率，给角色更长的自然发挥窗口）
+    calibrate-every: 10
+    agent-max-tokens: 300
+    arbiter-max-tokens: 150
+  pacing:
+    # P-0813-F：2D 世界节奏控制（仅 2D 模拟世界生效；剧本杀/狼人杀各局自有引擎不接此配置=零影响）：
+    #   enabled=总开关（false=全部按原硬编码行为）；
+    #   director-interval-ms=导演（主控）LLM 轮次间隔（原 10000；默认 15000=降低目标覆盖频率）；
+    #   conversation-cooldown-ms=同一对角色解散后再次自动组对话冷却（原 5000；默认 8000=降低对话建立密度）；
+    #   round-cooldown-ms=对话轮次基础间隔（DYAD 等，原 2000；进入对话后当前轨道全速用此值）；
+    #   group-round-cooldown-ms=群聊轮次基础间隔（原 3000）；
+    #   idle-round-multiplier=未进入对话时轮次间隔倍率（默认 1.5=所有轨道放慢，降低未对话态密度）；
+    #   inactive-track-multiplier=进入对话后非玩家轨道轮次间隔倍率（P-0813-H 需求更正：
+    #     默认 2.0→4.0——多轨道并行保持、不挂起，但非玩家轨道轮次间隔大幅拉长（对话时间
+    #     延长、密度降低），比 F 的 ×2 更强，可调 ×3~×5）；
+    #   move-speed-base / move-speed-random-range=2D 角色移动速度基准+随机幅度（原 50+rand×60；
+    #     默认 45+rand×35 → 45-80 px/s，世界观感更平缓）。玩家手动目标（/target）不受降频影响。
+    enabled: true
+    director-interval-ms: 15000
+    conversation-cooldown-ms: 8000
+    round-cooldown-ms: 2000
+    group-round-cooldown-ms: 3000
+    idle-round-multiplier: 1.5
+    inactive-track-multiplier: 4.0
+    move-speed-base: 45
+    move-speed-random-range: 35
+    #   move-speed-player-base / move-speed-player-random-range=玩家角色（playerControlled）分速
+    #     （P-0814-I，默认 90+rand×15 → 90-105 px/s）——玩家 WASD/点击移动更跟手；AI 保持 45-80 降密度
+    move-speed-player-base: 90
+    move-speed-player-random-range: 15
+    #   speech-bubble-hold-ms=非玩家轨道发言的气泡停留/展示时长基准（P-0813-H，默认
+    #     4000ms；经 conversation-status 的 pacing.speechBubbleHoldMs 下发，前端可作
+    #     气泡展示时长/展示间隔参数）
+    speech-bubble-hold-ms: 4000
+  director:
+    # P-0813-I：主控日程（混合架构——主控驱动的「时刻→地点→行为」日程骨架）：
+    #   schedule-enabled=总开关（默认 true；false=回退原行为：导演 LLM 每轮重决策移动目标）；
+    #   schedule-window-duration-ms=窗口时长（默认 300000ms=5 分钟，时段索引=now/时长%slots）；
+    #   schedule-slots=时段数量（默认 6）——每角色一张日程表=6 个窗口（对齐星露谷一天 4-6 个日程点）。
+    schedule-enabled: true
+    schedule-window-duration-ms: 300000
+    schedule-slots: 6
+  track:
+    # P-0815-A：轨道系统空间会话距离（px，默认 70）——两两距离 < 该值 → MERGED（可对话，
+    #   可见对方）；修正历史单位错位（需求文档「5 格」中的「格」与世界像素坐标混用，5.0 按
+    #   px 用时 5px≈贴脸，近距离对话 MERGED 几乎永不触发）。经 SimulationService 接线到
+    #   TrackDirectorService.setConversationDistance（重建 SpatialTrackResolver，
+    #   ConversationManager legacy 路径常量同值 70）。
+    conversation-distance: 70
+  mode:
+    default: "free"
+    language: "zh"
+  game:
+    # P-0811-D：五层 persona 卡外部持久化目录（默认 ./data/persona，与 H2 同 data/ 目录族）。
+    # 卡按 {角色名}.json 写入（UTF-8 无 BOM），重启后由 PersonaCardLoader 扫描合并（classpath 默认卡
+    # + 外部目录，外部优先）；生成自动落库 / POST /{name}/persona 导入 / 批量升级（POST /api/characters/upgrade）
+    # 三个挂载点均写盘。目录不存在自动创建；未配置（空）→ 仅内存不落盘（零破坏）。
+    persona-cards-dir: "./data/persona"
+    approval:
+      # 单人/本地默认自动通过，保证剧本杀可在前端完整收官；需主持人审核时显式设为 true。
+      enabled: false
+      timeout-seconds: 60
+    ap:
+      # 行动点（C2）：剧本杀玩家初始 AP 基础值（角色 ap_bonus 叠加；搜证消耗，行动力限制，蓝图 P2）
+      base: 3
+    dm:
+      # 主持人面板 key（C4）：空=放开（与审批门同开放模式）；非空时 DM 端点需请求头 X-DM-Key 匹配，否则 403
+      key: ""
+    map:
+      # 剧本杀地图默认尺寸（P-0803-J 地图容量扩展）：默认 24×16 保持既有行为。
+      # LLM 路径 token 预算上限约 40×24（ScriptMapService.LLM_MAX_WIDTH/HEIGHT）——显式请求尺寸超上限
+      # （如 64×64）直接走 BSP 确定性生成（大图路径，精确尺寸零截断）；热点数按面积自动缩放
+      # （BspMapGenerator.scaledZonesCount：24×16=384 格 → 3 个，64×64 → ≈10 个）。
+      default-width: 40
+      default-height: 24
+      # 尺寸下限（P-0810-21 P0-3）：显式传参/对局已定尺寸/配置默认低于下限时提升到 32×20（防微型图）；
+      # 超 LLM token 预算（40×24）仍走 BSP 确定性大图路径（既有行为不变）
+      min-width: 32
+      min-height: 20
+      # 尺寸上限（P-0817-D 大图支持）：显式请求超上限 clamp 到 256×256（防超大图 JSON/渲染爆炸；
+      # 256×256 = 65K 格，ground+collision ≈ 130K 数字 ≈ 1MB 级 JSON，Phaser 瓦片层相机裁剪可承载）
+      max-width: 256
+      max-height: 256
+      # BSP 降级种子（ScriptMapService 读取；缺省用 DEFAULT_BSP_SEED=20260801，同 seed 同输出确定性）
+      bsp-seed: 20260801
+    discussion:
+      # 讨论引擎（GAP-3 批次 A + 批次 D 发言门控）：
+      #   max-rounds=轮数（默认 2）；
+      #   silence-floor=静默阈值（demo 实测安全区间 [0.10,0.20]，0.25 会冷场失衡凶手获益；默认 0.15）；
+      #   priority-decay-rounds=临时应激目标（被质疑→辩解）衰减轮数（默认 3）；
+      #   wait-bias=人类发言中未被点名 AI 的静默等待系数（默认 0.5）；
+      #   cold-break=冷场破冰开关（连续全员静默→按动机指定破冰者，默认 true）
+      max-rounds: 2
+      # 最短讨论窗口（毫秒）：即使 LLM 很快完成两轮，也让真人有时间看到 Gal 并发言。
+      min-duration-ms: 8000
+      silence-floor: 0.15
+      priority-decay-rounds: 3
+      wait-bias: 0.5
+      cold-break: true
+    script:
+      # 剧本杀 P1 可玩性修复（2026-08-04，见 DECISION_LOG D-036）：
+      #   vote-timeout-ms=投票超时（毫秒，默认 60000=60s）—— VOTE 阶段超过该时长后 resolveVote
+      #     将未投票玩家按弃票处理并转为托管（AI 代管，票作废；任务 1/2a）
+      #   vote-timeout-enabled=投票超时开关（默认 true；false=保持旧行为可无限等）
+      #   quorum-enabled=有效票门槛开关（默认 true）—— 有效票 < ceil(在线玩家数/2) 时
+      #     清票重投一轮，重投仍不足按已投计并标记「低参与度判定」；false=少数票即可定局（旧行为）
+      vote-timeout-ms: 60000
+      vote-timeout-enabled: true
+      quorum-enabled: true
+      # P-0805-A（B4/B5）：
+      #   max-revotes=平票/审批驳回重投次数上限（默认 3；超过按「无人被定罪」终止，防无限循环）
+      #   game-ttl-ms=对局内存 TTL（默认 43200000=12h 闲置清理；0=禁用；快照持久化，重启/清理后可由 resume 重建）
+      max-revotes: 3
+      game-ttl-ms: 43200000
+      # P-0805-B（WebSearch 搜证）：搜证时自动联网检索线索背景（默认关，避免每局都打 DuckDuckGo）
+      web-search-enabled: false
+      # P-0805-C（阶段倒计时）：单阶段最长停留毫秒（默认 0=禁用；>0 时惰性推进 INVESTIGATION→DISCUSSION→VOTE，
+      #   VOTE 阶段复用投票超时/弃票不在此推进）
+      phase-timeout-ms: 0
+      # P-0816-G（UI 重设计阶段一 API-1 行动建议，决策 U6 配置化）：
+      #   action.ask-ap-cost=去问人行动扣 AP（默认 1）
+      #   action.present-ap-cost=出示线索行动扣 AP（默认 1）
+      #   action.replay-ap-cost=已搜地点回看扣 AP（决策 U7：默认 0=回看不消耗，扣 AP 仅首次搜证）
+      #   action.max-ask / max-present / max-research=三类行动建议条数上限（MVP 常量占位）
+      action:
+        ask-ap-cost: 1
+        present-ap-cost: 1
+        replay-ap-cost: 0
+        max-ask: 3
+        max-present: 3
+        max-research: 4
+    werewolf:
+      # 狼人杀自动推进（P-0802-F，主人授权后端批次）：
+      #   ai-night-actions=AI 角色夜间自动决策（狼刀/预言家验/女巫救毒/猎人反杀）
+      #   auto-play=init 后整局自动推进（真人行动后自动结算流转；false=纯手工 admin 驱动旧行为）
+      #   auto-approve-ms=autoPlay 下投票结算审批门自动批准延迟（0=不自动批，等 DM 手动批准；对齐 D7）
+      #   witch-poison-probability=AI 女巫后续夜使用毒药概率（0-1）
+      #   witch-save-probability=AI 女巫获知被刀者后首夜使用解药的概率（G1-2，0-1；1.0=经典首夜必救）
+      ai-night-actions: true
+      auto-play: true
+      auto-approve-ms: 3000
+      witch-poison-probability: 0.5
+      witch-save-probability: 1.0
+  auth:
+    # 邀请码功能显式开关（P-0801-G）：false=关闭（默认，不影响现有游戏功能，
+    # /api/auth/verify 返回 403「邀请码功能未启用」）；true=启用（校验邀请码发 token）。
+    # 改配置后重启服务生效；功能代码/端点全部保留。
+    invite-enabled: false
+    # 持久化初始邀请码（服务重启不丢，启用后立即可用；DEFAULT2024 兼容保留）
+    invite-code: "B3283A78"
+  image:
+    # P-0805-C（生图 provider 适配）：AI 生图配置 ——
+    #   provider-url=OpenAI 兼容 /images/generations 端点（空=离线 SVG 占位）
+    #   provider-key=生图 API Key（provider-url 非空时必填）
+    #   model=生图模型（空=默认 gpt-image-1）
+    provider-url: ""
+    provider-key: ""
+    model: ""
+  ai-image:
+    # provider=comfyui 保持当前本地默认；openai-compatible 改用外部 /images/generations
+    provider: "comfyui"
+    # P-0810-01（本地 ComfyUI + Pony V6 XL 角色表情集预生成）：
+    #   comfyui-base-url=本地 ComfyUI API 地址（POST /prompt + GET /history/{id} + GET /view）
+    #   output-dir=生成图片落盘目录（默认 src/main/resources/static/ai-images，URL 直接 /ai-images/...，
+    #     AiImageConfig 另注册 file: 资源映射兜底，jar 运行亦可达；同目录族 ./data/ 可选）
+    #   pool-size=生成线程池大小（同时并发提交给 ComfyUI 的任务数）
+    #   timeout-seconds=单图生成总超时（提交+轮询，超时任务标记失败）
+    #   poll-interval-ms=/history 轮询间隔
+    #   lora-name=Pony 像素风 LoRA 文件名（空=不使用 LoRA，工作流自动改接 UNETLoader/CLIPLoader）
+    #   rmbg-model=P-0810-04 RMBG-1.4 抠背景 ONNX 模型路径（不存在=跳过抠图降级保留原图）
+    #   rmbg-enabled=P-0810-04 抠背景总开关（默认 true；false=只存原图不产透明版）
+    #   img2img-denoise=P-0810-05 表情 img2img 强度（默认 0.5；0.45 实测脸型/发型/服装 100% 保持）
+    #   characters=初始角色注册表（id/name/appearance 外貌描述/style 风格描述——风格必须固定，
+    #     同角色固定外貌模板+固定风格词+固定 seed（角色 ID hash）保证同一角色风格一致）
+    comfyui-base-url: "http://127.0.0.1:8188"
+    external-base-url: ""
+    external-api-key: "${ROLEPLAY_IMAGE_API_KEY:}"
+    external-model: "gpt-image-1"
+    external-endpoint: "/images/generations"
+    output-dir: "src/main/resources/static/ai-images"
+    pool-size: 2
+    timeout-seconds: 300
+    poll-interval-ms: 1000
+    lora-name: "pixel_art_sakuemonq_pony.safetensors"
+    rmbg-model: "${ROLEPLAY_RMBG_MODEL:}"
+    rmbg-enabled: true
+    img2img-denoise: 0.5
+    characters:
+      - id: "heroine"
+        name: "小铃"
+        appearance: "silver long hair, purple eyes, 16-year-old japanese girl, white kimono with red ribbons"
+        style: "retro game character art style, 16-bit pixel art, clean outlines, flat colors"
+      - id: "knight"
+        name: "凯尔"
+        appearance: "golden short hair, blue eyes, handsome young knight, silver and blue armor"
+        style: "retro game character art style, 16-bit pixel art, clean outlines, flat colors"
+  broadcast:
+    # 演讲与广播合并地基：公告管线节流参数（AnnouncementService 读取）
+    window-ms: 1000       # 滑动窗口长度
+    max-per-window: 5     # 每窗口每 channel 最多条数（超出丢弃，防刷屏）
+    max-pending: 20       # 优先级队列深度上限
+    recent-ring-size: 100 # 断线补发环形缓冲大小
+    # 演讲广播模式（正式版合并方案，默认 merged）：
+    #   merged=正式版——方案A 管线（回调→SimulationService 判定→统一管线）+ HearingSystem 声学判定
+    #         （computeAudibility/canHear 距离衰减，判定单事实源），无听众按 fallback-to-global 兜底；
+    #   auto=方案A 旧行为（wouldOthersListen 硬编码判定，无听众恒全局公告）——回退对比；
+    #   split=方案B 旧行为（SpeechStrategy 内联区域广播）——回退对比；
+    #   可经 POST /api/announcements/mode 运行时切换，三路径互斥不重复推送
+    speech-mode: merged
+    # 无听众兜底（merged 生效）：true=无听众自动升级全局公告（信息不哑火，默认）；false=不升级，仅区域演讲
+    fallback-to-global: true
+    # 剧本杀阶段切换 SYSTEM 广播总开关（五处阶段切换→全局横幅通道，进正式版；默认 true=启用）
+    script-phase-broadcast: true
+  tts:
+    # P-0817-A（MiMo TTS）：角色语音合成 —— 三种模式（basic 内置音色 / clone 声音克隆 / design 声线设计）
+    #   api-key 解析链（MimoTtsService.resolveApiKey）：yml 本键 → 环境变量 ROLEPLAY_MIMO_TTS_KEY
+    #     → openclaw.json（models.providers.xiaomimimo-tp.apiKey，路径 openclaw-config，空=不读）
+    #   enabled=总开关（false=合成端点 503「未启用」）；base-url=MiMo OpenAI 兼容端点
+    #   default-voice=basic 内置音色名；default-tone=合成请求 user 消息语气描述
+    #   builtin-voices=GET /api/tts/mimo/voices 返回的内置音色清单（逗号分隔）
+    #   timeout-seconds=单次合成 HTTP 超时
+    mimo:
+      # xiaomimimo 保持当前配置；openai-compatible 使用 OpenAI 风格 /audio/speech
+      provider: "xiaomimimo"
+      enabled: true
+      api-key: "${ROLEPLAY_MIMO_TTS_KEY:}"
+      base-url: "https://token-plan-cn.xiaomimimo.com/v1"
+      model-basic: "mimo-v2.5-tts"
+      model-clone: "mimo-v2.5-tts-voiceclone"
+      model-design: "mimo-v2.5-tts-voicedesign"
+      default-voice: "mimo_default"
+      default-tone: "自然温柔的语气"
+      builtin-voices: "mimo_default"
+      timeout-seconds: 60
+      speech-endpoint: "/audio/speech"
+      openclaw-config: "${ROLEPLAY_OPENCLAW_CONFIG:}"
+  debug:
+    # 阶段② API 逻辑链可视化（调研报告 docs/ui-api-survey.md §5 方案 C，P-0809-B）：
+    #   trace-enabled=总开关（默认 false=零打点零影响；true=TraceFilter 打点 /api/** +
+    #     LLM/SSE 子调用关联，GET /api/debug/trace 可查）
+    #   trace-size=内存环形缓冲上限（默认 1000 条，硬上限 2000；不进 DB）
+    trace-enabled: false
+    trace-size: 1000
+  frontend:
+    dev-mode: false
+    dev-port: 5173
+    dist-dir: "frontend/dist"
+  structure:
+    # P-0817-L（结构树契约 + 生成 API）：大型结构分层生成——L0 模板库（零成本）/ L1 程序化布局 /
+    #   单图优先，结构总面积超单图预算自动拆多图（zone 切图 + warps 连接，复用 P-0803-K 多图语义）
+    #   enabled=总开关（false=直接 BSP 兜底）；l0-source=template（LLM 蓝图 L0 属 P4，暂不接线）
+    enabled: true
+    # P-0818-B：custom 结构蓝图启用 LLM（地图生成专用通道 MapLlmClient，小米 MiMo）
+    l0-source: llm
+    # 单图预算（格）：结构打包总面积超限自动拆多图；请求 width/height 可覆盖（超契约 max 256 clamp）
+    max-single-map-width: 128
+    max-single-map-height: 128
+    # 模板库位置（classpath 相对路径；每 kind 一个 JSON，缺失/损坏回退内置同构模板）
+    template-dir: classpath:/structure
+  world:
+    # P-0824-L：一般模式自治世界。输入邮箱只接收/排队，主控后台逐会话消费；所有容量均有界。
+    input-mailbox:
+      session-capacity: 128
+      max-sessions: 1024
+      idempotency-window: 512
+      overflow-policy: EVICT_LOWEST_PRIORITY_OLDEST
+      dispatch-ms: 100
+      max-retries: 3
+    command:
+      dispatch-ms: 250
+    lifecycle:
+      scan-ms: 5000
+      ambient-ttl-ms: 300000
+      passive-after-ms: 600000
+      dormant-after-ms: 1800000
+      archive-after-ms: 7200000
+      # 这里是“有效互动分”而非点击次数：attention=0，dialogue=2，plot/relationship=3。
+      ambient-promotion-interactions: 2
+      temporary-promotion-interactions: 6
+    planner:
+      enabled: true
+      min-interval-ms: 15000
+      max-commands: 3
+    # 群演只作为前端可见投影，不创建完整 Agent；被互动后才经命令总线晋升。
+    ambient:
+      enabled: true
+      target-count: 24
+      max-count: 80
+      # 场景人口变化每次扫描最多增减人数，避免 LLM 判断变化造成瞬时刷入/清空。
+      adjust-step: 6
+    map-job:
+      capacity: 32
+      workers: 2
+      ready-ttl-ms: 1800000

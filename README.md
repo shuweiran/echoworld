@@ -33,6 +33,8 @@ Unity 6 ───┘ formal client → WebSocket delta ─┘                   
 
 Babylon 3D 支持第一人称与第三人称即时切换：第一人称绑定玩家眼位并隐藏自身模型，第三人称提供跟随、自由观察、缩放和摄像机碰撞。两种视角的 WASD 都只转换为镜头相对的显式玩家输入，摄像机和 AI 都不能直接修改玩家位置。
 
+Phaser 2D 与 Babylon 3D 共用服务器权威的 `WorldObject`、物品栏、交互动作和角色数值。地图 decor 会被适配为带 Affordance 的可交互对象，拾取、放下、使用和数值调整均进入同一 Action FSM；2D 采用近垂直俯视的 2.5D 表现，通过站立点深度、远近缩放、投影阴影和朝南侧面建立立体感，但不改变权威 x/y/floor、碰撞或寻路事实。
+
 核心调用链为：`SimulationOrchestrator` → `SpatialTrackResolver` → `ConversationManager` → `SpeechGate` → `TrackStrategy` → `LLMClient`。详细职责、依赖边界和已知技术债见 [Architecture](docs/architecture.md)。
 
 ## Verify the core claims
@@ -43,6 +45,7 @@ Babylon 3D 支持第一人称与第三人称即时切换：第一人称绑定玩
 - 非法地图被拒绝或走确定性降级；
 - SSE 重连不泄漏其他会话状态。
 - 2D/3D 切换不改变服务器位置、碰撞、听觉或 Track 判定。
+- 2D/3D 共用物品持有者、容量、可交互动作和角色量化数值；同一物品不能被并发重复拾取，存档恢复保持持有关系和数值。
 - AI 目标由服务端 NavigationService 规划；当前 Grid A* 是可替换后端。玩家输入不进入 AI 导航、日程、导演或群体力系统。路径航点作为世界快照的一部分供 3D 调试与表现层消费。
 - 多楼层回归覆盖 legacy map、三层 connector、替代楼梯/不可达、合法切层、跨层声学衰减、Speech Commit 楼层竞态与 2D/3D 投影不变量。
 - WebSocket 只复制服务端允许的字段；客户端不能提交坐标、门状态或 Action 成功结果，缺帧必须 ACK/replay 或 full resync。
@@ -69,6 +72,10 @@ cd frontend
 npm ci
 npm run build
 ```
+
+### Android APK（移动端精简版）
+
+移动端 APK 只保留一般模式的文本/Gal 对话核心功能，不包含剧本杀、狼人杀、Phaser 2D 地图或 Babylon 3D。构建前将 `frontend/.env.mobile.example` 复制为 `.env.mobile.local`，填写手机可访问的后端 HTTPS 地址，然后执行 `npm run mobile:apk`；详细说明见 [frontend/ANDROID.md](frontend/ANDROID.md)。
 
 ## Scope and limitations
 

@@ -1,0 +1,27 @@
+// OpenClaw launcher for roleplay-java (EchoWorld) service on port 8000.
+// Reads LLM API key from local openclaw.json at runtime (never on command line).
+// Based on D:\echoworld\scripts\start-8000.mjs (latest project convention, 08-31 build uses zhipu key).
+import { readFileSync, openSync, existsSync, mkdirSync } from 'fs';
+import { spawn } from 'child_process';
+
+const cfg = JSON.parse(readFileSync('C:\\Users\\shuweiran\\.openclaw\\openclaw.json', 'utf8'));
+const secret = cfg.models.providers.zhipu.apiKey; // current yml: api-base=open.bigmodel.cn, ROLEPLAY_LLM_API_KEY
+if (!secret) { console.error('FAIL: no zhipu apiKey in openclaw.json'); process.exit(1); }
+
+const java = 'C:\\Program Files\\Eclipse Adoptium\\jdk-21.0.11.10-hotspot\\bin\\java.exe';
+const jar = 'D:\\echoworld\\target\\roleplay-engine-0.1.1.jar';
+if (!existsSync(jar)) { console.error('FAIL: jar not found ' + jar); process.exit(1); }
+if (!existsSync('C:\\tmp')) mkdirSync('C:\\tmp', { recursive: true }); // unixdomain tmpdir fix P-0827-D
+
+const logDir = 'D:\\echoworld\\target';
+const out = openSync(logDir + '\\server_openclaw.out.log', 'a');
+const err = openSync(logDir + '\\server_openclaw.err.log', 'a');
+const env = Object.assign({}, process.env, { ROLEPLAY_LLM_API_KEY: secret });
+const args = [
+  '-Djdk.net.unixdomain.tmpdir=C:\\tmp',
+  '-jar', jar,
+  '--server.port=8000', '--server.address=127.0.0.1',
+];
+const child = spawn(java, args, { cwd: 'D:\\echoworld', env, detached: true, stdio: ['ignore', out, err] });
+child.unref();
+console.log('STARTED pid=' + child.pid + ' keylen=' + secret.length + ' jar=' + jar + ' log=' + logDir + '\\server_openclaw.out.log');
