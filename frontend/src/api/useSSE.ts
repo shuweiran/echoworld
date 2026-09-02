@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { api } from './client';
+import { api, API_ORIGIN } from './client';
 
 type SSEHandler = (eventType: string, data: any) => void;
 
@@ -77,7 +77,7 @@ export function useSSE(
         params.set('player_key', identity.playerKey);
       }
       const query = params.toString();
-      const es = new EventSource(query ? `/api/events?${query}` : '/api/events');
+      const es = new EventSource(`${API_ORIGIN}${query ? `/api/events?${query}` : '/api/events'}`);
       esRef.current = es;
 
       es.onopen = () => {

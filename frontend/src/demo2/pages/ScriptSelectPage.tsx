@@ -23,6 +23,7 @@ import { api } from '../../api/client';
 import { backendSceneToGeneral, backendSceneToMurder, isMurderBackendScene } from '../backendScenes';
 
 type ScriptLike = MurderScript | GeneralScript;
+const MOBILE_BUILD = import.meta.env.VITE_MOBILE_BUILD === 'true';
 
 /** 是否预设剧本（mockData 代码常量，不可删除） */
 function isPreset(s: ScriptLike): boolean {
@@ -133,10 +134,10 @@ export function ScriptSelectPage() {
         <h2>📜 剧本选择</h2>
         <span className="page-sub">挑选一个剧本，进入角色选择。</span>
         <div className="chip-row" style={{ marginLeft: 'auto', marginBottom: 0 }}>
-          <button
+          {!MOBILE_BUILD && <button
             className={`chip2 ${mode === 'murder' ? 'active' : ''}`}
             onClick={() => switchMode('murder')}
-          >🕵️ 剧本杀模式</button>
+          >🕵️ 剧本杀模式</button>}
           <button
             className={`chip2 ${mode === 'general' ? 'active' : ''}`}
             onClick={() => switchMode('general')}
@@ -147,7 +148,7 @@ export function ScriptSelectPage() {
       <div className="card2">
         {/* 剧本列表 */}
         <div className="scripts-list">
-          {mode === 'murder'
+          {MOBILE_BUILD || mode === 'general'
             ? murders.map(s => (
                 <div
                   key={s.id}

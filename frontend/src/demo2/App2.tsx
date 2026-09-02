@@ -27,6 +27,8 @@ const NAV: { view: View | 'werewolf'; label: string; icon: IconName }[] = [
   { view: 'settings', label: '设置', icon: 'settings' },
 ];
 
+const MOBILE_BUILD = import.meta.env.VITE_MOBILE_BUILD === 'true';
+
 export function App2() {
   const view = useDemoStore(s => s.view);
   const uiTheme = useDemoStore(s => s.settings.other.uiTheme);
@@ -58,7 +60,8 @@ export function App2() {
 
   // 进入对局时隐藏全局顶栏，由 ChatPage 的 ChatTopbar 承担局内操作。
   const isGame = view === 'game';
-  const isMain = NAV.some(n => n.view === view);
+  const visibleNav = MOBILE_BUILD ? NAV.filter(n => ['home', 'scripts', 'roles-lib', 'settings'].includes(n.view)) : NAV;
+  const isMain = visibleNav.some(n => n.view === view);
   const canBack = history.length > 0;
   const isActive = (n: typeof NAV[number]) =>
     n.view === 'werewolf' ? (view === 'roles' && selectCtx.kind === 'werewolf') : view === n.view;
@@ -78,7 +81,7 @@ export function App2() {
             <button className="btn2 btn2-ghost btn2-sm" onClick={back} disabled={!canBack}><Icon name="arrow-left" size={15} /> 返回</button>
           )}
           <nav className="app2-nav">
-            {NAV.map(n => (
+            {visibleNav.map(n => (
               <button
                 key={n.view}
                 className={`app2-nav-btn ${isActive(n) ? 'active' : ''}`}

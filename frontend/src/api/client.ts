@@ -1,4 +1,5 @@
-const BASE = '';
+/** 移动端通过构建时 VITE_API_BASE_URL 指向可访问的 EchoWorld 服务端；桌面/网页保持同源。 */
+export const API_ORIGIN = (import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
 const _controllers = new Map<number, AbortController>();
 let _id = 0;
@@ -25,7 +26,7 @@ async function request<T>(url: string, options?: RequestInit & { timeout?: numbe
     : 'rid-' + Date.now() + '-' + Math.random().toString(36).slice(2, 10);
 
   try {
-    const res = await fetch(`${BASE}${url}`, {
+    const res = await fetch(`${API_ORIGIN}${url}`, {
       headers: {
         'Content-Type': 'application/json',
         ...getAuthHeaders(),

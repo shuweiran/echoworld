@@ -53,9 +53,13 @@ const ENTRIES = [
   },
 ];
 
+const MOBILE_BUILD = import.meta.env.VITE_MOBILE_BUILD === 'true';
+
 export function HomePage() {
   const go = useDemoStore(s => s.go);
   const enterRoles = useDemoStore(s => s.enterRoles);
+
+  const entries = MOBILE_BUILD ? ENTRIES.filter(e => ['scripts', 'roles-lib', 'settings'].includes(e.id)) : ENTRIES;
 
   return (
     <div className="home-page">
@@ -63,9 +67,9 @@ export function HomePage() {
         <img className="home-brand-mark" src="/brand/open-script-mark.svg" alt="EchoWorld" />
         <div className="home-kicker"><Icon name="sparkles" size={15} /> Spatial Multi-Agent Simulation Engine</div>
         <div className="home-title">EchoWorld</div>
-        <div className="home-sub">位置、听觉与障碍决定每个 Agent 能感知什么、知道什么、何时发言</div>
+          <div className="home-sub">一般模式 · 自由对话 · 让每个 Agent 按自己的身份、目标与上下文回应</div>
         <div className="home-feel">
-          <div className="feel-item"><Icon name="map" size={16} /> <b>Spatial World</b> · 二维坐标、碰撞与移动</div>
+          <div className="feel-item"><Icon name="map" size={16} /> <b>General Chat</b> · 角色与对话</div>
           <div className="feel-item"><Icon name="goal" size={16} /> <b>Hearing</b> · 距离衰减与墙体遮挡</div>
           <div className="feel-item"><Icon name="sparkles" size={16} /> <b>Context Track</b> · MERGED / WEAK / ISOLATED</div>
           <div className="feel-item"><Icon name="moon" size={16} /> <b>Rule-bound AI</b> · 确定性规则约束 LLM</div>
@@ -73,7 +77,7 @@ export function HomePage() {
       </div>
 
       <div className="home-grid">
-        {ENTRIES.map(e => (
+        {entries.map(e => (
           <button
             key={e.id}
             className="home-card"

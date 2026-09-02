@@ -26,6 +26,7 @@ import { LargeMapModal } from '../components/LargeMapModal';
 
 /** 稳定空数组（zustand 选择器避免每次返回新引用引发无限重渲染） */
 const EMPTY_ROLES: RoleCard[] = [];
+const MOBILE_BUILD = import.meta.env.VITE_MOBILE_BUILD === 'true';
 
 const WW_ROLE_DEFS: { role: string; avatar: string; desc: string }[] = [
   { role: '狼人', avatar: '🐺', desc: '每晚刀杀一人，伪装成平民活到最后' },
@@ -50,7 +51,7 @@ export function RoleSelectPage() {
   const removeExtraRole = useDemoStore(s => s.removeExtraRole);
   const effectiveScriptRoles = useDemoStore(s => s.effectiveScriptRoles);
   const removedScriptRoles = useDemoStore(s => s.removedScriptRoles);
-  const runMode = useDemoStore(s => s.runMode);
+  const runMode = useDemoStore(s => MOBILE_BUILD ? 'chat' : s.runMode);
   const setRunMode = useDemoStore(s => s.setRunMode);
   const withPlayer = useDemoStore(s => s.withPlayer);
   const setWithPlayer = useDemoStore(s => s.setWithPlayer);
@@ -267,11 +268,12 @@ export function RoleSelectPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
               <span className="run-mode-label">运行方式</span>
               <button className={`chip2 ${runMode === 'chat' ? 'active' : ''}`} onClick={() => setRunMode('chat')}>💬 自由聊天模式</button>
-              <button className={`chip2 ${runMode === 'explore' ? 'active' : ''}`} onClick={() => setRunMode('explore')}>🗺️ 2D 探索模式</button>
-              {/* P-0820-M：普通地图与大型地图统一入口；尺寸/结构/模式等均从设置页读取 */}
-              <button className="chip2" onClick={() => setLargeMapOpen(true)} title="按设置页的尺寸、结构和地图模式生成，并作为本场景 2D 探索地图">
-                🗺️ 生成地图{ctx.scriptId && getGeneralMap(ctx.scriptId) ? '（已有地图）' : ''}
-              </button>
+              {!MOBILE_BUILD && <>
+                <button className={`chip2 ${runMode === 'explore' ? 'active' : ''}`} onClick={() => setRunMode('explore')}>🗺️ 2D 探索模式</button>
+                <button className="chip2" onClick={() => setLargeMapOpen(true)} title="按设置页的尺寸、结构和地图模式生成，并作为本场景 2D 探索地图">
+                  🗺️ 生成地图{ctx.scriptId && getGeneralMap(ctx.scriptId) ? '（已有地图）' : ''}
+                </button>
+              </>}
             </div>
             <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 13, color: 'var(--color-text-dim)', cursor: 'pointer' }}>
               <input type="checkbox" checked={withPlayer} onChange={e => setWithPlayer(e.target.checked)} style={{ width: 'auto' }} />

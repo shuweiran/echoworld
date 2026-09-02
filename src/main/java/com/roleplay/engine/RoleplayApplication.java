@@ -48,7 +48,7 @@ public class RoleplayApplication {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/api/**")
-                    .allowedOrigins("http://localhost:5173", "http://localhost:8000")
+                    .allowedOrigins("http://localhost:5173", "http://localhost:8000", "http://localhost", "https://localhost", "capacitor://localhost")
                     .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
                     .allowCredentials(true);
             }
