@@ -58,6 +58,13 @@ class RouterServiceReminderTest {
                 .findFirst().orElse("");
     }
 
+    private String systemsOf(List<Message> msgs) {
+        return msgs.stream()
+                .filter(m -> m.getRole() == Message.Role.SYSTEM)
+                .map(Message::getContent)
+                .reduce((a, b) -> a + "\n\n" + b).orElse("");
+    }
+
     private String userOf(List<Message> msgs) {
         return msgs.stream()
                 .filter(m -> m.getRole() == Message.Role.USER)
@@ -89,14 +96,14 @@ class RouterServiceReminderTest {
             when(llm.callStream(anyList(), any(), any())).thenAnswer(inv -> {
                 @SuppressWarnings("unchecked")
                 List<Message> msgs = inv.getArgument(0);
-                capturedSystems.add(systemOf(msgs));
+                capturedSystems.add(systemsOf(msgs));
                 return speechOf.apply(agentOf.apply(msgs));
             });
         } else {
             when(llm.callSync(anyList(), any())).thenAnswer(inv -> {
                 @SuppressWarnings("unchecked")
                 List<Message> msgs = inv.getArgument(0);
-                capturedSystems.add(systemOf(msgs));
+                capturedSystems.add(systemsOf(msgs));
                 return speechOf.apply(agentOf.apply(msgs));
             });
         }

@@ -5,13 +5,13 @@ import com.roleplay.engine.core.Persona;
 import com.roleplay.engine.interrupt.CancellationToken;
 import com.roleplay.engine.interrupt.TaskCancelledException;
 import com.roleplay.engine.llm.LLMClient;
+import com.roleplay.engine.prompt.PromptCompiler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * An AI character that participates in the roleplay conversation.
@@ -30,8 +30,6 @@ public class Agent {
     private final String role;
     private final LLMClient llmClient;
     private volatile boolean isGenerating = false;
-    /** 简化生成路径（2D 对话等）的首轮完整人设门闩；之后由轻量提示维持风格。 */
-    private final AtomicBoolean directPersonaPrimed = new AtomicBoolean(false);
     /** P-0810-09：当前角色的隐藏目标（场景目标机制）—— buildContext/生成路径注入系统提示，不暴露给玩家。 */
     private volatile String hiddenGoal = null;
     /** P-0813-I：当前行为窗口文案提供者（2D 世界由 SimulationService 注册，读 AgentState.scheduleText）。
@@ -67,13 +65,6 @@ public class Agent {
         return hiddenGoal;
     }
 
-    /** 系统提示追加隐藏目标块（行为引导，禁止暴露给玩家）。 */
-    private String appendHiddenGoal(String systemContent) {
-        if (hiddenGoal == null || hiddenGoal.isBlank()) return systemContent;
-        return systemContent + "\n\n【隐藏目标】\n你的目标：" + hiddenGoal
-                + "\n（不要主动暴露给玩家，用行为和言语自然引导剧情推进）";
-    }
-
     // ── P-0813-I：当前行为窗口（混合架构——主控日程骨架，角色 LLM 只填台词与细节） ──────
 
     /** 设置行为窗口文案提供者（SimulationService 接线；null 清除=回退原 prompt）。 */
@@ -90,12 +81,11 @@ public class Agent {
      * 窗口段显式约束「不要自行离开区域或更换行为」——弱化角色自行决定下一步行动的自由度
      * （P-0813-I：节奏可控 + 个性保留，台词仍自由）；无窗口/未接线 → 原样返回零变化。
      */
-    private String appendScheduleWindow(String systemContent) {
+    private String scheduleWindow() {
         java.util.function.Supplier<String> s = scheduleContextSupplier;
-        if (s == null) return systemContent;
+        if (s == null) return "";
         String window = s.get();
-        if (window == null || window.isBlank()) return systemContent;
-        return systemContent + "\n\n" + window;
+        return window == null ? "" : window;
     }
 
     // ── P-0810-23-D2：发言超长提醒（仅下一轮生效，玩家无感知） ──────────────
@@ -116,11 +106,11 @@ public class Agent {
      * 系统提示追加提醒块并消费：提醒仅注入下一轮一次，注入即清除（不持续、不广播旁白、无前端 UI）。
      * 无待发提醒时原样返回，零行为变化。
      */
-    private String appendReminder(String systemContent) {
+    private String consumeReminder() {
         String r = pendingReminder;
-        if (r == null || r.isBlank()) return systemContent;
+        if (r == null || r.isBlank()) return "";
         pendingReminder = null; // 消费后清除：仅下一轮生效
-        return systemContent + "\n\n【系统提醒】" + r;
+        return r;
     }
 
     // ── Core generation (blocking + non-blocking variants) ─────
@@ -143,16 +133,11 @@ public class Agent {
 
         List<Message> messages = new ArrayList<>();
 
-        // 首轮与带校准提醒的轮次使用完整人设；其余轮次用轻量版，避免固定台词逐轮强化。
-        String systemContent = appendReminder(appendHiddenGoal(appendScheduleWindow(personaPromptFor(history))));
-        if (sceneDescription != null && !sceneDescription.isEmpty()) {
-            systemContent += "\n\n【当前场景】\n" + sceneDescription;
-        }
-        if (summaryContext != null && !summaryContext.isEmpty()) {
-            systemContent += "\n\n" + summaryContext;
-        }
-        systemContent += "\n\n【轨道模式】\n" + (trackMode != null ? trackMode : "merged");
-        messages.add(new Message(Message.Role.SYSTEM, "system", systemContent));
+        // 固定人格永远是第一条稳定前缀；场景、目标、日程、提醒全部进入后续动态段。
+        messages.add(new Message(Message.Role.SYSTEM, "system", PromptCompiler.stablePersona(persona)));
+        String dynamic = PromptCompiler.dynamicSystem(sceneDescription, summaryContext, trackMode,
+                hiddenGoal, scheduleWindow(), consumeReminder());
+        if (!dynamic.isBlank()) messages.add(new Message(Message.Role.SYSTEM, "runtime", dynamic));
 
         // 2. Conversation history
         if (history != null) {
@@ -267,10 +252,7 @@ public class Agent {
         String completed = null;
         try {
             if (token != null) token.checkpoint();
-            List<Message> messages = List.of(
-                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(appendScheduleWindow(personaPromptFor(context))))),
-                new Message(Message.Role.USER, "user", context)
-            );
+            List<Message> messages = promptMessages(context);
             completed = token != null
                     ? llmClient.callSync(messages, token)
                     : llmClient.callSync(messages);
@@ -295,10 +277,7 @@ public class Agent {
         String completed = null;
         try {
             if (token != null) token.checkpoint();
-            List<Message> messages = List.of(
-                new Message(Message.Role.SYSTEM, "system", appendReminder(appendHiddenGoal(appendScheduleWindow(personaPromptFor(context))))),
-                new Message(Message.Role.USER, "user", context)
-            );
+            List<Message> messages = promptMessages(context);
             completed = llmClient.callStream(messages, token, onDelta);
             if (token != null) token.checkpoint();
             if (completed == null) {
@@ -322,18 +301,14 @@ public class Agent {
         return "Agent{" + getName() + "}";
     }
 
-    private String personaPromptFor(List<Message> history) {
-        boolean hasConversation = history != null && history.stream()
-                .anyMatch(m -> m.getRole() != Message.Role.SYSTEM);
-        boolean hasCalibration = history != null && history.stream().anyMatch(m ->
-                m.getRole() == Message.Role.SYSTEM && m.getContent() != null
-                        && m.getContent().startsWith("【校准提醒】"));
-        return !hasConversation || hasCalibration ? persona.buildSystemPrompt() : persona.buildLightweightPrompt();
-    }
-
-    private String personaPromptFor(String context) {
-        boolean hasCalibration = context != null && context.contains("【校准提醒】");
-        return hasCalibration || !directPersonaPrimed.getAndSet(true)
-                ? persona.buildSystemPrompt() : persona.buildLightweightPrompt();
+    private List<Message> promptMessages(String context) {
+        List<Message> messages = new ArrayList<>();
+        messages.add(new Message(Message.Role.SYSTEM, "system", PromptCompiler.stablePersona(persona)));
+        String dynamic = PromptCompiler.dynamicSystem(null, null, null,
+                hiddenGoal, scheduleWindow(), consumeReminder());
+        if (!dynamic.isBlank()) messages.add(new Message(Message.Role.SYSTEM, "runtime", dynamic));
+        messages.add(new Message(Message.Role.USER, "user",
+                PromptCompiler.withoutRepeatedPersona(persona, context)));
+        return messages;
     }
 }

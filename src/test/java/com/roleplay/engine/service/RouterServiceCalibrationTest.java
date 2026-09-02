@@ -320,8 +320,8 @@ class RouterServiceCalibrationTest {
     }
 
     @Test
-    @DisplayName("⑩ Agent：首轮和校准轮用完整五层提示，其余轮用轻量提示")
-    void agentUsesFullPersonaOnlyOnFirstAndCalibrationRounds() {
+    @DisplayName("⑩ Agent：人格前缀跨轮稳定，校准作为后续动态消息")
+    void agentKeepsStablePersonaPrefixAndCalibrationDelta() {
         Agent agent = new Agent(fiveLayerPersona("小铃"), "agent", mock(LLMClient.class));
 
         String first = agent.buildContext("", List.of(), "merged", List.of(), "", null, "")
@@ -329,14 +329,15 @@ class RouterServiceCalibrationTest {
         String normal = agent.buildContext("", List.of(
                 new Message(Message.Role.AGENT, "凯尔", "普通对话")), "merged", List.of(), "", null, "")
                 .get(0).getContent();
-        String calibration = agent.buildContext("", List.of(
+        List<Message> calibrationMessages = agent.buildContext("", List.of(
                 new Message(Message.Role.SYSTEM, "系统", "【校准提醒】保持身份"),
-                new Message(Message.Role.AGENT, "凯尔", "普通对话")), "merged", List.of(), "", null, "")
-                .get(0).getContent();
+                new Message(Message.Role.AGENT, "凯尔", "普通对话")), "merged", List.of(), "", null, "");
+        String calibration = calibrationMessages.get(0).getContent();
 
         assertTrue(first.contains("【Layer 2 表达风格】"), "首轮应使用完整五层提示");
-        assertFalse(normal.contains("【Layer 2 表达风格】"), "普通轮应使用轻量提示");
-        assertTrue(normal.contains("【行为要点】"), "普通轮仍保留轻量行为要点");
-        assertTrue(calibration.contains("【Layer 2 表达风格】"), "校准轮应恢复完整五层提示");
+        assertEquals(first, normal, "普通轮不得改写稳定人格前缀");
+        assertEquals(first, calibration, "校准轮不得破坏稳定人格前缀");
+        assertTrue(calibrationMessages.stream().skip(1)
+                .anyMatch(m -> m.getContent().startsWith("【校准提醒】")), "校准应作为动态 delta 保留");
     }
 }
