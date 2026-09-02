@@ -48,10 +48,10 @@ roleplay:
     # P-0902-A（2026-09-02）：切换 DeepSeek 官方端点（key=ROLEPLAY_LLM_API_KEY，由
     #   scripts/start-8000-openclaw.mjs 从 .local/secrets/deepseek-api.key 读取注入，不落源码/不改 openclaw.json）。
     #   原 P-0828-A 智谱端点/模型见 application.yml.bak-20260902。
-    #   ⚠️ model=flash 非笔误（2026-09-02 13:1x 实测修正）：现运行 jar（08-31 构建）无
-    #   ModelRequestProfile/thinking 参数，v4-pro 默认思考会吃满 callJson 的 max_tokens
-    #   →content 空→角色/剧本/地图生成静默回退（finish=length 直连复现；12:33“路人”事件）。
-    #   P-0902-B（未打包）的 thinking=disabled 路由落地后可改回 v4-pro+planner-model=flash。
+    #   ⚠️ model=flash 非笔误（2026-09-02 13:2x 终稿，旧 jar 实测取证 .local/secrets/oldjar-probe.mjs）：
+    #   旧 jar（08-31）无 thinking 参数，pro 默认思考在 callJson 小预算（Router 审批 800）实测
+    #   reasoning 吃满→content 空（finish=length）；对话 700 幸存属侥幸。flash 全路径实测正常。
+    #   P-0902-B 新 jar（对话 thinking=disabled）打包后可升级 model=v4-pro + planner-model=flash。
     api-base: "https://api.deepseek.com/v1/chat/completions"
     api-key: "${ROLEPLAY_LLM_API_KEY:}"
     model: "deepseek-v4-flash"

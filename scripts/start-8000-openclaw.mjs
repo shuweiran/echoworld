@@ -26,12 +26,12 @@ const args = [
   '--server.port=8000', '--server.address=127.0.0.1',
   // P-0902-A: DeepSeek overrides (jar yml still points at open.bigmodel.cn/glm-5.3-flash).
   '--roleplay.llm.api-base=https://api.deepseek.com/v1/chat/completions',
-  // P-0902-A 实测修正（13:10）：运行中 jar（08-31）无 planner-model/ModelRequestProfile（字节码
-  // grep 取证）——callJson（剧本 4000/地图/审批 600-1500 等）实走主 client 的 llm.model，
-  // v4-pro 在 DeepSeek 默认 thinking 下 content 被 reasoning 吃满→静默回退（.local/secrets/
-  // matrix-test.mjs 复现）。故 llm.model=flash（旧 jar 下 callJson+对话均实测正常）。
-  // 注：源码工作区（P-0902-B，未打包）已有 thinking=disabled/任务路由——下次 mvn package
-  // 后若主人要升级主链路到 pro，改为：llm.model=deepseek-v4-pro + 恢复下方 planner-model 行。
+  // P-0902-A（13:2x 终稿）：旧 jar（在运 08-31）无 thinking 参数控制，实测（.local/secrets/
+  // oldjar-probe.mjs）：pro 默认思考在 callJson 小预算（Router 审批 800）下 reasoning 吃满→
+  // content 空（finish=length r_tok=800）；对话 700 虽幸存属侥幸。flash 同形态全路径正常
+  // （800→4.6s 合法 JSON；4000→12-27s 五层卡）。故旧 jar 期全局用 flash。
+  // P-0902-B 新 jar（对话 thinking=disabled）打包后升级方案：本行改 deepseek-v4-pro，
+  // 并加 --roleplay.llm.planner-model=deepseek-v4-flash（arbiter 保持 flash）。
   '--roleplay.llm.model=deepseek-v4-flash',
   '--roleplay.arbiter-llm.api-base=https://api.deepseek.com/v1/chat/completions',
   // P-0902-A 实测（.local/secrets/matrix-test.mjs 复现 Java 同款请求）：v4-pro+PLANNING 会被
