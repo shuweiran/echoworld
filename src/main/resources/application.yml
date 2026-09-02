@@ -38,13 +38,26 @@ spring:
           must-revalidate: true
 
 roleplay:
+  gameplay:
+    # 主控物品/数值入口默认关闭；启用时从环境变量注入，并在请求头 X-Gameplay-Master-Key 提供。
+    master-key: "${ROLEPLAY_GAMEPLAY_MASTER_KEY:}"
   llm:
     # P-0828-A（2026-08-28）：原配置 "stealth/ox-alpha"（OpenRouter 匿名隐身模型）测试期已结束，
     # 官方 404 公告："This model was ZAI's GLM-5.3 Flash"（真身=智谱 GLM 系）。切换为智谱官方端点
     # 同名模型 glm-5.3-flash（key=ROLEPLAY_LLM_API_KEY，本机为用户环境变量里的智谱 key）。
-    api-base: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    # P-0902-A（2026-09-02）：切换 DeepSeek 官方端点（key=ROLEPLAY_LLM_API_KEY，由
+    #   scripts/start-8000-openclaw.mjs 从 .local/secrets/deepseek-api.key 读取注入，不落源码/不改 openclaw.json）。
+    #   原 P-0828-A 智谱端点/模型见 application.yml.bak-20260902。
+    #   ⚠️ model=flash 非笔误（2026-09-02 13:1x 实测修正）：现运行 jar（08-31 构建）无
+    #   ModelRequestProfile/thinking 参数，v4-pro 默认思考会吃满 callJson 的 max_tokens
+    #   →content 空→角色/剧本/地图生成静默回退（finish=length 直连复现；12:33“路人”事件）。
+    #   P-0902-B（未打包）的 thinking=disabled 路由落地后可改回 v4-pro+planner-model=flash。
+    api-base: "https://api.deepseek.com/v1/chat/completions"
     api-key: "${ROLEPLAY_LLM_API_KEY:}"
-    model: "glm-5.3-flash"
+    model: "deepseek-v4-flash"
+    # 可选任务路由：空=沿用 model；同一 OpenAI-compatible 端点可分别指定低延迟对白模型与规划模型。
+    dialogue-model: "${ROLEPLAY_LLM_DIALOGUE_MODEL:}"
+    planner-model: "${ROLEPLAY_LLM_PLANNER_MODEL:}"
     # P-0810-19：max-tokens / temperature 为「默认值」语义（旧值 4096/0.9 全源码无消费点=死配置）：
     #   - max-tokens：callJson 未显式传 maxTokens（null）时使用；全部既有调用点显式传值优先
     #     （概略 1200 / 完整剧本 4000 / 地图 8000）
@@ -65,10 +78,14 @@ roleplay:
   # 主控与角色对话分离：仲裁/逻辑整合、地图、角色与场景生成均走此配置。
   # 默认与角色 LLM 同端点同模型；可在设置页单独改为上下文与推理能力更强的模型。
   arbiter-llm:
-    # P-0828-A：同上，ox alpha 真身后走智谱官方端点。api-key 缺省沿用 ROLEPLAY_LLM_API_KEY。
-    api-base: "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+    # P-0902-A（2026-09-02）：随主链路切换 DeepSeek 官方端点。
+    #   注：model=flash 非笔误——v4-pro 在 PLANNING 任务下会被 ModelRequestProfile 加
+    #   thinking=enabled+reasoning_effort=high，max_tokens 全被 reasoning 吃满→content 空→
+    #   角色/地图生成静默失败（2026-09-02 直连复现实测 finish=length/content_len=0）；
+    #   flash 在 PLANNING 下 thinking=disabled，实测 12-13s 产出合法 JSON。
+    api-base: "https://api.deepseek.com/v1/chat/completions"
     api-key: "${ROLEPLAY_ARBITER_LLM_API_KEY:${ROLEPLAY_LLM_API_KEY:}}"
-    model: "glm-5.3-flash"
+    model: "deepseek-v4-flash"
   map-llm:
     # 仅用于可选的地图视觉审核（多模态图像输入）；地图/结构的生成本身改走 arbiter-llm。
     #   api-key 从环境变量 ROLEPLAY_MAP_LLM_API_KEY 注入（部署脚本读 openclaw.json models.providers.xiaomimimo-map.apiKey），不落源码
@@ -83,7 +100,9 @@ roleplay:
     #      fallback-model=主模型失败后的兜底模型，timeout-seconds=单次 LLM HTTP 调用超时
     # P-0828-A：主链路已切智谱端点，兜底模型必须同端点可用（glm-4.7 实测 200）；
     #      旧值 deepseek-v4-flash 是 OpenRouter 上的 ID，智谱端点不存在，重试兜底会直接失败。
-    fallback-model: "glm-4.7"
+    # P-0902-A（2026-09-02）：主链路已切 DeepSeek 官方端点，兜底模型同端点可用
+    #      （GET /models 实测 200：deepseek-v4-flash / deepseek-v4-pro / deepseek-v4-flash-vision-exp）。
+    fallback-model: "deepseek-v4-flash"
     timeout-seconds: 60
   memory:
     short-term-rounds: 20

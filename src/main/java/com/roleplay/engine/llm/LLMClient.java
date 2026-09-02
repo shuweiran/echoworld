@@ -22,6 +22,7 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Unified LLM client — single HTTP connection pool for all Agent + Arbiter calls.
@@ -47,6 +48,9 @@ public class LLMClient {
 
     private final HttpClient httpClient;
     private final ObjectMapper mapper = new ObjectMapper();
+    private final LongAdder cacheHitTokens = new LongAdder();
+    private final LongAdder cacheMissTokens = new LongAdder();
+    private final LongAdder cacheReportedCalls = new LongAdder();
 
     @Autowired
     public LLMClient(AppConfig appConfig) {
@@ -102,6 +106,18 @@ public class LLMClient {
         return appConfig.getLlm().getModel();
     }
 
+    private String dialogueModel() {
+        if (provider != Provider.DIALOGUE) return defaultModel();
+        String routed = appConfig.getLlm().getDialogueModel();
+        return routed == null || routed.isBlank() ? defaultModel() : routed;
+    }
+
+    private String plannerModel() {
+        if (provider != Provider.DIALOGUE) return defaultModel();
+        String routed = appConfig.getLlm().getPlannerModel();
+        return routed == null || routed.isBlank() ? defaultModel() : routed;
+    }
+
     /** P-0818-B：鉴权 key（地图专用 provider → roleplay.map-llm.api-key，否则主链路 key）。 */
     private String authKey() {
         if (provider == Provider.ARBITER && appConfig.getArbiterLlm() != null
@@ -144,7 +160,8 @@ public class LLMClient {
      * roleplay.llm.dialogue-max-tokens（默认 700）——AI 发言 300 常截断（content 不完整）。
      */
     public String callSync(List<Message> messages) {
-        return callSyncInternal(messages, defaultModel(), dialogueMaxTokens(), 0.7, null, timeoutSeconds);
+        return callSyncInternal(messages, dialogueModel(), dialogueMaxTokens(), 0.7, null, timeoutSeconds,
+                ModelRequestProfile.Task.DIALOGUE_RENDER);
     }
 
     /**
@@ -155,29 +172,32 @@ public class LLMClient {
      * future.cancel(true)）也会立即 abort 进行中的 HTTP 调用并上抛取消信号。
      */
     public String callSync(List<Message> messages, CancellationToken token) {
-        return callSyncInternal(messages, defaultModel(), dialogueMaxTokens(), 0.7, token, timeoutSeconds);
+        return callSyncInternal(messages, dialogueModel(), dialogueMaxTokens(), 0.7, token, timeoutSeconds,
+                ModelRequestProfile.Task.DIALOGUE_RENDER);
     }
 
     public String callSync(List<Message> messages, String modelOverride,
                            int maxTokens, double temperature) {
-        return callSyncInternal(messages, modelOverride, maxTokens, temperature, null, timeoutSeconds);
+        return callSyncInternal(messages, modelOverride, maxTokens, temperature, null, timeoutSeconds,
+                ModelRequestProfile.Task.DIALOGUE_RENDER);
     }
 
     /** 带单次调用超时覆盖（地图生成等路径：LLM 卡住快速降级，防止 init 自动串联被拖死）。 */
     public String callSync(List<Message> messages, String modelOverride,
                            int maxTokens, double temperature, int timeoutSec) {
         return callSyncInternal(messages, modelOverride, maxTokens, temperature, null,
-                timeoutSec > 0 ? timeoutSec : timeoutSeconds);
+                timeoutSec > 0 ? timeoutSec : timeoutSeconds, ModelRequestProfile.Task.DIALOGUE_RENDER);
     }
 
     private String callSyncInternal(List<Message> messages, String modelOverride,
                                     int maxTokens, double temperature,
-                                    CancellationToken token, int timeoutSec) {
+                                    CancellationToken token, int timeoutSec,
+                                    ModelRequestProfile.Task task) {
         // P-0809-B（API 逻辑链追踪）：LLM 调用打点 —— 墙钟耗时（含全部重试）+ 模型，
         // 关联到当前请求链路（TraceContext ThreadLocal；开关关闭零开销）
         long traceT0 = System.currentTimeMillis();
         try {
-            return callSyncInternal0(messages, modelOverride, maxTokens, temperature, token, timeoutSec);
+            return callSyncInternal0(messages, modelOverride, maxTokens, temperature, token, timeoutSec, task);
         } finally {
             TraceContext.recordLlm(modelOverride == null || modelOverride.isBlank()
                             ? defaultModel() : modelOverride,
@@ -187,7 +207,8 @@ public class LLMClient {
 
     private String callSyncInternal0(List<Message> messages, String modelOverride,
                                     int maxTokens, double temperature,
-                                    CancellationToken token, int timeoutSec) {
+                                    CancellationToken token, int timeoutSec,
+                                    ModelRequestProfile.Task task) {
         // P-0828-D：modelOverride 传 null/空白（如 ScriptGameService 私聊生成）时归一到当前配置的
         // 默认模型——旧行为会先发一次 {"model":null} 的无效请求吃 400，再落到 fallback 模型，
         // 导致该路径永远用不到主模型（ox alpha / glm-5.3-flash）。
@@ -202,7 +223,7 @@ public class LLMClient {
                 // 检查点 1：每次尝试前（取消 → 立即中断，不发起新请求）
                 if (token != null) token.checkpoint();
                 try {
-                    String requestBody = buildChatRequest(messages, currentModel, maxTokens, temperature);
+                    String requestBody = buildChatRequest(messages, currentModel, maxTokens, temperature, false, task);
                     HttpRequest request = HttpRequest.newBuilder()
                             .uri(URI.create(chatEndpoint()))
                             .header("Content-Type", "application/json")
@@ -277,7 +298,8 @@ public class LLMClient {
                 "你是一个角色扮演主控，回复简洁的叙事旁白。");
         Message userMsg = new Message(Message.Role.USER, "user", prompt);
         try {
-            return callSync(List.of(sysMsg, userMsg), defaultModel(), maxTokens, 0.1);
+            return callSyncInternal(List.of(sysMsg, userMsg), plannerModel(), maxTokens, 0.1,
+                    null, timeoutSeconds, ModelRequestProfile.Task.PLANNING);
         } catch (Exception e) {
             log.warn("callSimple failed: {}", e.getMessage());
             return null;
@@ -308,9 +330,10 @@ public class LLMClient {
 
         for (int attempt = 0; attempt < 3; attempt++) {
             try {
-                String content = callSync(List.of(sysMsg, userMsg), defaultModel(), effectiveMaxTokens,
-                        effectiveTemperature,
-                        timeoutOverrideSeconds > 0 ? timeoutOverrideSeconds : timeoutSeconds);
+                String content = callSyncInternal(List.of(sysMsg, userMsg), plannerModel(), effectiveMaxTokens,
+                        effectiveTemperature, null,
+                        timeoutOverrideSeconds > 0 ? timeoutOverrideSeconds : timeoutSeconds,
+                        ModelRequestProfile.Task.PLANNING);
                 String json = extractJson(content);
                 if (json != null) {
                     @SuppressWarnings("unchecked")
@@ -337,8 +360,9 @@ public class LLMClient {
         int effectiveMaxTokens = resolveMaxTokens(maxTokens);
         double temp = appConfig.getLlm().getTemperature();
         try {
-            String content = callSync(List.of(sysMsg, userMsg), defaultModel(), effectiveMaxTokens, temp,
-                    timeoutSeconds > 0 ? timeoutSeconds : timeoutSeconds);
+            String content = callSyncInternal(List.of(sysMsg, userMsg), plannerModel(), effectiveMaxTokens, temp,
+                    null, timeoutSeconds > 0 ? timeoutSeconds : timeoutSeconds,
+                    ModelRequestProfile.Task.PLANNING);
             String json = extractJson(content);
             if (json != null) {
                 @SuppressWarnings("unchecked")
@@ -368,11 +392,20 @@ public class LLMClient {
     private String buildChatRequest(List<Message> messages, String modelName,
                                     int maxTokens, double temperature)
             throws JsonProcessingException {
-        return buildChatRequest(messages, modelName, maxTokens, temperature, false);
+        return buildChatRequest(messages, modelName, maxTokens, temperature, false,
+                ModelRequestProfile.Task.DIALOGUE_RENDER);
     }
 
     private String buildChatRequest(List<Message> messages, String modelName,
                                     int maxTokens, double temperature, boolean stream)
+            throws JsonProcessingException {
+        return buildChatRequest(messages, modelName, maxTokens, temperature, stream,
+                ModelRequestProfile.Task.DIALOGUE_RENDER);
+    }
+
+    private String buildChatRequest(List<Message> messages, String modelName,
+                                    int maxTokens, double temperature, boolean stream,
+                                    ModelRequestProfile.Task task)
             throws JsonProcessingException {
 
         List<Map<String, Object>> msgList = new ArrayList<>();
@@ -411,12 +444,10 @@ public class LLMClient {
             requestBody.put("seed", seed);
         }
         if (stream) requestBody.put("stream", true);
-        // P-0804-F（2026-08-04）：deepseek-v4-flash 为推理模型（reasoning_content 思考吃满
-        // max_tokens 导致 content 恒空、finish=length，地图/剧本长 JSON 生成全走 BSP 兜底）。
-        // 显式关闭思考（实测 thinking.type=disabled 后 12.4s 完整输出 24×16 地图 JSON，
-        // reasoning=0 / finish=stop；deepseek-chat 等非推理模型不受影响）。
-        if (modelName != null && modelName.toLowerCase().contains("v4-flash")) {
-            requestBody.put("thinking", Map.of("type", "disabled"));
+        Map<String, Object> extras = ModelRequestProfile.extras(apiBase(), modelName, task);
+        requestBody.putAll(extras);
+        if (Map.of("type", "enabled").equals(extras.get("thinking"))) {
+            requestBody.remove("temperature"); // DeepSeek thinking 模式不消费采样参数
         }
 
         return mapper.writeValueAsString(requestBody);
@@ -441,13 +472,13 @@ public class LLMClient {
         try {
             return callStreamInternal(messages, token, onDelta);
         } finally {
-            TraceContext.recordLlm(defaultModel(), System.currentTimeMillis() - traceT0);
+            TraceContext.recordLlm(dialogueModel(), System.currentTimeMillis() - traceT0);
         }
     }
 
     private String callStreamInternal(List<Message> messages, CancellationToken token,
                                       java.util.function.Consumer<String> onDelta) {
-        String[] modelsToTry = {defaultModel(), fallbackModel};
+        String[] modelsToTry = {dialogueModel(), fallbackModel};
         Set<String> seen = new LinkedHashSet<>(Arrays.asList(modelsToTry));
         Exception lastError = null;
 
@@ -456,7 +487,8 @@ public class LLMClient {
                 // 检查点：每次尝试前（取消 → 立即中断，不发起新请求）
                 if (token != null) token.checkpoint();
                 try {
-                    String requestBody = buildChatRequest(messages, currentModel, dialogueMaxTokens(), 0.7, true);
+                    String requestBody = buildChatRequest(messages, currentModel, dialogueMaxTokens(), 0.7, true,
+                            ModelRequestProfile.Task.DIALOGUE_RENDER);
                     HttpRequest request = HttpRequest.newBuilder()
                             .uri(URI.create(chatEndpoint()))
                             .header("Content-Type", "application/json")
@@ -555,7 +587,10 @@ public class LLMClient {
                 if ("[DONE]".equals(data)) break;
                 try {
                     JsonNode node = mapper.readTree(data);
-                    JsonNode delta = node.path("choices").get(0).path("delta").path("content");
+                    recordCacheUsage(node.path("usage"));
+                    JsonNode choices = node.path("choices");
+                    if (!choices.isArray() || choices.isEmpty()) continue;
+                    JsonNode delta = choices.get(0).path("delta").path("content");
                     if (delta != null && !delta.isMissingNode()) {
                         String d = delta.asText("");
                         if (!d.isEmpty()) {
@@ -573,6 +608,7 @@ public class LLMClient {
         if (plainBlock != null && full.length() == 0) {
             // 整段非 SSE → 按普通 chat/completions JSON 解析
             JsonNode root = mapper.readTree(plainBlock.toString());
+            recordCacheUsage(root.path("usage"));
             String content = root.path("choices").get(0).path("message").path("content").asText("");
             if (!content.isEmpty()) {
                 emitted[0]++;
@@ -586,7 +622,31 @@ public class LLMClient {
 
     private String parseResponse(String responseBody) throws Exception {
         JsonNode root = mapper.readTree(responseBody);
+        recordCacheUsage(root.path("usage"));
         return root.path("choices").get(0).path("message").path("content").asText("");
+    }
+
+    private void recordCacheUsage(JsonNode usage) {
+        if (usage == null || usage.isMissingNode()) return;
+        JsonNode hit = usage.get("prompt_cache_hit_tokens");
+        JsonNode miss = usage.get("prompt_cache_miss_tokens");
+        if (hit == null && miss == null) return;
+        cacheHitTokens.add(hit == null ? 0 : hit.asLong(0));
+        cacheMissTokens.add(miss == null ? 0 : miss.asLong(0));
+        cacheReportedCalls.increment();
+    }
+
+    public PromptCacheUsage getPromptCacheUsage() {
+        long hit = cacheHitTokens.sum();
+        long miss = cacheMissTokens.sum();
+        return new PromptCacheUsage(hit, miss, cacheReportedCalls.sum());
+    }
+
+    public record PromptCacheUsage(long hitTokens, long missTokens, long reportedCalls) {
+        public double hitRatio() {
+            long total = hitTokens + missTokens;
+            return total == 0 ? 0 : (double) hitTokens / total;
+        }
     }
 
     private String extractJson(String text) {

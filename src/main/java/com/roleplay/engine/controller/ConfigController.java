@@ -112,7 +112,10 @@ public class ConfigController {
         AppConfig.LLMConfig llm = appConfig.getLlm();
         AppConfig.MapLlmConfig map = appConfig.getMapLlm();
         AppConfig.ArbiterLlmConfig arbiter = appConfig.getArbiterLlm();
-        out.put("llm", providerView(llm.getApiBase(), llm.getModel(), llm.getApiKey()));
+        Map<String, Object> llmView = providerView(llm.getApiBase(), llm.getModel(), llm.getApiKey());
+        llmView.put("dialogue_model", llm.getDialogueModel());
+        llmView.put("planner_model", llm.getPlannerModel());
+        out.put("llm", llmView);
         out.put("arbiter_llm", providerView(arbiter.getApiBase(), arbiter.getModel(), arbiter.getApiKey()));
         out.put("map_llm", providerView(map.getBaseUrl(), map.getModel(), map.getApiKey()));
         if (ttsService != null) out.put("tts", ttsService.statusMap());
@@ -182,6 +185,8 @@ public class ConfigController {
         setString(m, "api_key", cfg::setApiKey, true);
         setString(m, "base_url", cfg::setApiBase, false);
         setString(m, "model", cfg::setModel, false);
+        setString(m, "dialogue_model", cfg::setDialogueModel, true);
+        setString(m, "planner_model", cfg::setPlannerModel, true);
         if (m.containsKey("temperature")) cfg.setTemperature(number(m.get("temperature"), cfg.getTemperature()));
         if (m.containsKey("max_tokens")) cfg.setMaxTokens((int) number(m.get("max_tokens"), cfg.getMaxTokens()));
     }

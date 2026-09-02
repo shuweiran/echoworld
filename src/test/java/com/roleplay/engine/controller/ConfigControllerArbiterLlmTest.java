@@ -12,6 +12,23 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ConfigControllerArbiterLlmTest {
 
     @Test
+    void dialogueAndPlannerModelsCanBeConfiguredWithoutChangingProvider() {
+        AppConfig config = new AppConfig();
+        ConfigController controller = new ConfigController(config);
+
+        controller.setIntegrations(Map.of("llm", Map.of(
+                "dialogue_model", "fast-model",
+                "planner_model", "reasoning-model")));
+
+        assertEquals("fast-model", config.getLlm().getDialogueModel());
+        assertEquals("reasoning-model", config.getLlm().getPlannerModel());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> view = (Map<String, Object>) controller.getIntegrations().getBody().get("llm");
+        assertEquals("fast-model", view.get("dialogue_model"));
+        assertEquals("reasoning-model", view.get("planner_model"));
+    }
+
+    @Test
     void integrationConfigSeparatelyUpdatesAndMasksArbiterProvider() {
         AppConfig config = new AppConfig();
         ConfigController controller = new ConfigController(config);

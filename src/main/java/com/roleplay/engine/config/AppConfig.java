@@ -114,6 +114,9 @@ public class AppConfig {
         private String apiKey = "";
         private String apiBase = "https://api.deepseek.com";
         private String model = "deepseek-v4-flash";
+        /** 可选任务路由；空值均回退 model，兼容只有一个模型的 OpenAI-compatible 服务。 */
+        private String dialogueModel = "";
+        private String plannerModel = "";
         /** 默认 max_tokens 兑底（roleplay.llm.max-tokens）：callJson 传 null 时使用；各调用点显式传值优先（概略 1200 / 完整剧本 4000 / 地图 8000）。 */
         private int maxTokens = 4000;
         /** P-0810-21-D：对话主链路 max_tokens（roleplay.llm.dialogue-max-tokens）：callSync 无参/带 token 入口与 callStream 使用（原硬编码 300 偏短，AI 发言常截断）；显式传值调用点优先。 */
@@ -129,6 +132,10 @@ public class AppConfig {
         public void setApiBase(String apiBase) { this.apiBase = apiBase; }
         public String getModel() { return model; }
         public void setModel(String model) { this.model = model; }
+        public String getDialogueModel() { return dialogueModel; }
+        public void setDialogueModel(String dialogueModel) { this.dialogueModel = dialogueModel; }
+        public String getPlannerModel() { return plannerModel; }
+        public void setPlannerModel(String plannerModel) { this.plannerModel = plannerModel; }
         public int getMaxTokens() { return maxTokens; }
         public void setMaxTokens(int maxTokens) { this.maxTokens = maxTokens; }
         public int getDialogueMaxTokens() { return dialogueMaxTokens; }

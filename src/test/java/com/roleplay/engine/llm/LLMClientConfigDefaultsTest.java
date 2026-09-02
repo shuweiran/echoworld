@@ -41,7 +41,8 @@ class LLMClientConfigDefaultsTest {
         apiBase = "http://localhost:" + server.getAddress().getPort() + "/v1";
         server.createContext("/v1/chat/completions", exchange -> {
             lastRequestBody.set(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8));
-            String body = "{\"choices\":[{\"message\":{\"content\":\"{\\\"ok\\\":true}\"}}]}";
+            String body = "{\"choices\":[{\"message\":{\"content\":\"{\\\"ok\\\":true}\"}}],"
+                    + "\"usage\":{\"prompt_cache_hit_tokens\":75,\"prompt_cache_miss_tokens\":25}}";
             exchange.getResponseHeaders().set("Content-Type", "application/json");
             byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
             exchange.sendResponseHeaders(200, bytes.length);
@@ -118,5 +119,37 @@ class LLMClientConfigDefaultsTest {
         client.callJson("test", 300);
         assertTrue(lastRequestBody.get().contains("\"seed\":42"),
                 "seed=42 必须携带: " + lastRequestBody.get());
+    }
+
+    @Test
+    @DisplayName("对话与规划按任务选择模型，空值仍回退默认 model")
+    void taskModels_areRoutedIndependently() {
+        AppConfig cfg = new AppConfig();
+        cfg.getLlm().setApiBase(apiBase);
+        cfg.getLlm().setApiKey("test-key");
+        cfg.getLlm().setModel("default-model");
+        cfg.getLlm().setDialogueModel("fast-render-model");
+        cfg.getLlm().setPlannerModel("strong-planner-model");
+        LLMClient client = new LLMClient(cfg);
+
+        client.callSync(java.util.List.of(new com.roleplay.engine.core.Message(
+                com.roleplay.engine.core.Message.Role.USER, "user", "hi")));
+        assertTrue(lastRequestBody.get().contains("\"model\":\"fast-render-model\""));
+        client.callJson("plan", 100);
+        assertTrue(lastRequestBody.get().contains("\"model\":\"strong-planner-model\""));
+    }
+
+    @Test
+    @DisplayName("DeepSeek cache usage 从响应统计，不发送伪 cacheKey")
+    void promptCacheUsage_isReadFromResponse() {
+        LLMClient client = newClient();
+        client.callSync(java.util.List.of(new com.roleplay.engine.core.Message(
+                com.roleplay.engine.core.Message.Role.USER, "user", "hi")));
+
+        LLMClient.PromptCacheUsage usage = client.getPromptCacheUsage();
+        assertEquals(75, usage.hitTokens());
+        assertEquals(25, usage.missTokens());
+        assertEquals(0.75, usage.hitRatio(), 0.0001);
+        assertFalse(lastRequestBody.get().contains("cacheKey"));
     }
 }
