@@ -75,6 +75,29 @@ class WorldReplicationServiceTest {
         service.close();
     }
 
+    @Test
+    void worldObjectsUseTheSameInterestFilteredReplicaStream() {
+        SimulationWorld world = new SimulationWorld();
+        WorldReplicationService service = new WorldReplicationService(world);
+        List<Object> sent = new ArrayList<>();
+        service.connect("client-a", new InterestContext("client-a",
+                new SpatialCell("world", "ground", 0, 0), 1, Set.of()), sent::add);
+        Map<String, Object> object = Map.ofEntries(
+                Map.entry("id", "note"), Map.entry("type", "NOTE"), Map.entry("displayName", "便笺"),
+                Map.entry("description", ""), Map.entry("x", 20), Map.entry("y", 20), Map.entry("elevation", 0),
+                Map.entry("floorId", "ground"), Map.entry("carriedBy", ""), Map.entry("portable", true),
+                Map.entry("consumable", false), Map.entry("supportedActions", List.of("PICK_UP")),
+                Map.entry("state", Map.of()), Map.entry("tags", List.of("item")));
+        var snapshot = new SimulationWorld.WorldSnapshot(1, List.of(), List.of(), System.currentTimeMillis(),
+                "", false, "test", 1000, 1000, List.of(), List.of(), List.of(object));
+        service.publishSnapshot(snapshot);
+        ReplicationFrame frame = (ReplicationFrame) ((WorldReplicationService.Envelope) sent.getLast()).payload();
+        assertEquals(1, frame.creates().size());
+        assertEquals("WORLD_OBJECT", frame.creates().getFirst().entity().entityType());
+        assertEquals("便笺", frame.creates().getFirst().entity().state().get("displayName"));
+        service.close();
+    }
+
     private SimulationWorld.WorldSnapshot snapshot(int tick, List<Map<String, Object>> agents) {
         return new SimulationWorld.WorldSnapshot(tick, agents, List.of(), System.currentTimeMillis(),
                 "", false, "test", 1000, 1000);

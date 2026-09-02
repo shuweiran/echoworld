@@ -73,6 +73,8 @@ public class SimulationWorld implements ActionMutationPort {
     private final ConcurrentHashMap<String, WorldObject> worldObjects = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, ConcurrentHashMap<String, String>> worldObjectStates = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> carriedBy = new ConcurrentHashMap<>();
+    /** Mutable runtime transform for dropped/moved objects; static WorldObject remains immutable content. */
+    private final ConcurrentHashMap<String, Transform3D> worldObjectTransforms = new ConcurrentHashMap<>();
     private final List<Map<String, Object>> recentActionEvents = new CopyOnWriteArrayList<>();
     private final List<Consumer<Map<String, Object>>> actionEventListeners = new CopyOnWriteArrayList<>();
     private final List<Consumer<WorldSnapshot>> tickListeners = new CopyOnWriteArrayList<>();
@@ -150,16 +152,33 @@ public class SimulationWorld implements ActionMutationPort {
         AgentState state = states.get(entityId);
         if (state != null) return state.transform();
         WorldObject object = worldObjects.get(entityId);
-        return object == null ? null : object.transform();
+        if (object == null) return null;
+        String holderId = carriedBy(entityId);
+        AgentState holder = holderId.isBlank() ? null : states.get(holderId);
+        return holder == null ? worldObjectTransforms.getOrDefault(entityId, object.transform()) : holder.transform();
     }
     @Override public boolean affordanceAvailable(String actorId, String targetId, ActionType action) {
         WorldObject object = worldObjects.get(targetId);
         if (object == null) return true; // Agent-to-agent actions have their own domain validators.
         AgentState actor = states.get(actorId);
         if (actor == null) return false;
+        if ("true".equalsIgnoreCase(objectState(targetId, "consumed"))) return false;
+        String holderId = carriedBy(targetId);
+        if (!holderId.isBlank() && !actorId.equals(holderId)) return false;
+        String objectFloor = objectState(targetId, "floorId");
+        if (objectFloor == null || objectFloor.isBlank()) {
+            objectFloor = String.valueOf(object.properties().getOrDefault("floorId", "ground"));
+        }
+        if (!actorId.equals(carriedBy(targetId)) && !objectFloor.equals(actor.navLocation().floorId())) return false;
+        WorldObject runtimeObject = new WorldObject(object.id(), object.type(), transformOf(object.id()),
+                object.affordances(), object.tags(), object.properties());
         AffordanceResolver.Result resolved = affordanceResolver.resolve(
                 new ActionIntent("validation", actorId, com.roleplay.engine.simulation.action.ActionSource.ENGINE,
-                        action, targetId, worldVersion, 0, Map.of()), actor.transform(), object);
+                        action, targetId, worldVersion, 0, Map.of()), actor.transform(), runtimeObject);
+        if (!resolved.available() && actorId.equals(carriedBy(targetId))
+                && object.affordances().containsKey(action)) {
+            resolved = new AffordanceResolver.Result(true, "CARRIED", object.affordances().get(action));
+        }
         if (!resolved.available()) return false;
         for (Map.Entry<String, String> required : resolved.definition().requiredState().entrySet()) {
             if (!Objects.equals(required.getValue(), objectState(targetId, required.getKey()))) return false;
@@ -184,13 +203,19 @@ public class SimulationWorld implements ActionMutationPort {
 
     public void registerWorldObject(WorldObject object) {
         worldObjects.put(Objects.requireNonNull(object, "object").id(), object);
-        worldObjectStates.putIfAbsent(object.id(), new ConcurrentHashMap<>());
+        ConcurrentHashMap<String, String> runtimeState = worldObjectStates.computeIfAbsent(object.id(), ignored -> new ConcurrentHashMap<>());
+        Object initialState = object.properties().get("initialState");
+        if (initialState instanceof Map<?, ?> values) {
+            values.forEach((key, value) -> runtimeState.putIfAbsent(String.valueOf(key), String.valueOf(value)));
+        }
+        worldObjectTransforms.putIfAbsent(object.id(), object.transform());
     }
 
     public void removeWorldObject(String id) {
         worldObjects.remove(id);
         worldObjectStates.remove(id);
         carriedBy.remove(id);
+        worldObjectTransforms.remove(id);
     }
     public Map<String, WorldObject> getWorldObjects() { return Map.copyOf(worldObjects); }
     public List<Map<String, Object>> getRecentActionEvents() { return List.copyOf(recentActionEvents); }
@@ -226,15 +251,92 @@ public class SimulationWorld implements ActionMutationPort {
         return state == null ? null : state.get(key);
     }
 
-    @Override public boolean setCarriedBy(String objectId, String actorId) {
-        if (!worldObjects.containsKey(objectId)) return false;
-        if (actorId == null || actorId.isBlank()) carriedBy.remove(objectId);
-        else if (states.containsKey(actorId)) carriedBy.put(objectId, actorId);
-        else return false;
+    @Override public synchronized boolean setCarriedBy(String objectId, String actorId) {
+        WorldObject object = worldObjects.get(objectId);
+        if (object == null) return false;
+        String current = carriedBy.getOrDefault(objectId, "");
+        if (actorId == null || actorId.isBlank()) {
+            if (current.isBlank()) return false;
+            AgentState holder = states.get(current);
+            if (holder == null) return false;
+            worldObjectTransforms.put(objectId, holder.transform());
+            worldObjectStates.computeIfAbsent(objectId, ignored -> new ConcurrentHashMap<>())
+                    .put("floorId", holder.navLocation().floorId());
+            carriedBy.remove(objectId);
+        } else {
+            AgentState holder = states.get(actorId);
+            if (holder == null || (!current.isBlank() && !current.equals(actorId))) return false;
+            long count = carriedBy.values().stream().filter(actorId::equals).count();
+            if (!actorId.equals(current) && count >= holder.gameplay().inventoryCapacity()) return false;
+            if (!Boolean.TRUE.equals(object.properties().get("portable"))) return false;
+            carriedBy.put(objectId, actorId);
+        }
         return true;
     }
 
     @Override public String carriedBy(String objectId) { return carriedBy.getOrDefault(objectId, ""); }
+
+    @Override public synchronized Map<String, Object> applyObjectUse(String actorId, String objectId,
+                                                                     Map<String, Object> parameters) {
+        AgentState actor = states.get(actorId);
+        WorldObject object = worldObjects.get(objectId);
+        if (actor == null || object == null) return Map.of("applied", false, "code", "MISSING_CONTEXT");
+        String holderId = carriedBy(objectId);
+        if (!holderId.isBlank() && !actorId.equals(holderId)) {
+            return Map.of("applied", false, "code", "HELD_BY_OTHER");
+        }
+        if ("true".equalsIgnoreCase(objectState(objectId, "consumed"))) {
+            return Map.of("applied", false, "code", "ALREADY_CONSUMED");
+        }
+        Object rawEffects = object.properties().get("useEffects");
+        Map<String, Double> applied = new LinkedHashMap<>();
+        if (rawEffects instanceof Map<?, ?> effects) {
+            for (Map.Entry<?, ?> effect : effects.entrySet()) {
+                if (!(effect.getValue() instanceof Number number)) continue;
+                try {
+                    var metric = actor.gameplay().adjust(String.valueOf(effect.getKey()), number.doubleValue());
+                    applied.put(metric.key(), metric.value());
+                } catch (IllegalArgumentException ignored) { /* unknown effects are not executable */ }
+            }
+        }
+        if (applied.isEmpty() && rawEffects instanceof Map<?, ?>) {
+            return Map.of("applied", false, "code", "NO_VALID_EFFECT");
+        }
+        boolean consumed = Boolean.TRUE.equals(object.properties().get("consumable"));
+        if (consumed) {
+            carriedBy.remove(objectId);
+            setObjectState(objectId, "consumed", "true");
+        }
+        return Map.of("applied", true, "metrics", applied, "consumed", consumed);
+    }
+
+    @Override public synchronized Map<String, Object> adjustMetric(String actorId, Map<String, Object> parameters) {
+        AgentState actor = states.get(actorId);
+        if (actor == null) return Map.of("applied", false, "code", "ACTOR_MISSING");
+        String key = String.valueOf(parameters.getOrDefault("key", ""));
+        String operation = String.valueOf(parameters.getOrDefault("operation", "adjust"));
+        Object rawValue = parameters.get("value");
+        if (!(rawValue instanceof Number number) || Math.abs(number.doubleValue()) > 1000) {
+            return Map.of("applied", false, "code", "INVALID_VALUE");
+        }
+        try {
+            var metric = "define".equalsIgnoreCase(operation)
+                    ? actor.gameplay().define(key, String.valueOf(parameters.getOrDefault("label", key)),
+                        number.doubleValue(), parameterNumber(parameters.get("min"), 0),
+                        parameterNumber(parameters.get("max"), 100), String.valueOf(parameters.getOrDefault("unit", "")))
+                    : "set".equalsIgnoreCase(operation)
+                        ? actor.gameplay().set(key, number.doubleValue())
+                        : actor.gameplay().adjust(key, number.doubleValue());
+            return Map.of("applied", true, "metric", metric.toMap(),
+                    "reason", String.valueOf(parameters.getOrDefault("reason", "")));
+        } catch (IllegalArgumentException e) {
+            return Map.of("applied", false, "code", "INVALID_METRIC", "message", e.getMessage());
+        }
+    }
+
+    private static double parameterNumber(Object value, double fallback) {
+        return value instanceof Number number ? number.doubleValue() : fallback;
+    }
 
     @Override public void emitActionEvent(String actorId, ActionType type, Map<String, Object> payload) {
         Map<String, Object> event = new LinkedHashMap<>();
@@ -253,7 +355,18 @@ public class SimulationWorld implements ActionMutationPort {
 
     public WorldCheckpoint createCheckpoint(String worldId) {
         Map<String, Map<String, String>> objectStateCopy = new LinkedHashMap<>();
-        worldObjectStates.forEach((id, state) -> objectStateCopy.put(id, Map.copyOf(state)));
+        worldObjectStates.forEach((id, state) -> {
+            Map<String, String> values = new LinkedHashMap<>(state);
+            String holder = carriedBy(id);
+            if (!holder.isBlank()) values.put("_carriedBy", holder);
+            Transform3D transform = transformOf(id);
+            if (transform != null) {
+                values.put("_x", String.valueOf(transform.position().x()));
+                values.put("_y", String.valueOf(transform.position().y()));
+                values.put("_z", String.valueOf(transform.position().z()));
+            }
+            objectStateCopy.put(id, Map.copyOf(values));
+        });
         List<Map<String, Object>> entitySnapshots = states.values().stream()
                 .map(AgentState::toMap).map(Map::copyOf).toList();
         return new WorldCheckpoint(worldId, worldVersion, tickCount, Instant.now(), entitySnapshots, objectStateCopy);
@@ -267,6 +380,16 @@ public class SimulationWorld implements ActionMutationPort {
     public synchronized void restoreCheckpoint(WorldCheckpoint checkpoint) {
         if (running) throw new IllegalStateException("checkpoint restore requires a stopped world");
         Objects.requireNonNull(checkpoint, "checkpoint");
+        carriedBy.clear();
+        for (WorldObject object : worldObjects.values()) {
+            ConcurrentHashMap<String, String> initial = new ConcurrentHashMap<>();
+            Object rawInitial = object.properties().get("initialState");
+            if (rawInitial instanceof Map<?, ?> values) {
+                values.forEach((key, value) -> initial.put(String.valueOf(key), String.valueOf(value)));
+            }
+            worldObjectStates.put(object.id(), initial);
+            worldObjectTransforms.put(object.id(), object.transform());
+        }
         for (Map<String, Object> raw : checkpoint.entities()) {
             String id = String.valueOf(raw.getOrDefault("agentName", ""));
             AgentState state = states.get(id);
@@ -276,9 +399,23 @@ public class SimulationWorld implements ActionMutationPort {
                 state.setX(nx.doubleValue());
                 state.setY(ny.doubleValue());
             }
+            state.gameplay().restore(raw.get("gameplay"));
         }
         checkpoint.objectStates().forEach((id, values) -> {
-            if (worldObjects.containsKey(id)) values.forEach((key, value) -> setObjectState(id, key, value));
+            if (!worldObjects.containsKey(id)) return;
+            values.forEach((key, value) -> {
+                if (!key.startsWith("_")) setObjectState(id, key, value);
+            });
+            double x = parseDouble(values.get("_x"), Double.NaN);
+            double y = parseDouble(values.get("_y"), 0);
+            double z = parseDouble(values.get("_z"), Double.NaN);
+            if (Double.isFinite(x) && Double.isFinite(z)) {
+                worldObjectTransforms.put(id, new Transform3D(
+                        new com.roleplay.engine.simulation.spatial.Vec3(x, y, z),
+                        worldObjects.get(id).transform().rotation()));
+            }
+            String holder = values.getOrDefault("_carriedBy", "");
+            if (!holder.isBlank() && states.containsKey(holder)) carriedBy.put(id, holder);
         });
         worldVersion = checkpoint.worldVersion();
         tickCount = Math.toIntExact(checkpoint.tick());
@@ -290,6 +427,11 @@ public class SimulationWorld implements ActionMutationPort {
     }
     public double getWorldWidth() { return worldWidth; }
     public double getWorldHeight() { return worldHeight; }
+
+    private static double parseDouble(String value, double fallback) {
+        try { return value == null ? fallback : Double.parseDouble(value); }
+        catch (NumberFormatException ignored) { return fallback; }
+    }
 
     /** Loads validated static content before runtime entities are registered. */
     public synchronized void loadWorldDefinition(WorldDefinition definition) {
@@ -308,6 +450,7 @@ public class SimulationWorld implements ActionMutationPort {
         setWorldBounds(Math.max(maxX, WORLD_MARGIN * 2 + 1), Math.max(maxZ, WORLD_MARGIN * 2 + 1));
         worldObjects.clear();
         worldObjectStates.clear();
+        worldObjectTransforms.clear();
         for (WorldDefinition.EntityDefinition entity : definition.entityDefinitions()) {
             registerWorldObject(new WorldObject(entity.id(), entity.type(), entity.transform(), Map.of(), entity.tags()));
         }
@@ -457,6 +600,7 @@ public class SimulationWorld implements ActionMutationPort {
         worldObjects.clear();
         worldObjectStates.clear();
         carriedBy.clear();
+        worldObjectTransforms.clear();
         portalStates.clear();
         worldDefinition = null;
         agentRuntimeSystem.clear();
@@ -609,7 +753,7 @@ public class SimulationWorld implements ActionMutationPort {
     private WorldSnapshot buildSnapshot() {
         List<Map<String, Object>> agentStates = new ArrayList<>();
         for (AgentState s : states.values()) {
-            agentStates.add(s.toMap());
+            agentStates.add(agentSnapshot(s));
         }
         List<Map<String, Object>> obsList = new ArrayList<>();
         for (Obstacle o : obstacles) {
@@ -632,19 +776,86 @@ public class SimulationWorld implements ActionMutationPort {
                     return connector;
                 }).toList();
         return new WorldSnapshot(tickCount, agentStates, obsList, System.currentTimeMillis(),
-                worldNarration, directorActive, currentScene, worldWidth, worldHeight, floors, connectors);
+                worldNarration, directorActive, currentScene, worldWidth, worldHeight, floors, connectors,
+                worldObjectSnapshots());
+    }
+
+    /** Immutable current projection for REST/replication adapters. */
+    public WorldSnapshot snapshotNow() { return buildSnapshot(); }
+
+    public Map<String, Object> gameplaySnapshot(String agentId) {
+        AgentState state = states.get(agentId);
+        if (state == null) throw new IllegalArgumentException("Agent not found");
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("agentId", agentId);
+        result.putAll(state.gameplay().toMap());
+        result.put("inventory", inventorySnapshots(agentId));
+        result.put("capacity", state.gameplay().inventoryCapacity());
+        result.put("worldVersion", worldVersion);
+        return Map.copyOf(result);
+    }
+
+    private Map<String, Object> agentSnapshot(AgentState state) {
+        Map<String, Object> result = new LinkedHashMap<>(state.toMap());
+        result.put("inventory", inventorySnapshots(state.getAgentName()));
+        return Map.copyOf(result);
+    }
+
+    private List<Map<String, Object>> inventorySnapshots(String agentId) {
+        return carriedBy.entrySet().stream().filter(entry -> agentId.equals(entry.getValue()))
+                .map(entry -> objectSnapshot(entry.getKey())).filter(Objects::nonNull)
+                .filter(item -> Boolean.TRUE.equals(item.get("active")))
+                .sorted(Comparator.comparing(item -> String.valueOf(item.get("id")))).toList();
+    }
+
+    private List<Map<String, Object>> worldObjectSnapshots() {
+        return worldObjects.keySet().stream().map(this::objectSnapshot).filter(Objects::nonNull)
+                .sorted(Comparator.comparing(item -> String.valueOf(item.get("id")))).toList();
+    }
+
+    private Map<String, Object> objectSnapshot(String id) {
+        WorldObject object = worldObjects.get(id);
+        if (object == null) return null;
+        Transform3D transform = transformOf(id);
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("id", id);
+        result.put("type", object.type());
+        result.put("displayName", String.valueOf(object.properties().getOrDefault("displayName", object.type())));
+        result.put("description", String.valueOf(object.properties().getOrDefault("description", "")));
+        result.put("x", transform.position().x());
+        result.put("y", transform.position().z());
+        result.put("elevation", transform.position().y());
+        String floorId = objectState(id, "floorId");
+        result.put("floorId", floorId == null || floorId.isBlank()
+                ? String.valueOf(object.properties().getOrDefault("floorId", "ground")) : floorId);
+        result.put("carriedBy", carriedBy(id));
+        result.put("portable", Boolean.TRUE.equals(object.properties().get("portable")));
+        result.put("consumable", Boolean.TRUE.equals(object.properties().get("consumable")));
+        result.put("active", !"true".equalsIgnoreCase(objectState(id, "consumed")));
+        result.put("supportedActions", object.affordances().keySet().stream().map(Enum::name).sorted().toList());
+        result.put("state", Map.copyOf(worldObjectStates.getOrDefault(id, new ConcurrentHashMap<>())));
+        result.put("tags", object.tags().stream().sorted().toList());
+        return Map.copyOf(result);
     }
 
     public record WorldSnapshot(int tick, List<Map<String, Object>> agents,
                                 List<Map<String, Object>> obstacles, long timestamp,
                                 String worldNarration, boolean directorActive, String scene,
                                 double worldWidth, double worldHeight,
-                                List<Map<String, Object>> floors, List<Map<String, Object>> connectors) {
+                                List<Map<String, Object>> floors, List<Map<String, Object>> connectors,
+                                List<Map<String, Object>> worldObjects) {
         public WorldSnapshot(int tick, List<Map<String, Object>> agents, List<Map<String, Object>> obstacles,
                              long timestamp, String worldNarration, boolean directorActive, String scene,
                              double worldWidth, double worldHeight) {
             this(tick, agents, obstacles, timestamp, worldNarration, directorActive, scene,
-                    worldWidth, worldHeight, List.of(), List.of());
+                    worldWidth, worldHeight, List.of(), List.of(), List.of());
+        }
+        public WorldSnapshot(int tick, List<Map<String, Object>> agents, List<Map<String, Object>> obstacles,
+                             long timestamp, String worldNarration, boolean directorActive, String scene,
+                             double worldWidth, double worldHeight, List<Map<String, Object>> floors,
+                             List<Map<String, Object>> connectors) {
+            this(tick, agents, obstacles, timestamp, worldNarration, directorActive, scene,
+                    worldWidth, worldHeight, floors, connectors, List.of());
         }
         public Map<String, Object> toMap() {
             Map<String, Object> map = new LinkedHashMap<>();
@@ -659,6 +870,7 @@ public class SimulationWorld implements ActionMutationPort {
             map.put("worldHeight", worldHeight);
             if (!floors.isEmpty()) map.put("floors", floors);
             if (!connectors.isEmpty()) map.put("connectors", connectors);
+            if (!worldObjects.isEmpty()) map.put("worldObjects", worldObjects);
             return map;
         }
     }

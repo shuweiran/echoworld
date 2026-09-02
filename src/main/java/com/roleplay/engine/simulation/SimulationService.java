@@ -323,7 +323,16 @@ public class SimulationService {
      */
     public void initWithPersonas(List<Persona> personas, String sceneName, String playerName, String playerId,
                                  List<Obstacle> customObstacles, String mapLabel) {
+        // SimulationController may preload a validated multi-floor definition and its decor objects before
+        // delegating persona initialization. Preserve those immutable facts across the legacy clearAll boundary.
+        WorldDefinition preloadedDefinition = world.getWorldDefinition();
+        List<com.roleplay.engine.simulation.worldobject.WorldObject> preloadedObjects =
+                new ArrayList<>(world.getWorldObjects().values());
         clearAll();
+        if (preloadedDefinition != null) {
+            world.loadWorldDefinition(preloadedDefinition);
+            preloadedObjects.forEach(world::registerWorldObject);
+        }
         if (personas.isEmpty()) {
             log.warn("Empty persona list, falling back to demo");
             initDemo(2);

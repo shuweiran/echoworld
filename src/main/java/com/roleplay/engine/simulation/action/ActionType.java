@@ -14,6 +14,7 @@ public enum ActionType {
     PICK_UP,
     PUT_DOWN,
     USE,
+    ADJUST_STAT,
     WAIT,
     SPEAK
 }

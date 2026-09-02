@@ -18,7 +18,8 @@ public final class BasicActionExecutors {
         dispatcher.register(ActionType.STAND, objectState("occupiedBy", ""));
         dispatcher.register(ActionType.PICK_UP, transfer(true));
         dispatcher.register(ActionType.PUT_DOWN, transfer(false));
-        dispatcher.register(ActionType.USE, eventOnly("USED"));
+        dispatcher.register(ActionType.USE, useObject());
+        dispatcher.register(ActionType.ADJUST_STAT, adjustStat());
         dispatcher.register(ActionType.SPEAK, eventOnly("SPOKE"));
         dispatcher.register(ActionType.LOOK_AT, eventOnly("LOOKED"));
         dispatcher.register(ActionType.APPROACH, new MoveToExecutor());
@@ -41,12 +42,43 @@ public final class BasicActionExecutors {
     private static ActionExecutor transfer(boolean pickingUp) {
         return (intent, world) -> {
             if (!(world instanceof ActionMutationPort mutations)) return failed(intent, world, "READ_ONLY_WORLD");
+            String currentHolder = mutations.carriedBy(intent.targetId());
+            if (pickingUp && currentHolder != null && !currentHolder.isBlank()
+                    && !currentHolder.equals(intent.actorId())) return failed(intent, world, "ALREADY_CARRIED");
+            if (!pickingUp && !intent.actorId().equals(currentHolder)) return failed(intent, world, "NOT_CARRIED_BY_ACTOR");
             String holder = pickingUp ? intent.actorId() : "";
             if (!mutations.setCarriedBy(intent.targetId(), holder)) return failed(intent, world, "TRANSFER_REJECTED");
             Map<String, Object> event = Map.of("actorId", intent.actorId(), "targetId", intent.targetId(),
                     "action", intent.action().name(), "carriedBy", holder);
             mutations.emitActionEvent(intent.actorId(), intent.action(), event);
             return succeeded(intent, world, intent.action().name(), event);
+        };
+    }
+
+    private static ActionExecutor useObject() {
+        return (intent, world) -> {
+            if (!(world instanceof ActionMutationPort mutations)) return failed(intent, world, "READ_ONLY_WORLD");
+            Map<String, Object> result = mutations.applyObjectUse(intent.actorId(), intent.targetId(), intent.parameters());
+            if (!Boolean.TRUE.equals(result.get("applied"))) {
+                return failed(intent, world, String.valueOf(result.getOrDefault("code", "USE_REJECTED")));
+            }
+            Map<String, Object> event = Map.of("actorId", intent.actorId(), "targetId", intent.targetId(),
+                    "action", intent.action().name(), "result", result);
+            mutations.emitActionEvent(intent.actorId(), intent.action(), event);
+            return succeeded(intent, world, "USED", event);
+        };
+    }
+
+    private static ActionExecutor adjustStat() {
+        return (intent, world) -> {
+            if (!(world instanceof ActionMutationPort mutations)) return failed(intent, world, "READ_ONLY_WORLD");
+            Map<String, Object> result = mutations.adjustMetric(intent.actorId(), intent.parameters());
+            if (!Boolean.TRUE.equals(result.get("applied"))) {
+                return failed(intent, world, String.valueOf(result.getOrDefault("code", "STAT_REJECTED")));
+            }
+            Map<String, Object> event = Map.of("actorId", intent.actorId(), "action", intent.action().name(), "result", result);
+            mutations.emitActionEvent(intent.actorId(), intent.action(), event);
+            return succeeded(intent, world, "STAT_ADJUSTED", event);
         };
     }
 

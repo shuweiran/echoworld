@@ -5,13 +5,22 @@ import com.roleplay.engine.simulation.navigation.portal.PortalEndpoint;
 import com.roleplay.engine.simulation.navigation.portal.SemanticPortal;
 import com.roleplay.engine.simulation.spatial.Vec3;
 import com.roleplay.engine.simulation.worlddefinition.WorldDefinition;
+import com.roleplay.engine.simulation.action.ActionType;
+import com.roleplay.engine.simulation.worldobject.AffordanceDefinition;
+import com.roleplay.engine.simulation.worldobject.WorldObject;
+import com.roleplay.engine.simulation.spatial.Transform3D;
 
 import java.util.*;
 
 /** Converts the tolerant tile MapContract into one server-authoritative multi-floor definition. */
 public final class MapWorldDefinitionAdapter {
     public record AdaptedWorld(WorldDefinition definition, List<Obstacle> obstacles,
-                               double worldWidth, double worldHeight) { }
+                               double worldWidth, double worldHeight, List<WorldObject> worldObjects) {
+        public AdaptedWorld(WorldDefinition definition, List<Obstacle> obstacles,
+                            double worldWidth, double worldHeight) {
+            this(definition, obstacles, worldWidth, worldHeight, List.of());
+        }
+    }
 
     private MapWorldDefinitionAdapter() { }
 
@@ -99,11 +108,112 @@ public final class MapWorldDefinitionAdapter {
                     point(List.of(tile[0], tile[1]), firstFloor), Set.of("default")));
         }
 
+        List<WorldObject> worldObjects = mapWorldObjects(map, facts);
+
         WorldDefinition definition = new WorldDefinition(
                 new WorldDefinition.Metadata(text(map.get("map_id"), "map"), WorldDefinition.SCHEMA_VERSION,
                         text(map.get("name"), "map"), 1), floors, surfaces, rooms, List.of(), portals,
                 List.of(), spawns, List.of(), List.of(), List.of());
-        return new AdaptedWorld(definition, List.copyOf(obstacles), maxWidth, maxHeight);
+        return new AdaptedWorld(definition, List.copyOf(obstacles), maxWidth, maxHeight, worldObjects);
+    }
+
+    private static List<WorldObject> mapWorldObjects(Map<String, Object> map, Map<String, FloorFacts> facts) {
+        List<WorldObject> result = new ArrayList<>();
+        Object rawDecor = map.get("decor");
+        if (!(rawDecor instanceof List<?> decor)) return List.of();
+        for (Object item : decor) {
+            if (!(item instanceof Map<?, ?> raw)) continue;
+            String id = text(raw.get("id"), "");
+            String type = text(raw.get("type"), "object").toLowerCase(Locale.ROOT);
+            String floorId = text(raw.get("floorId"), "ground");
+            FloorFacts floor = facts.getOrDefault(floorId, facts.values().iterator().next());
+            Object tile = raw.get("tile");
+            if (id.isBlank() || !(tile instanceof List<?> point) || point.size() < 2) continue;
+            Vec3 position = point(tile, floor);
+            boolean portable = portable(type, raw);
+            double radiusTiles = Math.max(1, number(raw.get("radius"), 1));
+            double distance = radiusTiles * floor.tileSize();
+            Map<ActionType, AffordanceDefinition> affordances = new EnumMap<>(ActionType.class);
+            affordances.put(ActionType.LOOK_AT, affordance(ActionType.LOOK_AT, distance));
+            if (portable) {
+                affordances.put(ActionType.PICK_UP, affordance(ActionType.PICK_UP, distance));
+                affordances.put(ActionType.PUT_DOWN, affordance(ActionType.PUT_DOWN, distance));
+            }
+            if (hasUse(type, raw)) affordances.put(ActionType.USE, affordance(ActionType.USE, distance));
+            if (Set.of("chest", "cabinet", "door", "gate").contains(type)) {
+                affordances.put(ActionType.OPEN, new AffordanceDefinition(ActionType.OPEN, distance, 0, 1,
+                        Map.of("open", "false")));
+                affordances.put(ActionType.CLOSE, new AffordanceDefinition(ActionType.CLOSE, distance, 0, 1,
+                        Map.of("open", "true")));
+            }
+            if (Set.of("chair", "bench", "stool").contains(type)) {
+                affordances.put(ActionType.SIT, affordance(ActionType.SIT, distance));
+            }
+            Map<String, Object> properties = new LinkedHashMap<>();
+            properties.put("displayName", text(first(raw.get("name"), raw.get("label")), displayName(type)));
+            properties.put("description", text(raw.get("description"), ""));
+            properties.put("floorId", floor.id());
+            properties.put("portable", portable);
+            Map<String, Object> initialState = new LinkedHashMap<>();
+            if (raw.get("state") instanceof Map<?, ?> configuredState) {
+                configuredState.forEach((key, value) -> initialState.put(String.valueOf(key), value));
+            }
+            if (Set.of("chest", "cabinet", "door", "gate").contains(type)) initialState.putIfAbsent("open", false);
+            if (!initialState.isEmpty()) properties.put("initialState", initialState);
+            Map<String, Double> effects = useEffects(type, raw);
+            if (!effects.isEmpty()) properties.put("useEffects", effects);
+            boolean consumable = Boolean.TRUE.equals(raw.get("consumable"))
+                    || Set.of("food", "drink", "potion", "herb", "apple", "bread").contains(type);
+            properties.put("consumable", consumable);
+            Set<String> tags = new LinkedHashSet<>();
+            tags.add("map-decor"); tags.add(type);
+            if (portable) tags.add("item");
+            result.add(new WorldObject(id, type.toUpperCase(Locale.ROOT),
+                    new Transform3D(position, com.roleplay.engine.simulation.spatial.Quaternion.identity()),
+                    affordances, tags, properties));
+        }
+        return List.copyOf(result);
+    }
+
+    private static boolean portable(String type, Map<?, ?> raw) {
+        if (raw.get("portable") instanceof Boolean value) return value;
+        return Set.of("note", "key", "book", "bottle", "food", "drink", "potion", "herb",
+                "apple", "bread", "coin", "clue", "tool", "letter", "scroll").contains(type);
+    }
+
+    private static boolean hasUse(String type, Map<?, ?> raw) {
+        return raw.get("onInteract") instanceof Map<?, ?> || raw.get("useEffects") instanceof Map<?, ?>
+                || Set.of("food", "drink", "potion", "herb", "apple", "bread", "book", "note", "letter").contains(type);
+    }
+
+    private static Map<String, Double> useEffects(String type, Map<?, ?> raw) {
+        Map<String, Double> result = new LinkedHashMap<>();
+        if (raw.get("useEffects") instanceof Map<?, ?> configured) {
+            configured.forEach((key, value) -> { if (value instanceof Number n) result.put(String.valueOf(key), n.doubleValue()); });
+        }
+        if (!result.isEmpty()) return Map.copyOf(result);
+        if (Set.of("food", "apple", "bread", "herb").contains(type)) {
+            result.put("hunger", -20.0); result.put("stamina", 8.0);
+        } else if (Set.of("drink", "potion", "bottle").contains(type)) {
+            result.put("stamina", 15.0); result.put("focus", 5.0);
+        } else if (Set.of("book", "note", "letter").contains(type)) {
+            result.put("insight", 0.25); result.put("focus", 2.0);
+        }
+        return Map.copyOf(result);
+    }
+
+    private static String displayName(String type) {
+        return switch (type) {
+            case "note" -> "便笺"; case "key" -> "钥匙"; case "book" -> "书";
+            case "bottle" -> "瓶子"; case "food" -> "食物"; case "drink" -> "饮品";
+            case "potion" -> "药剂"; case "herb" -> "草药"; case "coin" -> "硬币";
+            case "chest" -> "箱子"; case "bench" -> "长椅"; case "chair" -> "椅子";
+            default -> type.replace('_', ' ');
+        };
+    }
+
+    private static AffordanceDefinition affordance(ActionType action, double distance) {
+        return new AffordanceDefinition(action, distance, 0, 1, Map.of());
     }
 
     private static int[][] floorCollision(Map<?, ?> floor, Map<String, Object> map, String id) {

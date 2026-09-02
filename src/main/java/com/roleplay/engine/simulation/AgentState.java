@@ -16,6 +16,8 @@ public class AgentState implements WorldEntity {
     /** P-0802-P3（改造方案 Phase 3）：去 final —— 局中改名时 {@link #rename} 原地改键（toMap 依赖对象引用一致性）。 */
     private volatile String agentName;
     private final AgentSpatialComponent spatial;
+    private final com.roleplay.engine.simulation.gameplay.AgentGameplayState gameplay =
+            new com.roleplay.engine.simulation.gameplay.AgentGameplayState();
     private volatile Emotion emotion = Emotion.NEUTRAL;
     private volatile double hearRange = 200.0;
     private volatile double moveSpeed = 80.0;
@@ -286,6 +288,8 @@ public class AgentState implements WorldEntity {
         return spatial.transform().position().groundDistance(other.spatial.transform().position());
     }
 
+    public com.roleplay.engine.simulation.gameplay.AgentGameplayState gameplay() { return gameplay; }
+
     public java.util.Map<String, Object> toMap() {
         java.util.Map<String, Object> map = new java.util.LinkedHashMap<>();
         map.put("agentName", agentName);
@@ -326,6 +330,7 @@ public class AgentState implements WorldEntity {
                 "floorId", spatial.navLocation().floorId(),
                 "polygonRef", spatial.navLocation().polygonRef()));
         map.put("manualTarget", manualTarget);
+        map.put("gameplay", gameplay.toMap());
         map.put("schedule", scheduleText);
         map.put("navigationWaypoints", navigationSteps.stream().map(step -> java.util.Map.<String, Object>of(
                 "x", Math.round(step.target().x() * 100.0) / 100.0,

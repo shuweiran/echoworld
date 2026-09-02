@@ -9,6 +9,11 @@ import com.roleplay.engine.simulation.conversation.ConversationManager;
 import com.roleplay.engine.simulation.map.MapWorldDefinitionAdapter;
 import com.roleplay.engine.simulation.map.SocialExperimentMap;
 import com.roleplay.engine.simulation.worlddefinition.WorldDefinition;
+import com.roleplay.engine.simulation.worldobject.WorldObject;
+import com.roleplay.engine.simulation.action.ActionIntent;
+import com.roleplay.engine.simulation.action.ActionResult;
+import com.roleplay.engine.simulation.action.ActionSource;
+import com.roleplay.engine.simulation.action.ActionType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
@@ -21,6 +26,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.Locale;
+import java.util.UUID;
+import org.springframework.http.ResponseEntity;
+import org.springframework.beans.factory.annotation.Value;
 
 @RestController
 @RequestMapping("/api/simulation")
@@ -38,6 +49,9 @@ public class SimulationController {
     private WorldRuntimeService worldRuntime;
     private final CopyOnWriteArrayList<SseEmitter> emitters = new CopyOnWriteArrayList<>();
     private final CopyOnWriteArrayList<SimulationWorld.WorldSnapshot> recentSnapshots = new CopyOnWriteArrayList<>();
+    /** Disabled when blank; callers cannot self-assert the server-side MASTER capability. */
+    @Value("${roleplay.gameplay.master-key:}")
+    private String gameplayMasterKey = "";
     private static final int MAX_RECENT_SNAPSHOTS = 100;
     /** P-0820-R：SSE 全量快照每个世界 tick 广播一次（200ms/5Hz），保证玩家位置及时可见。 */
     private static final int SSE_BROADCAST_TICK_INTERVAL = 1;
@@ -119,11 +133,13 @@ public class SimulationController {
         double mapWorldWidth = SimulationWorld.DEFAULT_WORLD_WIDTH;
         double mapWorldHeight = SimulationWorld.DEFAULT_WORLD_HEIGHT;
         WorldDefinition mapDefinition = null;
+        List<WorldObject> customWorldObjects = List.of();
         if (body.get("map") instanceof Map<?, ?> m && !m.isEmpty()) {
             try {
                 MapWorldDefinitionAdapter.AdaptedWorld adapted =
                         MapWorldDefinitionAdapter.adapt((Map<String, Object>) m);
                 mapDefinition = adapted.definition();
+                customWorldObjects = adapted.worldObjects();
                 customObstacles = adapted.obstacles();
                 mapWorldWidth = adapted.worldWidth();
                 mapWorldHeight = adapted.worldHeight();
@@ -133,6 +149,7 @@ public class SimulationController {
                 customObstacles = null;
                 mapLabel = null;
                 mapDefinition = null;
+                customWorldObjects = List.of();
                 log.warn("MapContract rejected, using legacy scene: {}", e.getMessage());
             }
         }
@@ -154,11 +171,13 @@ public class SimulationController {
         final double selectedWorldWidth = mapWorldWidth;
         final double selectedWorldHeight = mapWorldHeight;
         final WorldDefinition selectedDefinition = mapDefinition;
+        final List<WorldObject> selectedWorldObjects = customWorldObjects;
         Runnable load = () -> {
             // 必须先清空旧角色，运行时边界才可安全替换；无地图则回退兼容默认尺寸。
             simulationService.clearAll();
             if (selectedDefinition != null) {
                 world.loadWorldDefinition(selectedDefinition);
+                selectedWorldObjects.forEach(world::registerWorldObject);
             } else {
                 world.clearWorldDefinition();
                 world.setWorldBounds(selectedWorldWidth, selectedWorldHeight);
@@ -210,7 +229,104 @@ public class SimulationController {
 
     @GetMapping("/state")
     public Map<String, Object> getState() {
-        return simulationService.getState();
+        Map<String, Object> result = new LinkedHashMap<>(simulationService.getState());
+        Map<String, Object> snapshot = world.snapshotNow().toMap();
+        result.put("agents", snapshot.getOrDefault("agents", List.of()));
+        result.put("worldObjects", snapshot.getOrDefault("worldObjects", List.of()));
+        result.put("worldVersion", world.worldVersion());
+        result.put("worldWidth", world.getWorldWidth());
+        result.put("worldHeight", world.getWorldHeight());
+        return result;
+    }
+
+    /** Shared 2D/3D gameplay projection for one character. */
+    @GetMapping("/gameplay/{agentName}")
+    public ResponseEntity<?> gameplay(@PathVariable String agentName) {
+        try { return ResponseEntity.ok(world.gameplaySnapshot(agentName)); }
+        catch (IllegalArgumentException e) { return ResponseEntity.status(404).body(Map.of("error", e.getMessage())); }
+    }
+
+    /**
+     * Narrow compatibility adapter into the tick-owned Action FSM.
+     * SELF may only act for the player-controlled entity; MASTER is the local director capability.
+     */
+    @PostMapping("/actions")
+    public ResponseEntity<?> action(@RequestBody(required = false) Map<String, Object> body,
+                                    @RequestHeader(value = "X-Gameplay-Master-Key", defaultValue = "") String masterKey) {
+        if (body == null) return ResponseEntity.badRequest().body(Map.of("error", "body required"));
+        String actorId = text(body.get("actor_id"));
+        AgentState actor = world.getState(actorId);
+        if (actor == null) return ResponseEntity.status(404).body(Map.of("error", "actor not found"));
+        String capability = text(body.getOrDefault("capability", "SELF")).toUpperCase(Locale.ROOT);
+        ActionSource source;
+        if ("MASTER".equals(capability)) {
+            if (gameplayMasterKey == null || gameplayMasterKey.isBlank()
+                    || !java.security.MessageDigest.isEqual(gameplayMasterKey.getBytes(java.nio.charset.StandardCharsets.UTF_8),
+                    masterKey.getBytes(java.nio.charset.StandardCharsets.UTF_8))) {
+                return ResponseEntity.status(403).body(Map.of("error", "MASTER capability is disabled or key is invalid"));
+            }
+            source = ActionSource.ENGINE;
+        }
+        else {
+            if (!actor.isPlayerControlled()) {
+                return ResponseEntity.status(403).body(Map.of("error", "SELF may only control the player entity"));
+            }
+            source = ActionSource.PLAYER_INPUT;
+        }
+        ActionType action;
+        try { action = ActionType.valueOf(text(body.get("action")).toUpperCase(Locale.ROOT)); }
+        catch (IllegalArgumentException e) { return ResponseEntity.badRequest().body(Map.of("error", "unsupported action")); }
+        String intentId = text(body.getOrDefault("intent_id", UUID.randomUUID().toString()));
+        long basedOn = body.get("based_on_world_version") instanceof Number n ? n.longValue() : world.worldVersion();
+        long expires = body.get("expires_at_millis") instanceof Number n ? n.longValue() : System.currentTimeMillis() + 5_000;
+        Map<String, Object> parameters = objectMap(body.get("parameters"));
+        if (action == ActionType.ADJUST_STAT && "define".equalsIgnoreCase(text(parameters.get("operation")))
+                && source != ActionSource.ENGINE) {
+            return ResponseEntity.status(403).body(Map.of("error", "only MASTER may define metrics"));
+        }
+        ActionIntent intent = new ActionIntent(intentId, actorId, source, action,
+                text(body.get("target_id")), basedOn, expires, parameters);
+        var future = world.enqueueAction(intent);
+        try {
+            ActionResult result = future.get(900, TimeUnit.MILLISECONDS);
+            return ResponseEntity.ok(result);
+        } catch (TimeoutException e) {
+            return ResponseEntity.accepted().body(Map.of("intentId", intentId, "status", "ACCEPTED",
+                    "worldVersion", world.worldVersion()));
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage() == null ? "action failed" : e.getMessage()));
+        }
+    }
+
+    /** Main-controller/self quantitative mutation, committed by the same Action FSM. */
+    @PostMapping("/gameplay/{agentName}/metrics/{metricKey}")
+    public ResponseEntity<?> mutateMetric(@PathVariable String agentName, @PathVariable String metricKey,
+                                          @RequestBody(required = false) Map<String, Object> body,
+                                          @RequestHeader(value = "X-Gameplay-Master-Key", defaultValue = "") String masterKey) {
+        Map<String, Object> request = new LinkedHashMap<>();
+        request.put("actor_id", agentName);
+        request.put("action", ActionType.ADJUST_STAT.name());
+        request.put("capability", body == null ? "SELF" : body.getOrDefault("capability", "SELF"));
+        Map<String, Object> parameters = new LinkedHashMap<>();
+        parameters.put("key", metricKey);
+        parameters.put("operation", body == null ? "adjust" : body.getOrDefault("operation", "adjust"));
+        parameters.put("value", body == null ? 0 : body.getOrDefault("value", 0));
+        parameters.put("reason", body == null ? "" : body.getOrDefault("reason", ""));
+        if (body != null) {
+            for (String key : List.of("label", "min", "max", "unit")) {
+                if (body.get(key) != null) parameters.put(key, body.get(key));
+            }
+        }
+        request.put("parameters", parameters);
+        return action(request, masterKey);
+    }
+
+    private static String text(Object value) { return value == null ? "" : String.valueOf(value).trim(); }
+    private static Map<String, Object> objectMap(Object value) {
+        if (!(value instanceof Map<?, ?> raw)) return Map.of();
+        Map<String, Object> result = new LinkedHashMap<>();
+        raw.forEach((key, item) -> result.put(String.valueOf(key), item));
+        return result;
     }
 
     /** 返回一般模式 AI 社会实验的确定性起始地图，供前端加载或作为 load-characters 的 map 参数。 */

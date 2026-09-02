@@ -144,11 +144,7 @@ public class WorldReplicationService {
     }
 
     private SimulationWorld.WorldSnapshot currentSnapshot() {
-        List<Map<String, Object>> agents = world.getAllStates().values().stream().map(state -> state.toMap()).toList();
-        return new SimulationWorld.WorldSnapshot(world.getTickCount(), agents,
-                world.getObstacles().stream().map(obstacle -> obstacle.toMap()).toList(), System.currentTimeMillis(),
-                world.getWorldNarration(), world.isDirectorActive(), world.getCurrentScene(),
-                world.getWorldWidth(), world.getWorldHeight());
+        return world.snapshotNow();
     }
 
     private List<ReplicaEntity> toReplicas(SimulationWorld.WorldSnapshot snapshot) {
@@ -163,6 +159,23 @@ public class WorldReplicationService {
             result.add(new ReplicaEntity(id, "AGENT", snapshot.tick(),
                     new SpatialCell("world", floorId, (int) Math.floor(x / CELL_SIZE), (int) Math.floor(y / CELL_SIZE)),
                     "", PerceptionScope.publicScope(), Set.of(), safe));
+        }
+        for (Map<String, Object> raw : snapshot.worldObjects()) {
+            String id = String.valueOf(raw.getOrDefault("id", ""));
+            if (id.isBlank() || !Boolean.TRUE.equals(raw.getOrDefault("active", true))
+                    || !String.valueOf(raw.getOrDefault("carriedBy", "")).isBlank()) continue;
+            double x = number(raw.get("x")), y = number(raw.get("y"));
+            String floorId = String.valueOf(raw.getOrDefault("floorId", "ground"));
+            Map<String, Object> safe = new LinkedHashMap<>();
+            for (String key : List.of("id", "type", "displayName", "description", "x", "y", "elevation",
+                    "floorId", "portable", "consumable", "supportedActions", "state", "tags")) {
+                if (raw.get(key) != null) safe.put(key, raw.get(key));
+            }
+            Set<String> tags = raw.get("tags") instanceof Collection<?> values
+                    ? values.stream().map(String::valueOf).collect(java.util.stream.Collectors.toSet()) : Set.of();
+            result.add(new ReplicaEntity(id, "WORLD_OBJECT", snapshot.tick(),
+                    new SpatialCell("world", floorId, (int) Math.floor(x / CELL_SIZE), (int) Math.floor(y / CELL_SIZE)),
+                    "", PerceptionScope.publicScope(), tags, safe));
         }
         return List.copyOf(result);
     }
