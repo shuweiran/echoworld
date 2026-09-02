@@ -21,8 +21,10 @@ import { useGalStore } from '../../gal/GalStore';
 import { PhaserSimulationView } from '../../phaser/PhaserSimulationView';
 import type { ScriptMap } from '../../phaser/mapData';
 import type { GeneralScript, RoleCard } from '../types';
+import { WorldGameplayPanel } from '../../gameplay/WorldGameplayPanel';
 
 const BabylonSimulationView = lazy(() => import('../../babylon/BabylonSimulationView').then(m => ({ default: m.BabylonSimulationView })));
+const MOBILE_BUILD = import.meta.env.VITE_MOBILE_BUILD === 'true';
 
 const WW_AI_NAMES = ['AI·白', 'AI·青', 'AI·玄', 'AI·墨', 'AI·雪', 'AI·枫', 'AI·岚', 'AI·渊'];
 
@@ -183,8 +185,8 @@ export function GameBridge() {
           useAppStore.setState({
             mode: 'werewolf',
           });
-        } else if (gameMode === 'general' && (runMode === 'explore' || selectCtx.scriptId === 'g_dawn_social')) {
-          // 2D 探索：LLM 瓦片地图（P-0811-G：复用角色选择页缓存；无缓存进入时生成）
+        } else if (gameMode === 'general' && !MOBILE_BUILD && (runMode === 'explore' || selectCtx.scriptId === 'g_dawn_social')) {
+          // 桌面端 2D 探索：LLM 瓦片地图（移动端不包含此能力）
           setStep('正在加载 2D 世界（生成地图）…');
           const g = script as (GeneralScript | undefined);
           if (selectCtx.scriptId === 'g_dawn_social') {
@@ -265,7 +267,7 @@ export function GameBridge() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameMode]);
 
-  const title = gameMode === 'murder' ? '剧本杀对局' : gameMode === 'werewolf' ? '狼人杀' : (runMode === 'explore' ? '一般模式 · 空间探索' : '一般模式 · 自由聊天');
+  const title = gameMode === 'murder' ? '剧本杀对局' : gameMode === 'werewolf' ? '狼人杀' : (runMode === 'explore' && !MOBILE_BUILD ? '一般模式 · 空间探索' : '一般模式 · 自由聊天');
 
   return (
     <div>
@@ -300,11 +302,11 @@ export function GameBridge() {
 
       {phase === 'ready' && (
         <>
-          {gameMode === 'general' && (runMode === 'explore' || selectCtx.scriptId === 'g_dawn_social') ? (
+          {gameMode === 'general' && !MOBILE_BUILD && (runMode === 'explore' || selectCtx.scriptId === 'g_dawn_social') ? (
             /* P-0811-G：一般模式 2D 探索 = LLM 瓦片背景 + 双主控动态模拟（WorldDirector/TrackDirector 调控
                角色移动对话）；玩家角色点击地图可控制移动（SimulationScene.playerName 绑定）；LLM 地图瓦片
                渲染为背景 + 注入障碍。 */
-            <div>
+            <div style={{ position: 'relative' }}>
               <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
                 <button className="btn2 btn2-sm" onClick={() => setExplore3d(v => !v)}>
                   {explore3d ? '🎮 切回 2D 调试视图' : '🌐 切换 3D 游戏视图'}
@@ -331,6 +333,7 @@ export function GameBridge() {
                   galChat
                 />
               )}
+              <WorldGameplayPanel actorName={withPlayer && playerRole ? playerRole.name : undefined} />
             </div>
           ) : gameMode === 'general' && runMode === 'chat' ? (
             // P-0810-08：一般模式会话呈现入口 = Gal 界面（默认）；右上「经典视图」回退 ChatPage 同会话

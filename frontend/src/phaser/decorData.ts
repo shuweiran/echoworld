@@ -472,6 +472,8 @@ export interface DecorPlanItem {
   layer: 'objects' | 'decor' | 'markers';
   /** 类型名（objects/decor 的 type 或 markers 类别名） */
   type: string;
+  /** Stable authored id when this item came from map.decor. */
+  id?: string;
   x: number;
   y: number;
   /** 行深度（1 + (y+0.5)/H；北侧小 → 被南侧遮挡） */
@@ -530,7 +532,7 @@ export function buildDecorPlan(map: ScriptMap): DecorPlan {
   const decor = map.decor;
   if (decor) {
     for (const d of decor) {
-      items.push({ layer: 'decor', type: d.type, x: d.tile[0], y: d.tile[1], depth: decorDepth(d.tile[1], H), cmds: decorStyle(d.type) });
+      items.push({ layer: 'decor', id: d.id, type: d.type, x: d.tile[0], y: d.tile[1], depth: decorDepth(d.tile[1], H), cmds: decorStyle(d.type) });
     }
   }
 

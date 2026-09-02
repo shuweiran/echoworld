@@ -236,6 +236,27 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
         event.preventDefault();
         return;
       }
+      if (key === 'e' && !event.repeat && !editable(event.target)) {
+        const scene = sceneRef.current;
+        const engine = engineRef.current;
+        const picked = scene && engine ? scene.pick(engine.getRenderWidth() / 2, engine.getRenderHeight() / 2,
+          mesh => Boolean(mesh.metadata?.echoworldObject)) : null;
+        const objectId = picked?.pickedMesh?.metadata?.echoworldObject as string | undefined;
+        if (objectId) {
+          const raw = (snapshotRef.current.worldObjects || []).find(value => String((value as Record<string, unknown>).id || '') === objectId) as Record<string, unknown> | undefined;
+          const actions = Array.isArray(raw?.supportedActions) ? raw!.supportedActions!.map(String) : [];
+          const action = (actions.includes('PICK_UP') ? 'PICK_UP' : actions.includes('OPEN') ? 'OPEN' : actions.includes('USE') ? 'USE' : 'LOOK_AT');
+          void fetch('/api/simulation/actions', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ actor_id: playerName, action, target_id: objectId, capability: 'SELF' }) })
+            .then(async response => {
+              const payload = await response.json().catch(() => ({}));
+              if (!response.ok) throw new Error(String(payload.error || payload.message || `HTTP ${response.status}`));
+              setStatus(`${objectId}：${action} 已提交`);
+            }).catch(error => setStatus(`交互失败：${error.message}`));
+        } else setStatus('准星附近没有可交互物件');
+        event.preventDefault();
+        return;
+      }
       if (!movementKeys.has(key) || editable(event.target)) return;
       pressedKeys.add(key); event.preventDefault();
     };
@@ -297,6 +318,8 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
     scene.onPointerObservable.add(pointer => {
       if (pointer.type !== PointerEventTypes.POINTERPICK || !pointer.pickInfo?.hit) return;
       const mesh = pointer.pickInfo.pickedMesh;
+      const objectId = mesh?.metadata?.echoworldObject as string | undefined;
+      if (objectId) { setStatus(`已选中物件：${objectId}（在右侧“附近可交互物”执行动作）`); return; }
       if (cameraModeRef.current === 'first-person') return;
       const agentName = mesh?.metadata?.echoworldAgent as string | undefined;
       if (agentName) { setSelectedName(agentName); return; }
@@ -373,7 +396,11 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
     const obstacleSignature = (snapshot.obstacles || []).map(o => `${o.floorId}:${o.type}:${o.x}:${o.y}:${o.width}:${o.height}`).join('|');
     const floorSignature = (snapshot.floors || []).map(f => `${f.id}:${f.elevation}`).join('|');
     const connectorSignature = (snapshot.connectors || []).map(c => `${c.id}:${c.availability}`).join('|');
-    const key = `${map ? `${map.map_id}:${map.width}:${map.height}:${map.tile_size}` : `${p.sceneWidth}:${p.sceneDepth}:${obstacleSignature}`}:${floorSignature}:${connectorSignature}`;
+    const objectSignature = (snapshot.worldObjects || []).map(value => {
+      const object = value as Record<string, unknown>;
+      return `${object.id}:${object.carriedBy}:${object.active !== false}`;
+    }).join('|');
+    const key = `${map ? `${map.map_id}:${map.width}:${map.height}:${map.tile_size}` : `${p.sceneWidth}:${p.sceneDepth}:${obstacleSignature}`}:${floorSignature}:${connectorSignature}:${objectSignature}`;
     if (key === staticKeyRef.current) return;
     staticMeshesRef.current.forEach(mesh => mesh.dispose());
     staticMaterialsRef.current.forEach(mat => mat.dispose());
@@ -432,9 +459,15 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
       mergedWalls.forEach(mesh => { mesh.checkCollisions = true; });
       staticMeshesRef.current.push(...mergedWalls);
       const decorLimit = Math.min(300, map.decor?.length || 0);
+      const authoritativeObjects = new Map((snapshot.worldObjects || []).map(value => {
+        const object = value as Record<string, unknown>;
+        return [String(object.id || ''), object] as const;
+      }).filter(([id]) => !!id));
       const decorGroups = new Map<string, { material: StandardMaterial; meshes: Mesh[] }>();
       for (let i = 0; i < decorLimit; i++) {
         const decor = map.decor![i]!;
+        const authoritative = authoritativeObjects.get(decor.id);
+        if (authoritative && (authoritative.active === false || String(authoritative.carriedBy || ''))) continue;
         const type = decor.type.toUpperCase();
         const color = obstacleColor(type);
         let group = decorGroups.get(color);
@@ -448,7 +481,14 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
           ? MeshBuilder.CreateCylinder(`decor-${decor.id}`, { height: 1.8, diameterTop: 0.15, diameterBottom: 0.5 }, scene)
           : MeshBuilder.CreateBox(`decor-${decor.id}`, { width: 0.9, depth: 0.9, height: type.includes('LAMP') ? 1.8 : 0.8 }, scene);
         mesh.position.set((decor.tile[0] + 0.5 - map.width / 2) * TILE_METERS, mesh.getBoundingInfo().boundingBox.extendSize.y, (decor.tile[1] + 0.5 - map.height / 2) * TILE_METERS);
-        mesh.material = group.material; mesh.isPickable = false; group.meshes.push(mesh);
+        mesh.material = group.material;
+        if (authoritative) {
+          mesh.isPickable = true;
+          mesh.metadata = { echoworldObject: decor.id };
+          staticMeshesRef.current.push(mesh);
+        } else {
+          mesh.isPickable = false; group.meshes.push(mesh);
+        }
       }
       decorGroups.forEach((group, color) => staticMeshesRef.current.push(...mergeStatic(group.meshes, `decor-${color}-merged`)));
     } else {
@@ -579,7 +619,7 @@ export function BabylonSimulationView({ map, height = 420, playerName }: Babylon
       </div>}
       <div style={{ position: 'absolute', left: 10, bottom: 10, padding: '6px 10px', borderRadius: 7, background: 'rgba(15,23,42,.82)', color: '#cbd5e1', fontSize: 11, pointerEvents: 'none' }}>
         {cameraMode === 'first-person'
-          ? '第一人称 · 点击锁定鼠标 · 鼠标观察 · WASD/方向键移动 · V 切换视角 · Esc 释放'
+          ? '第一人称 · 点击锁定鼠标 · 鼠标观察 · WASD/方向键移动 · E 交互 · V 切换视角 · Esc 释放'
           : '第三人称 · 点击地面移动 · WASD/方向键移动 · 拖拽旋转 · 滚轮缩放 · V 切换视角'}
         {selectedAgent && <span style={{ marginLeft: 12, color: '#fbbf24' }}>选中：{selectedAgent.agentName} · {selectedSemantic} · {Math.round(Math.hypot(selectedAgent.vx || 0, selectedAgent.vy || 0))} px/s</span>}
       </div>

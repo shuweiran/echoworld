@@ -68,6 +68,7 @@ export interface SimSnapshot {
   worldHeight?: number;
   floors?: Array<{ id: string; elevation?: number; width?: number; height?: number }>;
   connectors?: Array<Record<string, unknown>>;
+  worldObjects?: unknown[];
   agents?: SimAgent[];
   obstacles?: SimObstacle[];
   timestamp?: number;
@@ -86,6 +87,10 @@ export function projectSnapshotToFloor(snapshot: SimSnapshot, floorId: string): 
     ...snapshot,
     agents: (snapshot.agents || []).filter(agent => (agent.floorId || 'ground') === floor),
     obstacles: (snapshot.obstacles || []).filter(obstacle => (obstacle.floorId || 'ground') === floor),
+    worldObjects: (snapshot.worldObjects || []).filter(value => {
+      const object = value as Record<string, unknown>;
+      return String(object.floorId || 'ground') === floor;
+    }),
   };
 }
 
@@ -311,6 +316,7 @@ export function normalizeSnapshot(raw: unknown): SimSnapshot {
     obstacles,
     floors: Array.isArray(s.floors) ? s.floors.filter(v => !!v && typeof v === 'object') as SimSnapshot['floors'] : undefined,
     connectors: Array.isArray(s.connectors) ? s.connectors.filter(v => !!v && typeof v === 'object') as Array<Record<string, unknown>> : undefined,
+    worldObjects: Array.isArray(s.worldObjects) ? s.worldObjects.filter(v => !!v && typeof v === 'object') : [],
     timestamp: s.timestamp !== undefined ? Number(s.timestamp) : undefined,
     worldNarration: typeof s.worldNarration === 'string' ? s.worldNarration : '',
     directorActive: Boolean(s.directorActive),

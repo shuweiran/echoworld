@@ -14,6 +14,7 @@ import {
   normalizeSnapshot, normalizeAgent, findApproachable, findApproachableGroups, APPROACH_DIST,
   type SimAgent, type SimSnapshot, type SimGroup, type SimObstacle,
 } from './simulationData';
+import { perspectiveScaleAtY, southFaceHeight, standingDepth } from './topDownProjection';
 import { normalizeMap, tileColor, type ScriptMap, type MapZone } from './mapData';
 import { simChatConfig, truncateText } from './simChatConfig';
 // P-0816-B：地图内容渲染（zones/rooms/spawn/decor）复用 preview 的装饰计划纯函数单源
@@ -150,6 +151,9 @@ function drawDecorCmdsPx(g: Phaser.GameObjects.Graphics, cmds: DecorCmd[], px: n
 const MOVE_DIR_INTERVAL_MS = 120;
 
 export class SimulationScene extends Phaser.Scene {
+  /** Runtime world bounds from the authoritative snapshot; canvas resolution stays 1000×600. */
+  private worldW = WORLD_W;
+  private worldH = WORLD_H;
   private agents = new Map<string, Phaser.GameObjects.Container>();
   private agentParts = new Map<string, {
     dot?: Phaser.GameObjects.Graphics;
@@ -160,6 +164,7 @@ export class SimulationScene extends Phaser.Scene {
     bubble?: Phaser.GameObjects.Text;
     bubbleBg?: Phaser.GameObjects.Rectangle;
     speedLine?: Phaser.GameObjects.Graphics;
+    shadow?: Phaser.GameObjects.Ellipse;
     /** P-0815-F：文本渲染缓存（值未变化时跳过 setText —— Phaser Text.setText 每次重建纹理，5Hz 快照下是纯浪费） */
     nameLast?: string;
     nameLastColor?: string;
@@ -180,6 +185,9 @@ export class SimulationScene extends Phaser.Scene {
   // 删除点：linkSigOf/lastLinkSig/linkDirty/lastLinkDrawAt/LINK_REDRAW_MIN_MS/redrawLinks/update 消费块。
   /** 障碍层签名缓存（场景切换/自定义地图注入才变化；避免每快照全量重绘+重建 label） */
   private lastObstacleSig = '';
+  /** Authoritative decor visibility; carried/consumed objects must not remain as static map paint. */
+  private worldObjectVisibility = new Map<string, boolean>();
+  private lastWorldObjectVisibilitySig = '';
 
   // ── C-2：气泡单例 + 避让 ──
   /** 非空时世界内只显示该 agent 的气泡（单轨：用户在场 → 只播一人）；null = 显示全部（多轨） */
@@ -293,11 +301,11 @@ export class SimulationScene extends Phaser.Scene {
     this.mapDecorG = this.add.graphics().setDepth(DEPTH_WATER);
     this.mapOverlayG = this.add.graphics().setDepth(5.5);
     this.narrationText = this.add.text(0, 0, '', { fontFamily: 'sans-serif', fontSize: '13px', color: '#fbbf24' }).setDepth(100).setOrigin(0.5);
-    this.statusText = this.add.text(8, WORLD_H - 20, '', { fontFamily: 'sans-serif', fontSize: '11px', color: '#64748b' }).setDepth(100);
+    this.statusText = this.add.text(8, this.worldH - 20, '', { fontFamily: 'sans-serif', fontSize: '11px', color: '#64748b' }).setDepth(100);
     // P-0814-I：导演模式提示（无玩家角色时点击/方向键控制被禁止；默认隐藏）
-    this.directorHint = this.add.text(WORLD_W / 2, WORLD_H - 44, '', { fontFamily: 'sans-serif', fontSize: '12px', color: '#f59e0b' }).setOrigin(0.5).setDepth(101);
+    this.directorHint = this.add.text(this.worldW / 2, this.worldH - 44, '', { fontFamily: 'sans-serif', fontSize: '12px', color: '#f59e0b' }).setOrigin(0.5).setDepth(101);
     // P-0816-B：地图内容点击提示（默认隐藏；点击热点区域时显示「无搜证」说明，3s 淡出）
-    this.mapHint = this.add.text(WORLD_W / 2, WORLD_H - 22, '', {
+    this.mapHint = this.add.text(this.worldW / 2, this.worldH - 22, '', {
       fontFamily: 'sans-serif', fontSize: '12px', color: '#ffe08a', backgroundColor: '#000000bb',
       padding: { x: 10, y: 4 },
     }).setOrigin(0.5).setDepth(101).setAlpha(0);
@@ -311,7 +319,7 @@ export class SimulationScene extends Phaser.Scene {
     // P-0816-A：滚轮缩放（对齐 ScriptMapScene：baseZoom ~ 2×baseZoom，中心缩放）——
     // zoom=1 全景（现状零变化）；>1 时相机跟随受控角色（保证玩家可见）；点击坐标转世界坐标。
     const cam = this.cameras.main;
-    cam.setBounds(0, 0, WORLD_W, WORLD_H);
+    cam.setBounds(0, 0, this.worldW, this.worldH);
     cam.setZoom(this.baseZoom);
     this.input.on('wheel', (_p: Phaser.Input.Pointer, _go: unknown, _dx: number, dy: number) => {
       const z = Phaser.Math.Clamp(cam.zoom + (dy > 0 ? -0.12 : 0.12), this.baseZoom, this.baseZoom * 2);
@@ -324,7 +332,7 @@ export class SimulationScene extends Phaser.Scene {
         if (me) { cam.startFollow(this.agents.get(me)!, true, 0.15, 0.15); this.zoomFollow = true; }
       } else if (z <= this.baseZoom + 0.01 && this.zoomFollow) {
         cam.stopFollow();
-        cam.centerOn(WORLD_W / 2, WORLD_H / 2);
+        cam.centerOn(this.worldW / 2, this.worldH / 2);
         this.zoomFollow = false;
       }
     });
@@ -357,8 +365,8 @@ export class SimulationScene extends Phaser.Scene {
         if (hits.some(go => clickables.includes(go as Phaser.GameObjects.Container))) return;
       }
       const pt = cam.getWorldPoint(p.x, p.y);
-      const x = Math.round(Math.max(10, Math.min(WORLD_W - 10, pt.x)) * 100) / 100;
-      const y = Math.round(Math.max(10, Math.min(WORLD_H - 10, pt.y)) * 100) / 100;
+      const x = Math.round(Math.max(10, Math.min(this.worldW - 10, pt.x)) * 100) / 100;
+      const y = Math.round(Math.max(10, Math.min(this.worldH - 10, pt.y)) * 100) / 100;
       // P-0816-B：点击热点区域 → 提示「此区域无搜证」（游戏内只读语义；不拦截后续点击目标逻辑）
       const zHit = this.hitTestMapZone(x, y);
       if (zHit) this.showMapHint(`🔍 ${zHit.name}：此区域无搜证（游戏内无搜证玩法，仅供地图标记）`);
@@ -439,16 +447,16 @@ export class SimulationScene extends Phaser.Scene {
       return;
     }
     g.fillStyle(0x0f172a, 1);
-    g.fillRect(0, 0, WORLD_W, WORLD_H);
+    g.fillRect(0, 0, this.worldW, this.worldH);
     g.lineStyle(0.5, 0x1e293b, 1);
-    for (let x = 100; x < WORLD_W; x += 100) {
-      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, WORLD_H); g.strokePath();
+    for (let x = 100; x < this.worldW; x += 100) {
+      g.beginPath(); g.moveTo(x, 0); g.lineTo(x, this.worldH); g.strokePath();
     }
-    for (let y = 100; y < WORLD_H; y += 100) {
-      g.beginPath(); g.moveTo(0, y); g.lineTo(WORLD_W, y); g.strokePath();
+    for (let y = 100; y < this.worldH; y += 100) {
+      g.beginPath(); g.moveTo(0, y); g.lineTo(this.worldW, y); g.strokePath();
     }
     g.lineStyle(2, 0x334155, 1);
-    g.strokeRect(0, 0, WORLD_W, WORLD_H);
+    g.strokeRect(0, 0, this.worldW, this.worldH);
   }
 
   /**
@@ -463,8 +471,8 @@ export class SimulationScene extends Phaser.Scene {
     const collision = m.layers?.collision as number[][] | undefined;
     const W = Math.max(1, m.width || (ground?.[0]?.length ?? 0));
     const H = Math.max(1, m.height || ground?.length || 0);
-    const tileW = WORLD_W / W;
-    const tileH = WORLD_H / H;
+    const tileW = this.worldW / W;
+    const tileH = this.worldH / H;
     const isDawnTown = m.generator?.kind === 'dawn-social' || m.map_id === 'map_dawn_social_20260820';
     for (const sprite of this.dawnTileSprites) if (sprite.active) sprite.destroy();
     this.dawnTileSprites = [];
@@ -508,8 +516,8 @@ export class SimulationScene extends Phaser.Scene {
     const ground = m.layers?.ground as number[][] | undefined;
     const W = Math.max(1, m.width || (ground?.[0]?.length ?? 0));
     const H = Math.max(1, m.height || ground?.length || 0);
-    const tileW = WORLD_W / W;
-    const tileH = WORLD_H / H;
+    const tileW = this.worldW / W;
+    const tileH = this.worldH / H;
     const s = Math.min(tileW, tileH);
 
     // 清理旧渲染（地图重新注入时防泄漏；正常单次注入零成本）
@@ -533,6 +541,8 @@ export class SimulationScene extends Phaser.Scene {
       this.mapDecorG.fillRect(w.x * tileW, w.y * tileH, tileW + 0.5, tileH + 0.5);
     }
     for (const item of plan.items) {
+      if (item.layer === 'decor' && item.id && this.worldObjectVisibility.has(item.id)
+        && !this.worldObjectVisibility.get(item.id)) continue;
       let g = this.mapDecorRows.get(item.y);
       if (!g) {
         g = this.add.graphics().setDepth(item.depth);
@@ -824,6 +834,17 @@ export class SimulationScene extends Phaser.Scene {
       return;
     }
     const s = normalizeSnapshot(snap);
+    const nextW = Number.isFinite(s.worldWidth) && Number(s.worldWidth) > 0 ? Number(s.worldWidth) : this.worldW;
+    const nextH = Number.isFinite(s.worldHeight) && Number(s.worldHeight) > 0 ? Number(s.worldHeight) : this.worldH;
+    if (nextW !== this.worldW || nextH !== this.worldH) {
+      this.worldW = nextW; this.worldH = nextH;
+      this.cameras.main.setBounds(0, 0, this.worldW, this.worldH);
+      this.statusText.setPosition(8, this.worldH - 20);
+      this.directorHint.setPosition(this.worldW / 2, this.worldH - 44);
+      this.mapHint.setPosition(this.worldW / 2, this.worldH - 22);
+      this.drawGrid();
+      this.lastObstacleSig = '';
+    }
     if (s.running !== undefined) this.running = s.running;
     if (s.agents) {
       // C-2：先算气泡避让层（基于本帧位置），再逐个 upsert（renderAgent 读层号）
@@ -857,6 +878,23 @@ export class SimulationScene extends Phaser.Scene {
       if (oSig !== this.lastObstacleSig) {
         this.lastObstacleSig = oSig;
         this.drawObstacles(s.obstacles.map(o => ({ ...o })));
+      }
+    }
+    if (s.worldObjects) {
+      const visibility = new Map<string, boolean>();
+      for (const raw of s.worldObjects) {
+        if (!raw || typeof raw !== 'object') continue;
+        const object = raw as Record<string, unknown>;
+        const id = String(object.id || '');
+        if (!id) continue;
+        visibility.set(id, object.active !== false && !String(object.carriedBy || ''));
+      }
+      const signature = [...visibility.entries()].sort(([a], [b]) => a.localeCompare(b))
+        .map(([id, visible]) => `${id}:${visible ? 1 : 0}`).join('|');
+      if (signature !== this.lastWorldObjectVisibilitySig) {
+        this.lastWorldObjectVisibilitySig = signature;
+        this.worldObjectVisibility = visibility;
+        if (this.tileMap) this.drawMapContent();
       }
     }
     if (s.worldNarration !== undefined || s.directorActive !== undefined) {
@@ -956,10 +994,10 @@ export class SimulationScene extends Phaser.Scene {
     let c = this.agents.get(a.agentName);
     if (!c) {
       c = this.add.container(0, 0);
-      c.setDepth(10);
       this.agents.set(a.agentName, c);
       const nameT = this.add.text(0, 0, a.agentName, { fontFamily: 'sans-serif', fontSize: '12px', color: agentColor(a.agentName) }).setOrigin(0.5);
       const emojiT = this.add.text(0, 0, a.emotionEmoji || '😐', { fontFamily: 'sans-serif', fontSize: '14px' }).setOrigin(0.5);
+      const shadow = this.add.ellipse(0, 7, 20, 7, 0x020617, 0.34);
       // P-0804-C：有素材 → 动画精灵代替圆点（名字/情绪标签保留）；无素材 → 圆点（既有行为零变化）
       const anim = this.agentAnimReady.get(a.agentName);
       if (anim) {
@@ -967,12 +1005,12 @@ export class SimulationScene extends Phaser.Scene {
         // 帧尺寸自适应缩放（32×32 常见帧 ≈1.0；更大帧缩小到 30px 内）
         sprite.setScale(this.animScaleOf(anim.key));
         if (anim.animName) sprite.play(anim.animName);
-        c.add([sprite, emojiT, nameT]);
-        this.agentParts.set(a.agentName, { sprite, emoji: emojiT, name: nameT });
+        c.add([shadow, sprite, emojiT, nameT]);
+        this.agentParts.set(a.agentName, { sprite, emoji: emojiT, name: nameT, shadow });
       } else {
         const dot = this.add.graphics();
-        c.add([dot, emojiT, nameT]);
-        this.agentParts.set(a.agentName, { dot, emoji: emojiT, name: nameT });
+        c.add([shadow, dot, emojiT, nameT]);
+        this.agentParts.set(a.agentName, { dot, emoji: emojiT, name: nameT, shadow });
       }
     }
     this.renderAgent(a, c, this.agentParts.get(a.agentName)!);
@@ -1000,6 +1038,7 @@ export class SimulationScene extends Phaser.Scene {
     bubble?: Phaser.GameObjects.Text;
     bubbleBg?: Phaser.GameObjects.Rectangle;
     speedLine?: Phaser.GameObjects.Graphics;
+    shadow?: Phaser.GameObjects.Ellipse;
     /** P-0815-F：文本渲染缓存（值未变化时跳过 setText —— Phaser Text.setText 每次重建纹理） */
     nameLast?: string;
     nameLastColor?: string;
@@ -1008,6 +1047,9 @@ export class SimulationScene extends Phaser.Scene {
   }) {
     const r = 7;
     c.setPosition(a.x, a.y);
+    const perspectiveScale = perspectiveScaleAtY(a.y, this.worldH);
+    c.setScale(perspectiveScale);
+    c.setDepth(standingDepth(a.y, this.worldH));
     const color = agentColor(a.agentName);
     const { dot, emoji: emojiT, name: nameT, sprite } = parts;
     // P-0804-C：素材库动画精灵 —— 位置跟随容器（容器原点即角色位置），动画循环播放；无素材走圆点渲染
@@ -1114,6 +1156,10 @@ export class SimulationScene extends Phaser.Scene {
       const stroke = Phaser.Display.Color.HexStringToColor(o.type === 'WALL' ? '#64748b' : '#475569').color;
       g.fillStyle(fill, 1);
       g.fillRect(o.x, o.y, o.width, o.height);
+      // Near-vertical top-down 2.5D: a short south face adds height without changing hit/physics coordinates.
+      const faceH = southFaceHeight(o.height);
+      g.fillStyle(Phaser.Display.Color.ValueToColor(fill).darken(24).color, 0.92);
+      g.fillRect(o.x, o.y + o.height, o.width, faceH);
       g.lineStyle(1, stroke, 1);
       g.strokeRect(o.x, o.y, o.width, o.height);
       if (o.label) {
@@ -1191,8 +1237,8 @@ export class SimulationScene extends Phaser.Scene {
     const h = 22;
     // 上缘/右缘的成员框会让操作按钮落到负坐标或画布外，导致“看似有组但点不到”。
     // 将操作胶囊钳在世界边界内，导演旁听与玩家加入共用此命中区域。
-    const x = Phaser.Math.Clamp(right - w, 4, WORLD_W - w - 4);
-    const y = Phaser.Math.Clamp(top - h - 4, 4, WORLD_H - h - 4);
+    const x = Phaser.Math.Clamp(right - w, 4, this.worldW - w - 4);
+    const y = Phaser.Math.Clamp(top - h - 4, 4, this.worldH - h - 4);
     const btn = this.add.container(x, y);
     // Container 无 origin（子对象以容器本地 (0,0) 为基准）——bg/label 放 (w/2,h/2)，命中区 Rectangle(0,0,w,h) 即覆盖按钮可视区
     const bg = this.add.rectangle(w / 2, h / 2, w, h, 0x0f172a, 0.92).setStrokeStyle(1, color, 0.95);
@@ -1211,7 +1257,7 @@ export class SimulationScene extends Phaser.Scene {
 
   private updateNarration(text: string, directorActive: boolean) {
     this.narrationText.setText(text ? '【主控】' + text : '');
-    this.narrationText.setPosition(WORLD_W / 2, 8);
+    this.narrationText.setPosition(this.worldW / 2, 8);
     this.narrationText.setAlpha(directorActive ? 1 : 0.7);
   }
 
@@ -1263,6 +1309,8 @@ export class SimulationScene extends Phaser.Scene {
       const nx = c.x + (tx - c.x) * k;
       const ny = c.y + (ty - c.y) * k;
       if (Math.abs(nx - c.x) > 0.05 || Math.abs(ny - c.y) > 0.05) c.setPosition(nx, ny);
+      c.setScale(perspectiveScaleAtY(ny, this.worldH));
+      c.setDepth(standingDepth(ny, this.worldH));
     }
     // P-0813-G：受控 agent 到达 → 点击标记自动消失（hasTarget=false 即清，不再等 4s 兜底）
     if (this.clickTarget) {

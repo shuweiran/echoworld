@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { floorElevation, FLOOR_HEIGHT_METERS } from '../src/babylon/floorProjection.ts';
 import { normalizeSnapshot, projectSnapshotToFloor } from '../src/phaser/simulationData.ts';
+import { perspectiveScaleAtY, standingDepth } from '../src/phaser/topDownProjection.ts';
 
 test('renderer projections preserve authoritative x/y/floor/path/track facts', () => {
   const source = {
@@ -31,4 +32,12 @@ test('renderer projections preserve authoritative x/y/floor/path/track facts', (
     [normalized.agents[0].x, normalized.agents[0].y, normalized.agents[0].floorId],
     [12, 34, 'f2'],
   );
+});
+
+test('top-down 2.5D depth cues are monotonic and never mutate world coordinates', () => {
+  const world = { x: 210, y: 360, floorId: 'ground' };
+  const before = structuredClone(world);
+  assert.ok(perspectiveScaleAtY(500, 600) > perspectiveScaleAtY(100, 600));
+  assert.ok(standingDepth(500, 600) > standingDepth(100, 600));
+  assert.deepEqual(world, before);
 });
