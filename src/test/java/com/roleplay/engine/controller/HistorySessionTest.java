@@ -145,7 +145,7 @@ class HistorySessionTest {
     // ── ① history session_id 定向 ──────────────────────────────
 
     @Test
-    @DisplayName("① GET /api/history?session_id= 返回该会话真实消息；空 id 走默认会话，未知非空 id 返回 404")
+    @DisplayName("① GET /api/history?session_id= 返回该会话真实消息；空 id 直接 400，未知非空 id 返回 404")
     void history_withSessionId_returnsSessionMessages() {
         Harness h = new Harness();
         RouterService s1 = h.newSession("s1", "小铃");
@@ -159,10 +159,10 @@ class HistorySessionTest {
                 "session_id 定向应返回该会话消息");
         assertTrue(res.containsKey("round_logs"), "响应应含 round_logs 键（契约对齐）");
 
-        // 无 session_id → 默认单例（s1 未初始化到默认单例上）→ 空消息（旧行为不变）
-        Map<String, Object> resDefault = ctrl.getHistory(100, 0, "", 0, "", "").getBody();
-        assertTrue(((List<?>) resDefault.get("messages")).isEmpty(),
-                "无 session_id 走默认单例，应保持 0 条（向后兼容）");
+        // P0 会话隔离收敛：无 session_id 不再回退默认单例，直接 400（最后的串场兼容入口已关）。
+        ResponseStatusException blank = assertThrows(ResponseStatusException.class,
+                () -> ctrl.getHistory(100, 0, "", 0, "", ""));
+        assertEquals(400, blank.getStatusCode().value());
 
         // 未知非空 session_id 必须明确 404，不能静默读取默认会话造成串线。
         ResponseStatusException unknown = assertThrows(ResponseStatusException.class,
@@ -304,5 +304,37 @@ class HistorySessionTest {
         assertEquals(200, closed.getStatusCode().value());
         assertEquals("closed", closed.getBody().get("status"));
         verify(sessions).remove("live-session");
+    }
+
+    // ── ⑦ 场景1：A 起局后再起 B，B 无 A 痕迹，且默认单例未被镜像污染 ──
+
+    @Test
+    @DisplayName("⑦ 两次 POST /api/init：B 会话无 A 角色，默认单例保持空（镜像已删除）")
+    void initTwice_noMirrorPollution() {
+        Harness h = new Harness();
+        SessionController ctrl = new SessionController(h.defaultRouter, mock(ScriptService.class),
+                mock(PrivateChatService.class), mock(CharacterController.class),
+                mock(SceneController.class), mock(InterruptManager.class), h.registry);
+
+        Map<String, Object> a = new LinkedHashMap<>();
+        a.put("characters", List.of(Map.of("name", "小铃", "persona", "p")));
+        a.put("scene", "A场景");
+        a.put("mode", "free");
+        String sidA = String.valueOf(ctrl.initialize(a).getBody().get("session_id"));
+        assertFalse(sidA.isBlank());
+
+        Map<String, Object> b = new LinkedHashMap<>();
+        b.put("characters", List.of(Map.of("name", "凯尔", "persona", "p")));
+        b.put("scene", "B场景");
+        b.put("mode", "free");
+        String sidB = String.valueOf(ctrl.initialize(b).getBody().get("session_id"));
+        assertFalse(sidB.isBlank());
+        assertFalse(sidA.equals(sidB));
+
+        // B 会话只有凯尔（无 A 的小铃）；A 会话保持独立
+        assertEquals(List.of("凯尔"), h.registry.get(sidB).getState().get("agents"), "B 不得出现 A 的角色");
+        assertEquals(List.of("小铃"), h.registry.get(sidA).getState().get("agents"), "A 会话独立完整");
+        // 默认单例未被镜像污染：无角色（只断言同步状态，不等后台自动首轮）
+        assertEquals(0, h.defaultRouter.getState().get("agent_count"), "默认单例不得被新会话镜像");
     }
 }

@@ -220,6 +220,8 @@ class RouterServiceAutoFirstRoundTest {
 
         verify(sessionRouter).initSession(anyString(), anyList(), anyString(), eq("free"), anyString(), anyString());
         verify(sessionRouter).triggerAutoFirstRound();
+        // P0 会话隔离：新会话不再向默认单例 router 镜像初始化（防串场）
+        verify(defaultRouter, org.mockito.Mockito.never()).initSession(anyString(), anyList(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test

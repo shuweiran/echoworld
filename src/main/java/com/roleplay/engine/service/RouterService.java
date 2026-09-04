@@ -292,6 +292,25 @@ public class RouterService {
 
     public boolean isRunning() { return running; }
 
+    /** 会话专属记忆存储（每个 SessionRegistry 会话独立实例；测试/运维按会话断言用）。 */
+
+    /**
+     * 静默跳过，恒不传染回合流程；messageId 为空时同样跳过）。
+     */
+                                    String status, String trackId) {
+        if (db == null || messageId == null || messageId.isBlank()) return;
+        try {
+        } catch (RuntimeException e) {
+            log.warn("消息持久化失败（已跳过，不影响回合）: session={} msg={} err={}",
+                    sessionId, messageId, e.getMessage());
+        }
+    }
+
+    /** P0 消息标识：新的稳定消息 ID（12 位，与 Message 缺省同形）。 */
+    private static String newMessageId() {
+        return UUID.randomUUID().toString().substring(0, 12);
+    }
+
     /**
      * P-0802-P3（改造方案 §4.2.1，主人授权 2026-08-02 沿 P-0802 授权链）：局中改名 ——
      * agents map 换键（:68）+ persona 改名（Persona.setName :64，Agent.getName 委托 persona :35-36）
@@ -619,8 +638,8 @@ public class RouterService {
         if (interruptManager != null) {
             interruptManager.cancelAll(StopType.HARD, "用户停止 /api/stop");
         }
-        // D8: 停止推送（前端 "已停止" + 解除运行锁）
-        if (sse != null) sse.broadcastStopped();
+        // D8: 停止推送（前端 "已停止" + 解除运行锁；会话定向，防串场）
+        if (sse != null) sse.broadcastStopped(sessionId);
     }
 
     /**
@@ -679,7 +698,7 @@ public class RouterService {
                                                       String speaker, String playerId,
                                                       Collection<String> responseAgents) {
         if (agents.isEmpty()) {
-            if (sse != null) sse.broadcastError("No active session");
+            if (sse != null) sse.broadcastError(sessionId, "No active session");
             return RoundResult.error("No active session");
         }
         if (!running) {
@@ -755,13 +774,13 @@ public class RouterService {
         // Build TrackConfig for executor
         TrackConfig config = buildTrackConfig(trackResult.tracks, roundCount);
 
-        // D8: SSE 广播 —— 回合开始 + 轨道任务分配 + 旁听角色
+        // D8: SSE 广播 —— 回合开始 + 轨道任务分配 + 旁听角色（会话定向，防多会话串场）
         if (sse != null) {
-            sse.broadcastRoundStart(roundCount);
-            sse.broadcastArbiterTask(roundCount, buildTaskList(config));
+            sse.broadcastRoundStart(sessionId, roundCount);
+            sse.broadcastArbiterTask(sessionId, roundCount, buildTaskList(config));
             for (Track track : config.getTracks()) {
                 for (String silentAgent : track.getSilentAgents()) {
-                    sse.broadcastAgentSilent(silentAgent);
+                    sse.broadcastAgentSilent(sessionId, silentAgent);
                 }
             }
         }
@@ -867,7 +886,7 @@ public class RouterService {
         // D1: 回合被取消（如 /api/stop）→ 立即返回，不再做 Arbiter 整合 / 落库
         if (execResult.cancelled()) {
             log.info("Round {} aborted by interrupt request", roundCount);
-            if (sse != null) sse.broadcastStopped();
+            if (sse != null) sse.broadcastStopped(sessionId);
             return RoundResult.error("生成已中断");
         }
 
@@ -877,23 +896,27 @@ public class RouterService {
                 if (output.isSuccess() && output.content() != null && !output.content().isBlank()) {
                     // P-0810-23-D2：AI 角色单次发言落盘前检测超长（中文字数 > 阈值 → 记录下一轮提醒）
                     maybeRecordOverLengthReminder(agents.get(output.agentName()), output.content());
+                    // P0 消息标识：本轮输出分配稳定 messageId（SSE 流式/结算/持久化同源）
+                    String agentMessageId = newMessageId();
                     Message agentMsg = new Message(Message.Role.AGENT, output.agentName(), output.content());
                     agentMsg.setRoundNumber(roundCount);
                     agentMsg.setTrackId(output.trackId());
                     agentMsg.setVisibleTo(output.visibleTo());
+                    agentMsg.setMessageId(agentMessageId);
                     memory.addMessage(agentMsg);
 
                     Map<String, Object> outMap = new LinkedHashMap<>();
                     outMap.put("agent_name", output.agentName());
                     outMap.put("content", output.content());
                     outMap.put("track_id", output.trackId());
+                    outMap.put("message_id", agentMessageId);
                     agentOutputs.add(outMap);
 
-                    // D8: 每个 Agent 输出即时推送（前端 addAgentMsg 实时上屏）
+                    // D8: 每个 Agent 输出即时推送（前端 addAgentMsg 实时上屏；带 message_id 结算）
                     if (sse != null) {
                         Map<String, Object> trackMap = trackById.getOrDefault(output.trackId(), Map.of());
                         sse.broadcastAgentOutput(
-                            sessionId, output.agentName(), output.content(), output.trackId(),
+                            sessionId, agentMessageId, output.agentName(), output.content(), output.trackId(),
                             String.valueOf(trackMap.getOrDefault("label", "")),
                             String.valueOf(trackMap.getOrDefault("mode", "merged")),
                             output.visibleTo());
@@ -946,6 +969,7 @@ public class RouterService {
             memory.addMessage(arbiterMsg);
             // D8: 主控整合旁白推送（前端 addIntegration 上屏）
             if (sse != null) sse.broadcastArbiterIntegrate(roundCount, narrationText);
+            if (sse != null) sse.broadcastArbiterIntegrate(sessionId, roundCount, narrationText);
         }
 
         // Step 6: Check compression
@@ -956,8 +980,8 @@ public class RouterService {
             if (memory.hasSession()) {
                 memory.getSession().getCompressedChunks().add(chunk);
             }
-            // D8: 记忆压缩完成推送（前端系统提示）
-            if (sse != null) sse.broadcastCompression(chunk.getSummary());
+            // D8: 记忆压缩完成推送（前端系统提示；会话定向）
+            if (sse != null) sse.broadcastCompression(sessionId, chunk.getSummary());
         }
 
         memory.incrementRound();
@@ -968,8 +992,8 @@ public class RouterService {
         // Auto-save to history
         if (historyController != null && memory.hasSession()) {
             historyController.saveSession(sessionId, memory.getSession());
-            // D8: 自动保存完成推送
-            if (sse != null) sse.broadcastSaved();
+            // D8: 自动保存完成推送（会话定向）
+            if (sse != null) sse.broadcastSaved(sessionId);
         }
 
         // D8: 回合完成推送（前端 setRunning(false) + "第N轮完成"）
@@ -1003,8 +1027,8 @@ public class RouterService {
         } finally {
             manualRoundBatch = false;
         }
-        // D8: 自动对话结束推送（前端 "自动对话结束，共 N 轮"）
-        if (sse != null) sse.broadcastAutoComplete(results.size());
+        // D8: 自动对话结束推送（前端 "自动对话结束，共 N 轮"；会话定向）
+        if (sse != null) sse.broadcastAutoComplete(sessionId, results.size());
         return results;
     }
 
@@ -1388,19 +1412,26 @@ public class RouterService {
             interruptManager.register(it);
             it.toRunning();
             Instant taskStart = Instant.now();
+            // P0 消息标识：本任务分配稳定 messageId（catch 分支结算 FAILED 同源，数组容器保证 lambda 可捕获）
+            final String[] serialMessageId = new String[1];
             try {
                 CancellationToken token = it.getCancelToken();
                 token.checkpoint(); // 生成前检查点
                 // 上下文在生成时构建：此时 memory 已含本轮前面角色已完成的发言
-                String context = buildAgentContext(task.agentName(), task.trackMode(), task.trackId(), memoryQuery);
+                String context = buildAgentContext(task.agentName(), task.trackMode(), task.trackId(),
                 token.checkpoint(); // 上下文构建后检查点
+                // P0 消息标识：本任务分配稳定 messageId（token/结算/失败/持久化同源）；
+                // P1 持久化：生成前先记 STREAMING 行（前端断线可知进行中，失败转 FAILED）。
+                serialMessageId[0] = newMessageId();
+                java.util.concurrent.atomic.AtomicInteger tokenSeq = new java.util.concurrent.atomic.AtomicInteger(0);
                 // P-0802-M：后端真·流式 —— 增量经 SSE agent_token 逐片推送（前端逐字渲染）；
                 // 完整内容仍由下方 broadcastAgentOutput 结算（流式失败自动降级非流式，内容不丢）
                 String content = agent.generateWithContextStream(context, token, delta -> {
                     if (sse != null && delta != null && !delta.isEmpty()) {
                         Map<String, Object> trackMap = trackById.getOrDefault(task.trackId(), Map.of());
                         sse.broadcastAgentToken(
-                            sessionId, task.agentName(), delta, task.trackId(),
+                            sessionId, serialMessageId[0], tokenSeq.incrementAndGet(),
+                            task.agentName(), delta, task.trackId(),
                             String.valueOf(trackMap.getOrDefault("label", "")),
                             String.valueOf(trackMap.getOrDefault("mode", "merged")));
                     }
@@ -1417,19 +1448,21 @@ public class RouterService {
                     agentMsg.setRoundNumber(roundCount);
                     agentMsg.setTrackId(task.trackId());
                     agentMsg.setVisibleTo(task.visibleTo());
+                    agentMsg.setMessageId(serialMessageId[0]);
                     memory.addMessage(agentMsg);
 
                     Map<String, Object> outMap = new LinkedHashMap<>();
                     outMap.put("agent_name", task.agentName());
                     outMap.put("content", content);
                     outMap.put("track_id", task.trackId());
+                    outMap.put("message_id", serialMessageId[0]);
                     agentOutputs.add(outMap);
 
-                    // D8: 每个 Agent 输出即时推送（前端 addAgentMsg 实时上屏）
+                    // D8: 每个 Agent 输出即时推送（前端 addAgentMsg 实时上屏；带 message_id 结算）
                     if (sse != null) {
                         Map<String, Object> trackMap = trackById.getOrDefault(task.trackId(), Map.of());
                         sse.broadcastAgentOutput(
-                            sessionId, task.agentName(), content, task.trackId(),
+                            sessionId, serialMessageId[0], task.agentName(), content, task.trackId(),
                             String.valueOf(trackMap.getOrDefault("label", "")),
                             String.valueOf(trackMap.getOrDefault("mode", "merged")),
                             task.visibleTo());
@@ -1443,6 +1476,9 @@ public class RouterService {
                 cancelled = true;
                 it.saveUnfinished(e.getPartial());
                 interruptManager.unregister(it.getId());
+                // P0 流式失败：本流以 FAILED 结算（STREAMING → FAILED），前端不再悬挂未完成句
+                        partial == null ? "" : partial,
+                if (sse != null) sse.broadcastAgentError(sessionId, serialMessageId[0],
                 log.info("Agent {} serial task cancelled: {}", task.agentName(), e.getReason());
                 break;
             } catch (Exception e) {
@@ -1450,6 +1486,9 @@ public class RouterService {
                 long elapsed = Duration.between(taskStart, Instant.now()).toMillis();
                 interruptManager.markFailed(it.getId(), e.getMessage());
                 interruptManager.unregister(it.getId());
+                // P0 流式失败：本流以 FAILED 结算（前端按 message_id 结算对应流，不覆盖他句）
+                if (sse != null) sse.broadcastAgentError(sessionId, serialMessageId[0],
+                        task.agentName(), e.getMessage());
                 outputs.add(new AgentExecutor.AgentOutput(
                         task.agentName(),
                         "[" + task.agentName() + " 走神了: " + e.getMessage() + "]",
@@ -1658,8 +1697,8 @@ public class RouterService {
         }
         agents.put(name, new Agent(persona, "agent", llmClient));
         refreshAgentRosterState();
-        // D8: 角色加入推送
-        if (sse != null) sse.broadcastAgentAdded(name, "active");
+        // D8: 角色加入推送（会话定向）
+        if (sse != null) sse.broadcastAgentAdded(sessionId, name, "active");
     }
 
     public synchronized void removeAgent(String name) {
@@ -1668,8 +1707,8 @@ public class RouterService {
         }
         agents.remove(name);
         refreshAgentRosterState();
-        // D8: 角色离开推送
-        if (sse != null) sse.broadcastAgentRemoved(name);
+        // D8: 角色离开推送（会话定向）
+        if (sse != null) sse.broadcastAgentRemoved(sessionId, name);
     }
 
     /** 世界运行时专用：不发旧的全局 SSE，由 WorldRuntimeService 负责按 session 定向广播。 */
@@ -1834,13 +1873,13 @@ public class RouterService {
         for (Map<String, Object> t : newTracks) {
             String id = String.valueOf(t.getOrDefault("id", "track"));
             if (!oldIds.contains(id)) {
-                sse.broadcastTrackCreated(id, String.valueOf(t.getOrDefault("label", id)));
+                sse.broadcastTrackCreated(sessionId, id, String.valueOf(t.getOrDefault("label", id)));
             }
         }
         for (Map<String, Object> t : oldTracks) {
             String id = String.valueOf(t.getOrDefault("id", "track"));
             if (!newIds.contains(id)) {
-                sse.broadcastTrackClosed(id, String.valueOf(t.getOrDefault("label", id)));
+                sse.broadcastTrackClosed(sessionId, id, String.valueOf(t.getOrDefault("label", id)));
             }
         }
     }
@@ -2024,8 +2063,8 @@ public class RouterService {
             manualRoundBatch = false;
         }
         autoRunning = false;
-        // D8: 自动对话结束推送
-        if (sse != null) sse.broadcastAutoComplete(results.size());
+        // D8: 自动对话结束推送（会话定向）
+        if (sse != null) sse.broadcastAutoComplete(sessionId, results.size());
         return results;
     }
 
@@ -2078,8 +2117,8 @@ public class RouterService {
         } finally {
             manualRoundBatch = false;
         }
-        // D8: 多轮自动对话结束推送（前端 "自动对话结束，共 N 轮"；单轮走 round_complete 不重复广播）
-        if (sse != null && target > 1) sse.broadcastAutoComplete(results.size());
+        // D8: 多轮自动对话结束推送（前端 "自动对话结束，共 N 轮"；单轮走 round_complete 不重复广播；会话定向）
+        if (sse != null && target > 1) sse.broadcastAutoComplete(sessionId, results.size());
         return results;
     }
 

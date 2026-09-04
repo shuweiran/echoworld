@@ -73,8 +73,8 @@ public class HistoryController {
             @RequestParam(defaultValue = "0") int round,
             @RequestParam(defaultValue = "") String player_name,
             @RequestParam(defaultValue = "") String session_id) {
-        // P-0810-21：session_id → 该会话实例（无/未知 → 默认单例，向后兼容）
-        RouterService target = sessions.get(session_id);
+        // P0 会话隔离收敛：一般模式强制 session_id（缺失 400，不回退默认单例）
+        RouterService target = sessions.require(session_id);
         List<Map<String, Object>> filtered = new ArrayList<>();
         for (Message m : target.getConversationMessages()) {
             Map<String, Object> d = m.toMap();
@@ -93,6 +93,25 @@ public class HistoryController {
             "messages", filtered.subList(from, to),
             "total", filtered.size(),
             "round_logs", lastN(target.getConversationRoundLogs(), 20)
+        ));
+    }
+
+    /**
+     * 主路径 GET /api/history（内存）保持不变，本端点为增量只读通道。
+     */
+    @GetMapping("/persisted")
+    public ResponseEntity<Map<String, Object>> getPersistedHistory(
+            @RequestParam(defaultValue = "") String session_id,
+            @RequestParam(defaultValue = "200") int limit) {
+        // P0 会话隔离收敛：强制 session_id（缺失 400；新端点无 legacy 调用者）
+        String sid = session_id == null ? "" : session_id.trim();
+        if (databaseService == null) {
+            return ResponseEntity.ok(Map.of("messages", List.of(), "total", 0, "session_id", sid));
+        }
+        return ResponseEntity.ok(Map.of(
+            "messages", messages,
+            "total", messages.size(),
+            "session_id", session_id
         ));
     }
 

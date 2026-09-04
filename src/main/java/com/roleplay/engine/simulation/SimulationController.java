@@ -610,7 +610,8 @@ public class SimulationController {
         if (sessions == null) {
             return Map.of("ok", false, "advanced", false, "error", "session registry unavailable");
         }
-        RouterService router = sessions.get(sessionId);
+        // P0 会话隔离收敛：会话路径强制 session_id（缺失 400；group 路径不受影响）
+        RouterService router = sessions.require(sessionId);
         boolean ok = router != null && router.onPlaybackDone();
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("ok", true);

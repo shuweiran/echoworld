@@ -286,14 +286,31 @@ public class SSEController implements SseBroadcaster {
 
     // ── Typed broadcast helpers (payload shapes = frontend listeners) ──
 
-    /** round_start → {round} */
+    /** round_start → {round}（遗留全局广播；一般模式请用会话定向重载防串场） */
     public void broadcastRoundStart(int round) {
         broadcast("round_start", Map.of("round", round));
     }
 
-    /** arbiter_task → {round, tasks:[{agent_name, task}]} */
+    /** 会话定向的 round_start → {session_id, round}（多会话并存时仅本会话连接收到）。 */
+    public void broadcastRoundStart(String sessionId, int round) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("round", round);
+        broadcast("round_start", payload);
+    }
+
+    /** arbiter_task → {round, tasks:[{agent_name, task}]}（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastArbiterTask(int round, List<Map<String, Object>> tasks) {
         broadcast("arbiter_task", Map.of("round", round, "tasks", tasks));
+    }
+
+    /** 会话定向的 arbiter_task → {session_id, round, tasks}。 */
+    public void broadcastArbiterTask(String sessionId, int round, List<Map<String, Object>> tasks) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("round", round);
+        payload.put("tasks", tasks);
+        broadcast("arbiter_task", payload);
     }
 
     /** agent_output → {session_id?, agent_name, content, track_id, track_label, track_mode, visible_to} */
@@ -318,9 +335,17 @@ public class SSEController implements SseBroadcaster {
         broadcast("agent_output", payload);
     }
 
-    /** agent_silent → {agent_name} */
+    /** agent_silent → {agent_name}（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastAgentSilent(String agentName) {
         broadcast("agent_silent", Map.of("agent_name", agentName));
+    }
+
+    /** 会话定向的 agent_silent → {session_id, agent_name}。 */
+    public void broadcastAgentSilent(String sessionId, String agentName) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("agent_name", agentName);
+        broadcast("agent_silent", payload);
     }
 
     /**
@@ -346,9 +371,67 @@ public class SSEController implements SseBroadcaster {
         broadcast("agent_token", payload);
     }
 
+    /**
+     * P0 流式消息标识：带 message_id + event_seq 的 agent_token（前端按 message_id 拼接，
+     * 同角色多句互不覆盖；event_seq 单调递增，重发/乱序时前端按序去重）。
+     * messageId/eventSeq 为空时退化为无标识载荷（向后兼容）。
+     */
+    public void broadcastAgentToken(String sessionId, String messageId, int eventSeq,
+                                    String agentName, String delta, String trackId,
+                                    String trackLabel, String trackMode) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        if (messageId != null && !messageId.isBlank()) payload.put("message_id", messageId);
+        if (eventSeq > 0) payload.put("event_seq", eventSeq);
+        payload.put("agent_name", agentName == null ? "" : agentName);
+        payload.put("delta", delta == null ? "" : delta);
+        payload.put("track_id", trackId == null ? "main" : trackId);
+        payload.put("track_label", trackLabel == null ? "" : trackLabel);
+        payload.put("track_mode", trackMode == null ? "merged" : trackMode);
+        broadcast("agent_token", payload);
+    }
+
+    /**
+     * P0 流式消息标识：带 message_id 的 agent_output 结算（与 token 流同源，前端按 id 结算对应流）。
+     */
+    public void broadcastAgentOutput(String sessionId, String messageId, String agentName, String content,
+                                     String trackId, String trackLabel, String trackMode,
+                                     List<String> visibleTo) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        if (messageId != null && !messageId.isBlank()) payload.put("message_id", messageId);
+        payload.put("agent_name", agentName);
+        payload.put("content", content == null ? "" : content);
+        payload.put("track_id", trackId == null ? "main" : trackId);
+        payload.put("track_label", trackLabel);
+        payload.put("track_mode", trackMode);
+        payload.put("visible_to", visibleTo == null ? List.of() : visibleTo);
+        broadcast("agent_output", payload);
+    }
+
+    /**
+     * P0 流式失败：agent_error → {session_id, message_id, agent_name, error} ——
+     * 流中断/生成异常时结算对应流式句为 FAILED，前端不再用无关新内容覆盖旧文本。
+     */
+    public void broadcastAgentError(String sessionId, String messageId, String agentName, String error) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        if (messageId != null && !messageId.isBlank()) payload.put("message_id", messageId);
+        payload.put("agent_name", agentName == null ? "" : agentName);
+        payload.put("error", error == null ? "生成中断" : error);
+        broadcast("agent_error", payload);
+    }
+
     /** arbiter_integrate → {round, narration} */
     public void broadcastArbiterIntegrate(int round, String narration) {
         broadcast("arbiter_integrate", Map.of("round", round, "narration", narration == null ? "" : narration));
+    }
+
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("round", round);
+        payload.put("narration", narration == null ? "" : narration);
+        broadcast("arbiter_integrate", payload);
     }
 
     /** round_complete → {session_id?, round} */
@@ -364,9 +447,17 @@ public class SSEController implements SseBroadcaster {
         broadcast("round_complete", payload);
     }
 
-    /** compression → {summary} */
+    /** compression → {summary}（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastCompression(String summary) {
         broadcast("compression", Map.of("summary", summary == null ? "" : summary));
+    }
+
+    /** 会话定向的 compression → {session_id, summary}。 */
+    public void broadcastCompression(String sessionId, String summary) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("summary", summary == null ? "" : summary);
+        broadcast("compression", payload);
     }
 
     /** user_input → {session_id?, content, category, character, round} */
@@ -385,44 +476,109 @@ public class SSEController implements SseBroadcaster {
         broadcast("user_input", payload);
     }
 
-    /** auto_complete → {rounds} */
+    /** auto_complete → {rounds}（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastAutoComplete(int rounds) {
         broadcast("auto_complete", Map.of("rounds", rounds));
     }
 
-    /** stopped → {} */
+    /** 会话定向的 auto_complete → {session_id, rounds}。 */
+    public void broadcastAutoComplete(String sessionId, int rounds) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("rounds", rounds);
+        broadcast("auto_complete", payload);
+    }
+
+    /** stopped → {}（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastStopped() {
         broadcast("stopped", Map.of());
     }
 
-    /** error → {error} (frontend reads u.error) */
+    /** 会话定向的 stopped → {session_id}（空载荷仅带会话标识用于定向）。 */
+    public void broadcastStopped(String sessionId) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        broadcast("stopped", payload);
+    }
+
+    /** error → {error} (frontend reads u.error)（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastError(String error) {
         broadcast("error", Map.of("error", error == null ? "未知错误" : error));
     }
 
-    /** saved → {} */
+    /** 会话定向的 error → {session_id, error}。 */
+    public void broadcastError(String sessionId, String error) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("error", error == null ? "未知错误" : error);
+        broadcast("error", payload);
+    }
+
+    /** saved → {}（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastSaved() {
         broadcast("saved", Map.of());
     }
 
-    /** agent_added → {name, char_status} */
+    /** 会话定向的 saved → {session_id}。 */
+    public void broadcastSaved(String sessionId) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        broadcast("saved", payload);
+    }
+
+    /** agent_added → {name, char_status}（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastAgentAdded(String name, String charStatus) {
         broadcast("agent_added", Map.of("name", name, "char_status", charStatus == null ? "active" : charStatus));
     }
 
-    /** agent_removed → {name} */
+    /** 会话定向的 agent_added → {session_id, name, char_status}。 */
+    public void broadcastAgentAdded(String sessionId, String name, String charStatus) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("name", name);
+        payload.put("char_status", charStatus == null ? "active" : charStatus);
+        broadcast("agent_added", payload);
+    }
+
+    /** agent_removed → {name}（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastAgentRemoved(String name) {
         broadcast("agent_removed", Map.of("name", name));
     }
 
-    /** track_created → {id, label} */
+    /** 会话定向的 agent_removed → {session_id, name}。 */
+    public void broadcastAgentRemoved(String sessionId, String name) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("name", name);
+        broadcast("agent_removed", payload);
+    }
+
+    /** track_created → {id, label}（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastTrackCreated(String id, String label) {
         broadcast("track_created", Map.of("id", id, "label", label));
     }
 
-    /** track_closed → {id, label} */
+    /** 会话定向的 track_created → {session_id, id, label}。 */
+    public void broadcastTrackCreated(String sessionId, String id, String label) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("id", id);
+        payload.put("label", label);
+        broadcast("track_created", payload);
+    }
+
+    /** track_closed → {id, label}（遗留全局广播；一般模式请用会话定向重载） */
     public void broadcastTrackClosed(String id, String label) {
         broadcast("track_closed", Map.of("id", id, "label", label));
+    }
+
+    /** 会话定向的 track_closed → {session_id, id, label}。 */
+    public void broadcastTrackClosed(String sessionId, String id, String label) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
+        payload.put("id", id);
+        payload.put("label", label);
+        broadcast("track_closed", payload);
     }
 
     // ── Script (剧本杀) typed broadcast helpers (GAP-8) ──

@@ -140,7 +140,7 @@ class RouterServiceSuggestTest {
         RouterService sessionRouter = mock(RouterService.class);
         when(sessionRouter.suggestPlayerLines(anyInt())).thenReturn(List.of("a", "b", "c"));
         SessionRegistry sessions = mock(SessionRegistry.class);
-        when(sessions.get(anyString())).thenReturn(sessionRouter);
+        when(sessions.require(anyString())).thenReturn(sessionRouter);
 
         RoundController ctrl = new RoundController(sessions);
         Map<String, Object> body = new LinkedHashMap<>();
@@ -151,5 +151,18 @@ class RouterServiceSuggestTest {
         assertEquals(200, resp.getStatusCode().value());
         assertEquals("s1", resp.getBody().get("session_id"));
         assertEquals(List.of("a", "b", "c"), resp.getBody().get("suggestions"));
+    }
+
+    @Test
+    @DisplayName("⑤ P0 会话隔离收敛：缺失 session_id → 400（不再回退默认单例）")
+    void roundSuggest_blankSessionId_returns400() {
+        SessionRegistry sessions = mock(SessionRegistry.class);
+        when(sessions.require("")).thenThrow(new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.BAD_REQUEST, "缺少 session_id"));
+        RoundController ctrl = new RoundController(sessions);
+
+        org.junit.jupiter.api.Assertions.assertThrows(
+                org.springframework.web.server.ResponseStatusException.class,
+                () -> ctrl.suggest(new LinkedHashMap<>(Map.of("count", 3))));
     }
 }

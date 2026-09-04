@@ -35,7 +35,8 @@ public class RoundController {
             body.getOrDefault("text", ""));
         int turns = ((Number) body.getOrDefault("turns", 1)).intValue();
         String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
-        RouterService target = sessions.get(sessionId);
+        // P0 会话隔离收敛：一般模式强制 session_id（缺失 400）
+        RouterService target = sessions.require(sessionId);
 
         // D13: turns 真正生效 —— 按 turns 执行 N 轮，每轮走 runRound；
         // 停止条件：中途 stop / 目标达成 / 单轮错误（见 RouterService.runTurns）
@@ -73,7 +74,7 @@ public class RoundController {
     public ResponseEntity<Map<String, Object>> rollback(@RequestBody Map<String, Object> body) {
         int round = ((Number) body.getOrDefault("round", 0)).intValue();
         String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
-        String result = sessions.get(sessionId).rollbackToRound(sessionId, round);
+        String result = sessions.require(sessionId).rollbackToRound(sessionId, round);
         return ResponseEntity.ok(Map.of("status", result));
     }
 
@@ -89,7 +90,7 @@ public class RoundController {
     public ResponseEntity<Map<String, Object>> suggest(@RequestBody Map<String, Object> body) {
         int count = ((Number) body.getOrDefault("count", 3)).intValue();
         String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
-        RouterService target = sessions.get(sessionId);
+        RouterService target = sessions.require(sessionId);
         List<String> suggestions = target.suggestPlayerLines(count);
         return ResponseEntity.ok(Map.of(
             "session_id", sessionId,
@@ -99,7 +100,7 @@ public class RoundController {
 
     @GetMapping("/status")
     public ResponseEntity<Map<String, Object>> getRoundStatus(@RequestParam(required = false) String session_id) {
-        RouterService target = sessions.get(session_id);
+        RouterService target = sessions.require(session_id);
         return ResponseEntity.ok(Map.of(
             "running", target.isRunning(),
             "round", target.getRoundCount()

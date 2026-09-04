@@ -58,7 +58,7 @@ class SimulationControllerPlaybackDoneTest {
         RouterService router = mock(RouterService.class);
         when(router.onPlaybackDone()).thenReturn(true);
         SessionRegistry sessions = mock(SessionRegistry.class);
-        when(sessions.get("s1")).thenReturn(router);
+        when(sessions.require("s1")).thenReturn(router);
         SimulationController c = controller(mock(SimulationService.class), sessions);
 
         Map<String, Object> r = c.playbackDone(Map.of("session_id", "s1"));
@@ -72,7 +72,7 @@ class SimulationControllerPlaybackDoneTest {
         RouterService router = mock(RouterService.class);
         when(router.onPlaybackDone()).thenReturn(false);
         SessionRegistry sessions = mock(SessionRegistry.class);
-        when(sessions.get("s1")).thenReturn(router);
+        when(sessions.require("s1")).thenReturn(router);
         SimulationController c = controller(mock(SimulationService.class), sessions);
 
         Map<String, Object> r = c.playbackDone(Map.of("session_id", "s1"));
@@ -95,11 +95,26 @@ class SimulationControllerPlaybackDoneTest {
         RouterService router = mock(RouterService.class);
         when(router.onPlaybackDone()).thenReturn(true);
         SessionRegistry sessions = mock(SessionRegistry.class);
-        when(sessions.get("s1")).thenReturn(router);
+        when(sessions.require("s1")).thenReturn(router);
         SimulationController c = controller(mock(SimulationService.class), sessions);
 
         Map<String, Object> r = c.playbackDone(Map.of("session_id", "s1", "group_id", "  "));
         assertEquals(true, r.get("advanced"), "空白 group_id 应回退 session 路径");
         assertFalse(r.containsKey("group_id"), "不应按组路径处理");
+    }
+
+    @Test
+    @DisplayName("⑦ P0 会话隔离收敛：无 group_id 且缺失 session_id → 400（不再回退默认单例）")
+    void blankSessionId_returns400() {
+        SessionRegistry sessions = mock(SessionRegistry.class);
+        when(sessions.require("")).thenThrow(new org.springframework.web.server.ResponseStatusException(
+                org.springframework.http.HttpStatus.BAD_REQUEST, "缺少 session_id"));
+        SimulationController c = controller(mock(SimulationService.class), sessions);
+
+        org.springframework.web.server.ResponseStatusException ex =
+                org.junit.jupiter.api.Assertions.assertThrows(
+                        org.springframework.web.server.ResponseStatusException.class,
+                        () -> c.playbackDone(Map.of("session_id", "")));
+        assertEquals(400, ex.getStatusCode().value());
     }
 }

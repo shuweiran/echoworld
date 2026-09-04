@@ -121,7 +121,8 @@ public class SessionRegistry {
         this.sceneGoalService = sceneGoalService;
     }
 
-    /** 读路由：未传 session_id → 默认单例；非空未知 session_id → 404。 */
+    /** 读路由：未传 session_id → 默认单例；非空未知 session_id → 404。
+     *  legacy 兼容入口（stop/auto/狼人杀·剧本杀旧路径）专用；一般模式业务端点请用 {@link #require}。 */
     public RouterService get(String sessionId) {
         if (sessionId == null || sessionId.isBlank()) return defaultRouter;
         String normalized = sessionId.trim();
@@ -134,6 +135,20 @@ public class SessionRegistry {
             lastAccess.put(normalized, System.currentTimeMillis());
             return router;
         }
+    }
+
+    /**
+     * P0 会话隔离收敛：一般模式业务端点强制路由 —— session_id 缺失/空白直接 400，
+     * 不再回退默认单例（最后的串场兼容入口）；非空未知 id 仍 404（{@link #get} 语义）。
+     * 适用：state / send / history / round/* / goals / playback_done 会话路径。
+     * 不适用：/api/init（创建）、stop/auto（legacy）、狼人杀·剧本杀旧路径（走 {@link #get}）。
+     */
+    public RouterService require(String sessionId) {
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "缺少 session_id（一般模式接口必须显式传会话）");
+        }
+        return get(sessionId);
     }
 
     /**

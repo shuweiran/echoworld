@@ -43,6 +43,9 @@ public class Message {
     private String modeId = "";
     /** P-0818-E（视觉审核）：可选图像（data URL，如 data:image/png;base64,…）；非空时 content 以多模态数组发送 */
     private String image = null;
+    /** P0 消息标识：每条聊天消息的稳定唯一 ID（后端生成，SSE 流式/结算/持久化同源；
+     *  缺省随机 UUID，保证历史消息与旧反序列化（无该键）恒有可用 ID）。 */
+    private String messageId = UUID.randomUUID().toString().substring(0, 12);
 
     public Message() {}
 
@@ -94,6 +97,11 @@ public class Message {
         return this;
     }
 
+    public Message withMessageId(String messageId) {
+        if (messageId != null && !messageId.isBlank()) this.messageId = messageId;
+        return this;
+    }
+
     /** Is this message visible to the given agent? */
     public boolean isVisibleTo(String agentName) {
         return visibleTo.isEmpty() || visibleTo.contains(agentName);
@@ -111,6 +119,7 @@ public class Message {
         m.put("track_id", trackId);
         m.put("visible_to", visibleTo);
         m.put("round_number", roundNumber);
+        m.put("message_id", messageId);
         return m;
     }
 
@@ -129,6 +138,8 @@ public class Message {
         msg.trackId = (String) data.getOrDefault("track_id", "main");
         msg.importance = ((Number) data.getOrDefault("importance", IMPORTANCE_NORMAL)).intValue();
         msg.roundNumber = ((Number) data.getOrDefault("round_number", 0)).intValue();
+        Object mid = data.get("message_id");
+        if (mid != null && !String.valueOf(mid).isBlank()) msg.messageId = String.valueOf(mid);
         msg.visibleTo = new ArrayList<>((List<String>) data.getOrDefault("visible_to", List.of()));
         return msg;
     }
@@ -154,6 +165,10 @@ public class Message {
     public String getImage() { return image; }
     public void setImage(String image) { this.image = image; }
     public void setModeId(String modeId) { this.modeId = modeId; }
+    public String getMessageId() { return messageId; }
+    public void setMessageId(String messageId) {
+        if (messageId != null && !messageId.isBlank()) this.messageId = messageId;
+    }
 
     @Override
     public String toString() {

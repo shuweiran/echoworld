@@ -270,13 +270,9 @@ public class SceneController {
         sessionRouter.ensureSceneGoals(id, sceneDesc, null);
         // P-0810-14：起局后自动触发第一轮（AI 开场白）—— 一般模式生效，异步不阻塞 start 响应
         sessionRouter.triggerAutoFirstRound();
-        // 向后兼容：默认单例同步初始化（与 SessionController.initialize 同款镜像；不触发自动轮防双开）
-        // P-0810-20：sessionRegistry==null 时 sessionRouter 即默认单例 router —— 跳过镜像 init 防双调
-        // （修复 P-0810-17 全量测试唯一失败：P-0810-16 双调 initSession × P-0810-14 verify(times(1)) 冲突；
-        //   P-0810-16 语义保持：registry 存在时独立实例出目标 + 默认单例镜像向后兼容，逐字节不变）
-        if (sessionRouter != router) {
-            router.initSession(sessionId, personas, sceneDesc, mode, protagonist, "");
-        }
+        // P0 会话隔离：不再向默认单例同步初始化（与 SessionController.initialize 同因——
+        // 镜像会把新会话状态写入全局默认 router，造成未传 session_id 的旧客户端串场）。
+        // sessionRegistry==null 的测试/旧构造路径下 sessionRouter 即默认单例 router 本身，行为不变。
         Map<String, Object> result = new LinkedHashMap<>(sessionRouter.getState());
         result.put("session_id", sessionId);
         // P-0810-25：mode 同步实际值（旧实现硬编码 "free"，前端按 mode 判断主角/导演语义）

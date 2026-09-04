@@ -52,7 +52,8 @@ public class SessionController {
 
     @GetMapping("/state")
     public ResponseEntity<Map<String, Object>> getState(@RequestParam(required = false) String session_id) {
-        RouterService r = sessions.get(session_id);
+        // P0 会话隔离收敛：一般模式强制 session_id（缺失 400，不回退默认单例）
+        RouterService r = sessions.require(session_id);
         Map<String, Object> state = new LinkedHashMap<>(r.getState());
         state.put("characters", characterController.getAll());
         state.put("scenes", sceneController.getAll());
@@ -90,10 +91,10 @@ public class SessionController {
         sessionRouter.initSession(sessionId, personas, sceneDesc, mode,
             (String) body.getOrDefault("protagonist", ""),
             (String) body.getOrDefault("director_character", ""));
-        // 向后兼容：默认单例 router 同步初始化（未传 session_id 的旧客户端仍走默认会话）
-        router.initSession(sessionId, personas, sceneDesc, mode,
-            (String) body.getOrDefault("protagonist", ""),
-            (String) body.getOrDefault("director_character", ""));
+        // P0 会话隔离：不再向默认单例 router 镜像初始化 —— 旧实现此处把新会话状态
+        // 同步写入全局默认 router，导致未传 session_id 的旧客户端读到“最近一次起局”的
+        // 串场状态（新场景出现旧场景对话的根因之一）。未传 session_id 的读请求仍经
+        // SessionRegistry 回退到默认单例（向后兼容），但新会话不再污染它。
         // P-0810-09：一般模式 init（含 scene）时确保场景目标集 —— scene_id 用于 DB 目标装载/回写（可选），
         // player_goal 为玩家自定义目标（可选，缺省 LLM 生成）；生成失败规则兜底恒不抛。
         String sceneId = body.get("scene_id") != null ? String.valueOf(body.get("scene_id")).trim() : "";
@@ -135,7 +136,7 @@ public class SessionController {
         // P-0802-P2：读取前端 player_id（可选）—— 角色库改名后按 player_id 解析当前角色名
         // 豁免主控代声（无 player_id 或未绑定 → 零行为变化，走现状 player_name 逻辑）
         String playerId = String.valueOf(body.getOrDefault("player_id", "")).trim();
-        RouterService r = sessions.get(sessionId);
+        // P0 会话隔离收敛：一般模式强制 session_id（缺失 400）
         RouterService.RoundResult result = r.runRound(message, null, playerName, playerId);
         return ResponseEntity.ok(Map.of(
             "status", result.status,
@@ -272,7 +273,6 @@ public class SessionController {
     @PostMapping("/mode")
     public ResponseEntity<Map<String, Object>> setMode(@RequestBody Map<String, String> body) {
         String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
-        RouterService r = sessions.get(sessionId);
         r.setMode(body.getOrDefault("mode", "free"));
         String protagonist = body.getOrDefault("protagonist",
             body.getOrDefault("protagonist", ""));
@@ -285,7 +285,7 @@ public class SessionController {
 
     @GetMapping("/mode")
     public ResponseEntity<Map<String, String>> getMode(@RequestParam(required = false) String session_id) {
-        return ResponseEntity.ok(Map.of("mode", sessions.get(session_id).getMode()));
+        return ResponseEntity.ok(Map.of("mode", sessions.require(session_id).getMode()));
     }
 
     @PostMapping("/goals")
@@ -293,13 +293,15 @@ public class SessionController {
         @SuppressWarnings("unchecked")
         List<String> goals = (List<String>) body.getOrDefault("goals", List.of());
         String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
-        sessions.get(sessionId).setGoals(goals);
+        // 点击继续/输入的下一轮 Agent 已可见（不滞后一轮）；空列表=清除待消费指令。
+            }
+        }
         return ResponseEntity.ok(Map.of("goals", goals));
     }
 
     @GetMapping("/goals")
     public ResponseEntity<Map<String, Object>> getGoals(@RequestParam(required = false) String session_id) {
-        return ResponseEntity.ok(Map.of("goals", sessions.get(session_id).getGoals()));
+        return ResponseEntity.ok(Map.of("goals", sessions.require(session_id).getGoals()));
     }
 
     @PostMapping("/agents")
