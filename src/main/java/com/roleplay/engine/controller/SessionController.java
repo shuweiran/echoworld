@@ -137,6 +137,7 @@ public class SessionController {
         // 豁免主控代声（无 player_id 或未绑定 → 零行为变化，走现状 player_name 逻辑）
         String playerId = String.valueOf(body.getOrDefault("player_id", "")).trim();
         // P0 会话隔离收敛：一般模式强制 session_id（缺失 400）
+        RouterService r = sessions.require(sessionId);
         RouterService.RoundResult result = r.runRound(message, null, playerName, playerId);
         return ResponseEntity.ok(Map.of(
             "status", result.status,
@@ -273,6 +274,7 @@ public class SessionController {
     @PostMapping("/mode")
     public ResponseEntity<Map<String, Object>> setMode(@RequestBody Map<String, String> body) {
         String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
+        RouterService r = sessions.require(sessionId);
         r.setMode(body.getOrDefault("mode", "free"));
         String protagonist = body.getOrDefault("protagonist",
             body.getOrDefault("protagonist", ""));
@@ -293,9 +295,19 @@ public class SessionController {
         @SuppressWarnings("unchecked")
         List<String> goals = (List<String>) body.getOrDefault("goals", List.of());
         String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
+        RouterService r = sessions.require(sessionId);
+        r.setGoals(goals);
+        // P0 主控即时指令：用户下达的导演要求立即进入 Router —— 下一次 runRound 开始即快照消费，
         // 点击继续/输入的下一轮 Agent 已可见（不滞后一轮）；空列表=清除待消费指令。
+        StringBuilder directive = new StringBuilder();
+        for (String g : goals) {
+            if (g != null && !g.isBlank()) {
+                if (directive.length() > 0) directive.append("\n");
+                directive.append("- ").append(g.trim());
             }
         }
+        r.setUserDirective(directive.length() == 0 ? ""
+                : "玩家对主控的最新要求（必须在本轮剧情中优先体现）：\n" + directive);
         return ResponseEntity.ok(Map.of("goals", goals));
     }
 

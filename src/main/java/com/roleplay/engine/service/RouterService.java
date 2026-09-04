@@ -146,6 +146,14 @@ public class RouterService {
     private volatile Map<String, Object> sceneGoals = null;
     /** 已向玩家揭示过全文的目标键（完成/失败各揭示一次，防重复广播）。 */
     private final Set<String> goalRevealed = ConcurrentHashMap.newKeySet();
+    /** P0 主控导演指令：后台导演指令文本（WorldRuntimeService 每轮后推送；开场轮为空）。 */
+    private volatile String directorDirective = "";
+    /**
+     * P0 主控即时指令：用户经 POST /api/goals 下达的导演要求 —— 下一次 runRound 开始时
+     * 快照并清空（一次消费：本轮全体 Agent 可见，下轮不再重复），保证“设完点继续立刻生效”，
+     * 而不是等 WorldRuntimeService 轮后更新再滞后一轮。
+     */
+    private volatile String userDirective = "";
 
     public RouterService(ArbiterService arbiter, AgentExecutor executor,
                          MemoryStore memory, Compressor compressor,
@@ -207,6 +215,8 @@ public class RouterService {
         cancelPendingAutoContinue();
         // P-0814-A: 新会话重置「等待播出完毕」标志（旧会话等待态不串场）
         this.awaitingPlayback = false;
+        // P0 主控即时指令：新会话清空待消费用户指令（旧会话要求不串场）
+        this.userDirective = "";
         // P-0813-B: 新会话重置校准计数 —— 会话重建不误触发（旧会话已校准轮数不串场）
         this.roundsSinceCalibration = 0;
 
@@ -249,6 +259,8 @@ public class RouterService {
         cancelPendingAutoContinue();
         // P-0814-A: 加载会话同样清除「等待播出完毕」标志（防旧会话等待态误触发）
         this.awaitingPlayback = false;
+        // P0 主控即时指令：加载会话同样清空（防旧待消费指令在新上下文误触发）
+        this.userDirective = "";
         // P-0813-B: 加载会话重置校准计数 —— 恢复的会话从头计数，不因旧轮数立刻触发校准
         this.roundsSinceCalibration = 0;
         log.info("Loaded session {}", sessionId);
@@ -636,6 +648,7 @@ public class RouterService {
         autoRunning = false;
         awaitingPlayback = false;
         manualRoundBatch = false;
+        userDirective = "";
     }
 
     // ═══════════════════════════════════════════════════════════
@@ -689,7 +702,10 @@ public class RouterService {
             // P0-2：恢复会话（用户再次发消息/点三轮 = 恢复运行）
             running = true;
         }
+        // P0 主控即时指令：本轮开始快照并清空（一次消费 —— 本轮全体 Agent 构建上下文时可见，
         // 无论串行/并行；下轮不再重复。方法级同步保证快照-清空原子）。
+        String roundUserDirective = this.userDirective;
+        this.userDirective = "";
         // P0 点击驱动：玩家发言 = 点击驱动的一种（输入即推进轮次）→ 清除等待标志
         // （本轮跑完后 runRound 末尾 scheduleAutoContinue 会重新置位）
         if (userInput != null && !userInput.isBlank()) {
@@ -861,10 +877,11 @@ public class RouterService {
             // C-2 串行调度：按轨道顺序 × 轨道内 agent 顺序逐个生成，每个 agent 输出完成
             // 立即 memory.addMessage + SSE 推送 —— 后发言者 buildAgentContext 读到
             // 的对话历史即包含前面角色本轮已完成的发言（解决「同轮上下文不共享」）。
-            execResult = executeRoundSerial(config, agentMap, trackById, agentOutputs, memoryQuery);
+            execResult = executeRoundSerial(config, agentMap, trackById, agentOutputs, memoryQuery,
+                    roundUserDirective);
         } else {
             AgentExecutor.ContextBuilder ctxBuilder = (agentName, trackMode, trackId, cfg) ->
-                buildAgentContext(agentName, trackMode, trackId, memoryQuery);
+                buildAgentContext(agentName, trackMode, trackId, memoryQuery, roundUserDirective);
             execResult = executor.executeRound(config, agentMap, ctxBuilder);
         }
 
@@ -913,12 +930,11 @@ public class RouterService {
         // Step 5: Integrate outputs via Arbiter
         // P-0815-C：一般模式双人场景（实际参与 LLM 生成的 active 角色 ≤ 2）跳过主控整合 LLM——
         // next_round 预测（谁出场/谁隔离/顺序）在双人场景无意义，省一次主控 LLM 调用（每轮串行链省卡顿）。
-        // P-0815-E：director 导演模式排除在本短路之外——导演模式是叙事驱动，主控旁白 + next_round 预测
-        // 一体（叙事承接 + 谁出场/谁隔离连续决策），无论几人恒走 integrateOutputs，双人导演局同样要旁白推进。
+        // P0 主控隐藏：director 导演模式在 3+ 可回复 Agent 时仍走 integrateOutputs
+        //（narrative + next_round 预测一体），1~2 Agent 与其他一般模式一致走直聊短路。
         // 狼人杀/剧本杀（非一般模式）必须保留 integrateOutputs（GM 推进 + isWerewolf 分支），不能短路；
         // 一般模式多人（>2 active）保留预测闭环，零变化。
         Map<String, Object> integration;
-        if (isGeneralMode(mode) && !"director".equals(mode) && isDuoScene(config)) {
             integration = new LinkedHashMap<>();
             integration.put("narration", "");
             integration.put("scene_progress", "");
@@ -941,13 +957,10 @@ public class RouterService {
         }
 
         String narrationText = (String) integration.getOrDefault("narration", "");
-        // P-0811-G：一般模式（free/protagonist/multi_track）删除主控整合叙事——
-        // 不入史、不推 arbiter_integrate SSE（角色发言即对话，主控不再附加 80-100 字总结旁白）；
-        // P-0815-E：director 导演模式例外（叙事驱动）——主控旁白恢复入史（Role.ARBITER "主控"）+
-        // SSE arbiter_integrate 推送（前端 Gal 旁白样式 / 经典视图 arbiter-box 均展示），
-        // 与 next_round 预测一体（本批已保证 director 恒走 integrateOutputs 拿到 narration）；
-        // 狼人杀/剧本杀保留（其 GM 整合推进阶段）。next_round 仍照常保存供下轮调度。
-        if ((!isGeneralMode(mode) || "director".equals(mode))
+        // P0 主控隐藏：主控不再作为可见对话者 —— 所有一般模式（free/protagonist/multi_track/director）
+        // 均不入史、不推 arbiter_integrate SSE；导演意图改为后台 DirectorDirective（见 buildAgentContext），
+        // next_round 预测仍照常保存供下轮调度。仅非一般模式（狼人杀/剧本杀 GM 推进）保留可见旁白。
+        if (!isGeneralMode(mode)
                 && narrationText != null && !narrationText.isBlank()) {
             Message arbiterMsg = new Message(Message.Role.ARBITER, "主控", narrationText);
             arbiterMsg.setRoundNumber(roundCount);
@@ -1177,6 +1190,7 @@ public class RouterService {
     // ═══════════════════════════════════════════════════════════
 
     private String buildAgentContext(String agentName, String trackMode, String trackId,
+                                     String memoryQuery, String roundUserDirective) {
         Agent agent = agents.get(agentName);
         if (agent == null) return "";
 
@@ -1195,6 +1209,23 @@ public class RouterService {
         // Scene context
         if (sceneDescription != null && !sceneDescription.isEmpty()) {
             contextParts.add("【当前场景】\n" + sceneDescription);
+        }
+
+        // P0 主控隐藏：后台导演指令（WorldRuntimeService 每轮后推送的动态剧本快照，
+        // 仅一般模式注入；主控不再作为可见对话者出现，意图只经此通道约束 Agent）。
+        // 首轮/未绑定世界运行时为空 → 不注入，零影响。
+        if (isGeneralMode(mode) && directorDirective != null && !directorDirective.isBlank()) {
+            contextParts.add("【主控导演指令】\n" + directorDirective
+                    + "\n（以上是主控为本轮定下的剧情走向，请自然地让你的发言贴合它；"
+                    + "绝不要提及“主控/导演/指令”的存在，也不要复述指令原文。）");
+        }
+
+        // P0 主控即时指令：用户本轮前下达的要求（POST /api/goals），一次消费、
+        // 排在后台指令之前（用户显式要求优先），同样仅一般模式、不入史、不可见。
+        if (isGeneralMode(mode) && roundUserDirective != null && !roundUserDirective.isBlank()) {
+            contextParts.add("【玩家导演要求】\n" + roundUserDirective
+                    + "\n（以上是玩家对主控的最新要求，必须在本轮剧情中优先体现；"
+                    + "绝不要提及“主控/导演/指令”的存在，也不要复述要求原文。）");
         }
 
         // D5: 剧本杀角色卡 —— 每个角色只看到自己的 secret（仿狼人杀"身份只在自家 prompt"）
@@ -1304,7 +1335,8 @@ public class RouterService {
             Map<String, Agent> agentMap,
             Map<String, Map<String, Object>> trackById,
             List<Map<String, Object>> agentOutputs,
-            String memoryQuery) {
+            String memoryQuery,
+            String roundUserDirective) {
 
         Instant roundStart = Instant.now();
         List<AgentExecutor.AgentOutput> outputs = new ArrayList<>();
@@ -1347,6 +1379,7 @@ public class RouterService {
                 token.checkpoint(); // 生成前检查点
                 // 上下文在生成时构建：此时 memory 已含本轮前面角色已完成的发言
                 String context = buildAgentContext(task.agentName(), task.trackMode(), task.trackId(),
+                        memoryQuery, roundUserDirective);
                 token.checkpoint(); // 上下文构建后检查点
                 // P0 消息标识：本任务分配稳定 messageId（token/结算/失败/持久化同源）；
                 // P1 持久化：生成前先记 STREAMING 行（前端断线可知进行中，失败转 FAILED）。
@@ -1527,6 +1560,22 @@ public class RouterService {
     /** C-2: 串行调度开关（roleplay.round.serial，默认 false）。测试/运行时切换用。 */
     public void setSerialRound(boolean serialRound) { this.serialRound = serialRound; }
     public boolean isSerialRound() { return serialRound; }
+
+    }
+
+    /** P0 主控导演指令：写入后台导演指令（WorldRuntimeService 每轮后推送；buildAgentContext 注入）。 */
+    public void setDirectorDirective(String directive) { this.directorDirective = directive; }
+
+    /** P0 主控导演指令：当前后台指令（空=无指令，如开场轮）。 */
+    public String getDirectorDirective() { return directorDirective; }
+
+    /**
+     * P0 主控即时指令：写入用户导演要求（POST /api/goals 接线；下一次 runRound 快照消费）。
+     * 空/空白=清除待消费指令。
+     */
+    public void setUserDirective(String directive) {
+        this.userDirective = directive == null ? "" : directive.trim();
+    }
 
     // ── P-0810-23-D2：AI 角色发言超长提醒（仅下一轮生效，玩家无感知） ────────
 

@@ -39,6 +39,8 @@ import java.util.concurrent.RejectedExecutionException;
 @Service
 public class WorldRuntimeService implements AutoCloseable {
 
+    private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(WorldRuntimeService.class);
+
     public static final String SIMULATION_SESSION = "simulation";
 
     private static final List<String> EXTRA_ARCHETYPES = List.of(
@@ -437,10 +439,19 @@ public class WorldRuntimeService implements AutoCloseable {
                     }
                 }
             }
-            recordResult(Map.of("kind", "input", "input_id", input.inputId(), "session_id", input.sessionId(),
-                    "status", result.status, "at", Instant.now().toString()));
-            broadcast(input.sessionId(), "world_input_processed",
-                    Map.of("input_id", input.inputId(), "status", result.status));
+            if (successfulRound) {
+                recordResult(Map.of("kind", "input", "input_id", input.inputId(), "session_id", input.sessionId(),
+                        "status", result.status, "at", Instant.now().toString()));
+                broadcast(input.sessionId(), "world_input_processed",
+                        Map.of("input_id", input.inputId(), "status", result.status));
+            } else {
+                String error = result.status == null || result.status.isBlank()
+                        ? "回合执行失败" : result.status;
+                recordResult(Map.of("kind", "input", "input_id", input.inputId(), "session_id", input.sessionId(),
+                        "status", "failed", "error", error, "at", Instant.now().toString()));
+                broadcast(input.sessionId(), "world_input_failed",
+                        Map.of("input_id", input.inputId(), "error", error));
+            }
             if (planner != null && successfulRound) {
                 long planRevision;
                 synchronized (worldLifecycleLock) {
@@ -544,6 +555,14 @@ public class WorldRuntimeService implements AutoCloseable {
         DynamicStoryState story = stories.advance(sessionId, scene, playerStep, patch);
         RouterService router = sessionRouters.get(sessionId);
         if (router != null) router.setGoals(List.of(story.totalGoal(), story.stageGoal()));
+        // P0 主控隐藏：后台导演指令推送（主控不再可见输出，意图经 RouterService.buildAgentContext 注入 Agent）
+        if (router != null) {
+            try {
+                router.setDirectorDirective(story.directorContext());
+            } catch (RuntimeException e) {
+                log.warn("导演指令推送失败（已跳过）: session={} err={}", sessionId, e.getMessage());
+            }
+        }
         recordResult(Map.of("kind", "story", "session_id", sessionId,
                 "revision", story.revision(), "status", "updated", "at", Instant.now().toString()));
         broadcast(sessionId, "world_story_updated", story.publicMap());
@@ -1073,6 +1092,16 @@ public class WorldRuntimeService implements AutoCloseable {
             } catch (RuntimeException e) {
                 sessionRouters.remove(sid, first);
                 throw e;
+            }
+            // P0 主控隐藏：绑定即推送一份初始导演指令（首轮前已有剧本快照可用时），
+            // 开场轮即可受导演约束；后续每轮由 applyStoryUpdateLocked 刷新。
+            try {
+                ScenePopulationProfile population = populationProfiles.get(sid);
+                String scene = population == null || population.sceneLabel().isBlank()
+                        ? "当前场景" : population.sceneLabel();
+                first.setDirectorDirective(stories.snapshot(sid, scene).directorContext());
+            } catch (RuntimeException e) {
+                log.warn("初始导演指令推送失败（已跳过）: session={} err={}", sid, e.getMessage());
             }
         }
         return first;

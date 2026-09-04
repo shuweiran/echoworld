@@ -35,19 +35,19 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * P-0815-E：director 导演模式恢复主控整合旁白（主人 2026-08-15 拍板）。
+ * P0 主控隐藏：director 导演模式不再输出可见主控旁白（主人报告 P0-4 拍板）。
  *
- * <p>背景：P-0811-G 删除了所有一般模式（free/protagonist/multi_track/director）的主控叙事，
- * P-0815-C 双人场景又短路了 integrateOutputs——导致导演模式完全没有旁白。本批：
- * ① 双人短路排除 director（director 无论几人恒走 integrateOutputs，旁白 + next_round 一体）；
- * ② 旁白入史/推送条件放开 director（仅 director 恢复，free/protagonist/multi_track 仍无旁白）。
+ * <p>背景：P-0811-G 删除了 free/protagonist/multi_track 的主控叙事，P-0815-E 曾恢复
+ * director 可见旁白；P0 改造将主控彻底从可见会话剥离 —— 所有一般模式（free/protagonist/
+ * multi_track/director）均不入史、不推 arbiter_integrate SSE；导演意图改为后台
+ * DirectorDirective（WorldRuntimeService 每轮后推送），在 Agent 生成前注入上下文。
  *
  * <p>验证：
- * ① director 双人（2 active AI）→ integrateOutputs 被调用 + narration 入史（Role.ARBITER "主控"）
- *    + SSE broadcastArbiterIntegrate 推送；
- * ② free 双人（2 active）→ 仍短路不调用 + 无旁白入史 + 无 SSE 推送（P-0815-C/P-0811-G 行为保持）；
- * ③ director 多人（3 active）→ 走原逻辑（integrateOutputs 被调用 + 旁白入史 + SSE 推送）；
- * ④ 狼人杀（2 active）→ 不受影响（integrateOutputs 仍被调用 + 旁白入史 + SSE 推送，GM 推进保留）。
+ * ① director 双人 → 直接对话短路（不调 integrate），旁白不入史 + 无 SSE 推送；
+ * ② free 双人 → 仍短路不调用 + 无旁白入史 + 无 SSE 推送（保持）；
+ * ③ director 多人 → integrateOutputs 被调用（预测保留），旁白不入史 + 无 SSE 推送；
+ * ④ 狼人杀 → 不受影响（GM 推进保留 + 旁白入史 + SSE 推送，会话定向 3 参）；
+ * ⑤ 后台导演指令 → 注入 Agent 上下文（【主控导演指令】），且不入史、不可见。
  */
 class RouterServiceDirectorNarrationTest {
 
@@ -68,7 +68,11 @@ class RouterServiceDirectorNarrationTest {
                                     List<String> agents, List<String> activeAgents) {
         LLMClient llm = mock(LLMClient.class);
         when(llm.callSync(anyList(), any())).thenReturn("测试发言");
+        return newRouterWithLlm(llm, mode, protagonist, agents, activeAgents);
+    }
 
+    private RouterService newRouterWithLlm(LLMClient llm, String mode, String protagonist,
+                                           List<String> agents, List<String> activeAgents) {
         arbiter = mock(ArbiterService.class);
         Map<String, Object> track = new LinkedHashMap<>();
         track.put("id", "main");
@@ -129,10 +133,10 @@ class RouterServiceDirectorNarrationTest {
         assertFalse(found, "memory 不应出现 ARBITER 主控旁白（一般模式对话驱动模式保持无旁白）");
     }
 
-    // ── ① director 双人 → integrateOutputs 被调用 + 旁白入史 + SSE 广播 ──
+    // ── ① director 双人 → 直接对话短路（无 integrate），旁白不可见 ──
 
     @Test
-    @DisplayName("① director 双人（2 active AI）→ integrateOutputs 被调用 + 旁白入史 + SSE 广播 arbiter_integrate")
+    @DisplayName("① director 双人（2 active AI）→ 直接对话短路不调用 integrate，旁白不入史、无 SSE")
     void directorDuo_restoresNarration() {
         RouterService router = newRouter("director", "", List.of("A", "B"), List.of("A", "B"));
 
@@ -140,14 +144,15 @@ class RouterServiceDirectorNarrationTest {
 
         assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
         assertEquals(2, result.agentOutputs.size(), "双 AI 角色均应发言");
-        // ①a 双人导演局不再短路：integrateOutputs 恒被调用（旁白 + next_round 一体）
-        verify(arbiter, times(1)).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
-        // ①b narration 入史（Role.ARBITER "主控"）
-        assertNarrationInMemory("整合旁白");
-        // ①c SSE 广播 arbiter_integrate（{round, narration}）
-        ArgumentCaptor<String> narrationCaptor = ArgumentCaptor.forClass(String.class);
-        verify(sse, times(1)).broadcastArbiterIntegrate(anyInt(), narrationCaptor.capture());
-        assertEquals("整合旁白", narrationCaptor.getValue(), "SSE 广播的 narration 应为整合旁白");
+        // ①a 直接对话短路（≤2 可回复者走确定性轨道，不调仲裁 LLM；与 free 双人同路径）
+        verify(arbiter, never()).configureTracks(anyString(), anyList(), anyString(), anyString(),
+                anyString(), anyList(), anyList(), anySet(), any());
+        verify(arbiter, never()).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
+        // ①b P0 主控隐藏：narration 不入史
+        assertNoNarrationInMemory();
+        // ①c P0 主控隐藏：无 arbiter_integrate SSE（2 参旧重载与 3 参会话重载均不调用）
+        verify(sse, never()).broadcastArbiterIntegrate(anyInt(), anyString());
+        verify(sse, never()).broadcastArbiterIntegrate(anyString(), anyInt(), anyString());
     }
 
     // ── ② free 双人 → 仍短路不调用 + 无旁白入史 + 无 SSE 推送（P-0815-C/P-0811-G 保持）──
@@ -161,15 +166,17 @@ class RouterServiceDirectorNarrationTest {
 
         assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
         assertEquals(2, result.agentOutputs.size());
+        verify(arbiter, never()).configureTracks(anyString(), anyList(), anyString(), anyString(),
+                anyString(), anyList(), anyList(), anySet(), any());
         verify(arbiter, never()).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
         assertNoNarrationInMemory();
         verify(sse, never()).broadcastArbiterIntegrate(anyInt(), anyString());
     }
 
-    // ── ③ director 多人 → 走原逻辑（integrateOutputs + 旁白入史 + SSE 推送）──
+    // ── ③ director 多人 → integrateOutputs 被调用（预测保留），旁白不可见 ──
 
     @Test
-    @DisplayName("③ director 多人（3 active）→ integrateOutputs 被调用 + 旁白入史 + SSE 广播")
+    @DisplayName("③ director 多人（3 active）→ integrateOutputs 被调用，旁白不入史、无 SSE")
     void directorMulti_restoresNarration() {
         RouterService router = newRouter("director", "", List.of("A", "B", "C"), List.of("A", "B", "C"));
 
@@ -177,15 +184,19 @@ class RouterServiceDirectorNarrationTest {
 
         assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
         assertEquals(3, result.agentOutputs.size());
+        verify(arbiter, times(1)).configureTracks(anyString(), anyList(), anyString(), anyString(),
+                anyString(), anyList(), anyList(), anySet(), any());
         verify(arbiter, times(1)).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
-        assertNarrationInMemory("整合旁白");
-        verify(sse, times(1)).broadcastArbiterIntegrate(anyInt(), anyString());
+        // P0 主控隐藏：不入史、不推送
+        assertNoNarrationInMemory();
+        verify(sse, never()).broadcastArbiterIntegrate(anyInt(), anyString());
+        verify(sse, never()).broadcastArbiterIntegrate(anyString(), anyInt(), anyString());
     }
 
     // ── ④ 狼人杀（2 active）→ 不受影响（GM 推进保留 + 旁白入史 + SSE 推送）──
 
     @Test
-    @DisplayName("④ 狼人杀（2 active）→ integrateOutputs 仍被调用 + 旁白入史 + SSE 广播（GM 推进保留）")
+    @DisplayName("④ 狼人杀（2 active）→ integrateOutputs 仍被调用 + 旁白入史 + SSE 广播（GM 推进保留，会话定向）")
     void werewolf_unchanged() {
         RouterService router = newRouter("werewolf", "", List.of("A", "B"), List.of("A", "B"));
 
@@ -195,6 +206,122 @@ class RouterServiceDirectorNarrationTest {
         assertEquals(2, result.agentOutputs.size());
         verify(arbiter, times(1)).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
         assertNarrationInMemory("整合旁白");
-        verify(sse, times(1)).broadcastArbiterIntegrate(anyInt(), anyString());
+        // 会话定向 3 参重载（P0-1 多会话隔离；载荷与旧 2 参与义一致，仅多 session_id 定向）
+        ArgumentCaptor<String> narrationCaptor = ArgumentCaptor.forClass(String.class);
+        verify(sse, times(1)).broadcastArbiterIntegrate(
+                org.mockito.ArgumentMatchers.eq(SESSION_ID), anyInt(), narrationCaptor.capture());
+        assertEquals("整合旁白", narrationCaptor.getValue(), "SSE 广播的 narration 应为整合旁白");
+    }
+
+    // ── ⑤ 后台导演指令注入 Agent 上下文（P0 主控隐藏配套） ──
+
+    @Test
+    @DisplayName("⑤ setDirectorDirective → Agent 上下文含【主控导演指令】，指令本身不入史、不可见")
+    void directorDirective_injectedIntoAgentContext() {
+        List<String> captured = new ArrayList<>();
+        LLMClient llm = mock(LLMClient.class);
+        when(llm.callSync(anyList(), any())).thenAnswer(inv -> {
+            @SuppressWarnings("unchecked")
+            List<Message> msgs = inv.getArgument(0);
+            String ctx = msgs.stream()
+                    .map(m -> String.valueOf(m.getContent()))
+                    .collect(java.util.stream.Collectors.joining("\n"));
+            captured.add(ctx);
+            return "测试发言";
+        });
+        RouterService router = newRouterWithLlm(llm, "free", "", List.of("A", "B"), List.of("A", "B"));
+        router.setDirectorDirective("下一拍：古堡停电，众人寻找光源");
+
+        RouterService.RoundResult result = router.runRound(null, null);
+
+        assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
+        assertFalse(captured.isEmpty(), "应有 LLM 调用");
+        for (String ctx : captured) {
+            assertTrue(ctx.contains("【主控导演指令】"), "Agent 上下文应含导演指令块");
+            assertTrue(ctx.contains("下一拍：古堡停电"), "Agent 上下文应含指令内容");
+        }
+        // 指令只走上下文，不入史、不可见（无 ARBITER 消息）
+        assertNoNarrationInMemory();
+        assertTrue(memory.getSession().getMessages().stream()
+                .noneMatch(m -> String.valueOf(m.getContent()).contains("下一拍：古堡停电")),
+                "导演指令原文不应入史");
+    }
+
+    // ── ⑥ 用户导演指令一次消费（P0 主控即时生效） ──
+
+    @Test
+    @DisplayName("⑥ setUserDirective → 下一轮 Agent 上下文可见且仅消费一次；再下一轮不再出现")
+    void userDirective_consumedOnceByNextRound() {
+        List<String> captured = new ArrayList<>();
+        LLMClient llm = mock(LLMClient.class);
+        when(llm.callSync(anyList(), any())).thenAnswer(inv -> {
+            @SuppressWarnings("unchecked")
+            List<Message> msgs = inv.getArgument(0);
+            String ctx = msgs.stream()
+                    .map(m -> String.valueOf(m.getContent()))
+                    .collect(java.util.stream.Collectors.joining("\n"));
+            captured.add(ctx);
+            return "测试发言";
+        });
+        RouterService router = newRouterWithLlm(llm, "free", "", List.of("A", "B"), List.of("A", "B"));
+        router.setUserDirective("玩家对主控的最新要求：下一句离开咖啡店");
+
+        RouterService.RoundResult r1 = router.runRound(null, null); // 第 1 轮
+        assertFalse(r1.status.startsWith("error"), "round should not error: " + r1.status);
+        assertFalse(captured.isEmpty(), "应有 LLM 调用");
+        int afterFirst = captured.size();
+        for (String ctx : captured) {
+            assertTrue(ctx.contains("【玩家导演要求】"), "下一轮上下文应含用户指令块");
+            assertTrue(ctx.contains("离开咖啡店"), "下一轮上下文应含指令内容");
+        }
+
+        RouterService.RoundResult r2 = router.runRound(null, null); // 第 2 轮（无新指令）
+        assertFalse(r2.status.startsWith("error"), "round should not error: " + r2.status);
+        List<String> round2 = new ArrayList<>(captured.subList(afterFirst, captured.size()));
+        assertFalse(round2.isEmpty(), "第 2 轮应有 LLM 调用");
+        for (String ctx : round2) {
+            assertFalse(ctx.contains("离开咖啡店"), "一次消费后下轮不得残留用户指令");
+        }
+        // 指令不入史
+        assertTrue(memory.getSession().getMessages().stream()
+                .noneMatch(m -> String.valueOf(m.getContent()).contains("离开咖啡店")),
+                "用户指令原文不应入史");
+    }
+
+    // ── ⑦ POST /api/goals 接线：目标写入 + 指令即时进入 Router ──
+
+    @Test
+    @DisplayName("⑦ POST /api/goals → setGoals + setUserDirective（下轮 runRound 即见，不滞后）")
+    void setGoals_wiresUserDirective() {
+        RouterService sessionRouter = mock(RouterService.class);
+        com.roleplay.engine.service.SessionRegistry sessions =
+                mock(com.roleplay.engine.service.SessionRegistry.class);
+        when(sessions.require("s1")).thenReturn(sessionRouter);
+        com.roleplay.engine.controller.SessionController ctrl =
+                new com.roleplay.engine.controller.SessionController(
+                        mock(RouterService.class),
+                        mock(com.roleplay.engine.service.ScriptService.class),
+                        mock(com.roleplay.engine.service.PrivateChatService.class),
+                        mock(com.roleplay.engine.controller.CharacterController.class),
+                        mock(com.roleplay.engine.controller.SceneController.class),
+                        mock(com.roleplay.engine.interrupt.InterruptManager.class),
+                        sessions);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("session_id", "s1");
+        body.put("goals", List.of("下一句离开咖啡店"));
+        ctrl.setGoals(body);
+
+        verify(sessionRouter).setGoals(List.of("下一句离开咖啡店"));
+        ArgumentCaptor<String> dirCap = ArgumentCaptor.forClass(String.class);
+        verify(sessionRouter).setUserDirective(dirCap.capture());
+        assertTrue(dirCap.getValue().contains("离开咖啡店"), "指令应即时进入 Router: " + dirCap.getValue());
+
+        // 空目标=清除待消费指令
+        Map<String, Object> clearBody = new LinkedHashMap<>();
+        clearBody.put("session_id", "s1");
+        clearBody.put("goals", List.of());
+        ctrl.setGoals(clearBody);
+        verify(sessionRouter).setUserDirective("");
     }
 }
