@@ -100,7 +100,14 @@ export function GameBridge() {
       try {
         if (!useAppStore.getState().initialized) {
           setStep('正在连接后端…');
-          await app.loadState();
+          // P-0904（fix）：7567e06 起 /api/state 要求 session_id，新页面加载尚无会话 → 无参 400。
+          // 此处仅是可选预热，各模式分支随后会 resume/init/startScene 自建会话，
+          // 失败必须静默降级继续，不得冒泡到外层 catch 误报「对局启动失败」。
+          try {
+            await app.loadState();
+          } catch (e) {
+            console.warn('[GameBridge] 预热 loadState 失败（无 session 预期 400，已忽略）：', e);
+          }
         }
         if (gameMode === 'murder') {
           // P-0819-P：浏览器刷新/进程重启后优先恢复已有剧本杀，禁止再次 POST init 生成第二局。
