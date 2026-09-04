@@ -144,7 +144,7 @@ export function ScriptSelectPage() {
       <div className="card2">
         {/* 剧本列表 */}
         <div className="scripts-list">
-          {MOBILE_BUILD || mode === 'general'
+          {!MOBILE_BUILD && mode === 'murder'
             ? murders.map(s => (
                 <div
                   key={s.id}
@@ -204,7 +204,7 @@ export function ScriptSelectPage() {
                   </div>
                   <div className="si-meta">
                     <span>👤 {s.roles.length} 角色</span>
-                    <span>🗺️ {s.map.width}×{s.map.height} 地图</span>
+                    {s.map && <span>🗺️ {s.map.width}×{s.map.height} 地图</span>}
                     <span>🏷️ {s.tags.join(' · ')}</span>
                     {s.source && s.source !== 'preset' && <span className="tag2 tag2-gold">{sourceLabel(s)}</span>}
                   </div>
