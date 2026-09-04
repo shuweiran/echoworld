@@ -114,13 +114,13 @@ roleplay:
     # （主人 2026-08-02 反馈“前端还是并联输出”→ 确认根因即本开关默认 false，现按需求开启串行；
     #  如需切回并行只改回 false 并重启服务即可）
     serial: true
-    # P-0813-A: 一般模式自动续轮延时（毫秒；0=禁用；默认 3000）——每轮完成后延时自动跑下一轮
-    # （导演模式 AI 自主推进），玩家发言打断 pending 任务；狼人杀/剧本杀走各自状态机不误触发
-    # P-0814-A: playback-driven=true（默认）时本键被忽略——不再定时自续，改为等「播出完毕」信号
+    # P0 点击驱动（Gal 界面只有点击与输入）：一般模式一轮生成完即停，由等待态点击
+    # （POST /api/simulation/playback_done）或玩家输入驱动下一轮；定时自续已彻底移除，
+    # auto-continue-ms 恒被忽略（键保留兼容旧配置）。起局自动第一轮（AI 开场白）不受影响。
     auto-continue-ms: 3000
     # 无玩家的 2D 社会实验按节奏自主续聊，旁听只负责呈现，不能成为 AI 对话的生命线。
     # 玩家实际加入会话时仍可随时打断、离场；false=按 pacing 间隔自动进入下一轮。
-    playback-driven: false
+    playback-driven: true
     # P-0814-B: 2D 对话组「等待播出完毕」超时（毫秒；默认 30000）——无玩家成员组（AI-AI/单 AI）
     # 等待超时自动解散（防 awaitPlayback 永久阻塞角色冻结）；有玩家成员组不自动解散（玩家输入/点击唤醒）
     group-await-timeout-ms: 30000

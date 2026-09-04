@@ -245,23 +245,28 @@ class RouterServicePlaybackDrivenTest {
         }
     }
 
-    // ── ⑥ 开关兼容旧行为（playback-driven=false → D-056 定时自续） ──
+    // ── ⑥ 开关不再门控（P0 点击驱动：定时自续已移除，false 与 true 同语义） ──
 
     @Test
-    @DisplayName("⑥ playback-driven=false：回退 D-056 旧行为（auto-continue-ms 定时自续）")
-    void disabled_oldTimerBehaviorPreserved() throws Exception {
+    @DisplayName("⑥ playback-driven=false：与 true 同语义（定时自续已移除；轮完置等待，点击/输入推进）")
+    void disabled_sameClickDrivenSemantics() throws Exception {
         CaptureSSE sse = new CaptureSSE();
         RouterService router = newRouter(sse, "director", false, false);
-        router.setPlaybackDriven(false); // 旧行为
-        router.setAutoContinueMs(300);
+        router.setPlaybackDriven(false); // 旧开关：现不再门控，不再回退定时自续
+        router.setAutoContinueMs(300); // 应被忽略
 
-        router.runRound(null, null); // 第 1 轮完成 → 调度定时续轮
+        router.runRound(null, null); // 第 1 轮完成 → 进入等待点击推进
         assertEquals(1, router.getState().get("round"));
-        assertTrue(router.hasPendingAutoContinue(), "旧行为应调度定时续轮任务");
-        assertFalse(router.isAwaitingPlayback(), "旧行为不置等待标志");
+        assertFalse(router.hasPendingAutoContinue(), "定时续轮已移除，恒无 pending 任务");
+        assertTrue(router.isAwaitingPlayback(), "轮完应置等待标志（与 true 同语义）");
 
-        awaitRoundCompletes(sse, 2, 10); // 定时自续第 2 轮
-        assertEquals(2, router.getState().get("round"), "旧行为自动跑下一轮");
+        Thread.sleep(500); // 睡过旧 autoContinueMs 窗口
+        assertEquals(1, router.getState().get("round"), "无点击/输入不自动跑下一轮");
+        assertEquals(1, countEvent(sse, "round_complete"), "仅第 1 轮完成事件");
+
+        assertTrue(router.onPlaybackDone(), "点击信号应推进下一轮（开关 false 下同样有效）");
+        awaitRoundCompletes(sse, 2, 10);
+        assertEquals(2, router.getState().get("round"), "点击驱动了第 2 轮");
         router.stop();
     }
 

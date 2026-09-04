@@ -33,15 +33,16 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * P-0813-A：一般模式后端自动续轮（roleplay.round.auto-continue-ms）。
+ * P0 点击驱动：一般模式定时自动续轮已彻底移除（roleplay.round.auto-continue-ms 退役）。
  *
  * <p>直接构造 RouterService（mock LLM/Arbiter，RouterServiceAutoFirstRoundTest 同款 harness），验证：
- * ① 配置默认值（AppConfig.RoundConfig.autoContinueMs=3000，0=禁用语义）；\n
- * ② auto-continue-ms&gt;0 → 每轮完成后延时自动跑下一轮（缩短延时验证调度：round 1 完成后自动出现 round 2）；\n
- * ③ auto-continue-ms=0 → 禁用（轮后无 pending、无续轮）；\n
- * ④ 玩家发言打断 → pending 自动续轮任务被取消（防玩家发言驱动轮次与自动续轮重复/冲突）；\n
- * ⑤ 会话销毁清理 → stop()/initSession() 取消 pending（防泄漏，stop 后不再自动跑轮）；\n
- * ⑥ 非一般模式（werewolf/script）不续轮。
+ * ① 配置默认值（AppConfig.RoundConfig.autoContinueMs=3000 键保留，行为上恒忽略）；\n
+ * ② auto-continue-ms&gt;0 也不再自动跑下一轮（轮完进入等待点击推进）；\n
+ * ③ auto-continue-ms=0 → 同样等待点击（恒无 pending、无自续）；\n
+ * ④ 玩家发言清除等待态，玩家轮跑完重新进入等待（无重复自动轮）；\n
+ * ⑤ 会话销毁清理 → stop()/initSession() 清除等待态（stop 后点击信号 no-op）；\n
+ * ⑥ 非一般模式（werewolf/script）不进入等待；\n
+ * ⑦ 手动批量（runTurns）批量中不逐轮置位，批量结束后统一进入等待（点击可继续）。
  */
 class RouterServiceAutoContinueTest {
 
@@ -129,34 +130,42 @@ class RouterServiceAutoContinueTest {
         assertEquals(0L, appConfig.getRound().getAutoContinueMs(), "0=禁用可配置");
     }
 
-    // ── ② auto-continue-ms>0 → 每轮完成后自动续轮 ──
+    // ── ② auto-continue-ms>0 也不再自动跑轮（P0 点击驱动） ──
 
     @Test
-    @DisplayName("② auto-continue-ms=300ms：round 1 完成后自动跑 round 2（导演模式 AI 自主推进）")
+    @DisplayName("② auto-continue-ms=300ms：轮完进入等待点击推进，不自动跑下一轮")
     void autoContinue_triggersNextRound() throws Exception {
         CaptureSSE sse = new CaptureSSE();
         RouterService router = newRouter(sse, "director");
-        router.setAutoContinueMs(300);
+        router.setAutoContinueMs(300); // 已退役：恒被忽略
 
         router.triggerAutoFirstRound();
-        awaitRoundCompletes(sse, 2, 10); // 第 1 轮（起局自动）+ 第 2 轮（自动续轮）
+        awaitRoundCompletes(sse, 1, 10); // 第 1 轮（起局自动）
+        assertEquals(1, router.getState().get("round"), "起局自动第一轮 round=1");
+        assertTrue(router.isAwaitingPlayback(), "轮完应进入等待点击推进");
 
-        // 轮询检测到第 2 轮完成即断言（第 3 轮在 +300ms 后，窗口充足）
-        assertEquals(2, router.getState().get("round"), "自动续轮后 round=2");
-        assertEquals(2, countEvent(sse, "round_start"), "应推 2 次 round_start（两轮）");
-        assertEquals(2, countEvent(sse, "round_complete"), "应推 2 次 round_complete（两轮）");
-
-        // 收尾：停止会话（取消后续续轮），确认不再自动跑轮
-        router.stop();
-        long before = countEvent(sse, "round_complete");
+        // 睡过旧自动续轮窗口：不得出现第 2 轮
         Thread.sleep(500);
-        assertEquals(before, countEvent(sse, "round_complete"), "stop 后不应再有续轮");
+        assertEquals(1, router.getState().get("round"), "无点击/输入不自动跑下一轮");
+        assertEquals(1, countEvent(sse, "round_start"), "仅 1 次 round_start");
+        assertEquals(1, countEvent(sse, "round_complete"), "仅 1 次 round_complete");
+
+        // 点击推进一次 → 第 2 轮
+        assertTrue(router.onPlaybackDone(), "点击信号应推进下一轮");
+        awaitRoundCompletes(sse, 2, 10);
+        assertEquals(2, router.getState().get("round"), "点击推进后 round=2");
+
+        // 收尾：停止会话，确认点击信号 no-op
+        router.stop();
+        assertFalse(router.onPlaybackDone(), "stop 后点击信号应 no-op");
+        Thread.sleep(300);
+        assertEquals(2, countEvent(sse, "round_complete"), "stop 后不应再有轮次");
     }
 
-    // ── ③ auto-continue-ms=0 → 禁用 ──
+    // ── ③ auto-continue-ms=0 → 同样等待点击（恒无 pending） ──
 
     @Test
-    @DisplayName("③ auto-continue-ms=0：禁用自动续轮（轮后无 pending、无续轮）")
+    @DisplayName("③ auto-continue-ms=0：轮完进入等待点击推进（恒无 pending、无自续）")
     void autoContinue_disabledWhenZero() throws Exception {
         CaptureSSE sse = new CaptureSSE();
         RouterService router = newRouter(sse, "director");
@@ -164,78 +173,83 @@ class RouterServiceAutoContinueTest {
 
         router.runRound(null, null); // 同步跑一轮
         assertEquals(1, router.getState().get("round"));
-        assertFalse(router.hasPendingAutoContinue(), "auto-continue-ms=0 不应调度续轮");
+        assertFalse(router.hasPendingAutoContinue(), "定时续轮已移除，恒无 pending");
+        assertTrue(router.isAwaitingPlayback(), "轮完应进入等待点击推进");
 
         Thread.sleep(400);
-        assertEquals(1, countEvent(sse, "round_complete"), "禁用后不应自动跑下一轮");
-        assertEquals(1, router.getState().get("round"), "禁用后 round 保持 1");
+        assertEquals(1, countEvent(sse, "round_complete"), "无点击/输入不自动跑下一轮");
+        assertEquals(1, router.getState().get("round"), "round 保持 1");
+        router.stop();
     }
 
-    // ── ④ 玩家发言打断 pending ──
+    // ── ④ 玩家发言清除等待态，玩家轮跑完重新进入等待 ──
 
     @Test
-    @DisplayName("④ 玩家发言取消待执行的自动续轮任务（防玩家发言驱动轮次与自动续轮重复/冲突）")
+    @DisplayName("④ 玩家发言清除等待态并驱动一轮，玩家轮跑完重新进入等待（无重复自动轮）")
     void playerSend_cancelsPendingAutoContinue() throws Exception {
         CaptureSSE sse = new CaptureSSE();
         RouterService router = newRouter(sse, "free");
-        router.setAutoContinueMs(500); // 宽窗口：pending 必然存在时再发言
+        router.setAutoContinueMs(500); // 已退役：恒被忽略
 
-        router.runRound(null, null); // 第 1 轮完成 → 调度 round 2（+500ms）
+        router.runRound(null, null); // 第 1 轮完成 → 等待点击推进
         assertEquals(1, router.getState().get("round"));
-        assertTrue(router.hasPendingAutoContinue(), "轮后应存在 pending 自动续轮任务");
+        assertTrue(router.isAwaitingPlayback(), "第 1 轮后应进入等待点击推进");
 
-        // 玩家发言：入口处取消 pending（第 1 轮遗留的自动续轮）；随后玩家轮完成会按规则重新调度新任务
+        // 玩家发言：清除等待态并驱动第 2 轮；玩家轮跑完重新进入等待
         RouterService.RoundResult playerResult = router.runRound("玩家发言", null, null);
         assertFalse(playerResult.status.startsWith("error"), "玩家发言轮不应报错: " + playerResult.status);
         assertEquals(2, router.getState().get("round"), "玩家发言驱动了第 2 轮");
+        assertTrue(router.isAwaitingPlayback(), "玩家轮跑完重新进入等待点击推进");
 
-        // 若玩家发言未取消 pending：原自动续轮会在 +500ms 触发第 3 轮 → round_complete 变 3。
-        // 立即停止（取消玩家轮后新调度的续轮），睡过窗口验证无重复自动轮。
+        // 停止并睡过旧窗口：无重复自动轮
         router.stop();
+        assertFalse(router.isAwaitingPlayback(), "stop 后等待态应清除");
         Thread.sleep(600);
         assertEquals(2, router.getState().get("round"), "玩家发言后 round=2（无重复自动轮）");
-        assertEquals(2, countEvent(sse, "round_complete"), "仅 2 轮（第 1 轮自动 + 玩家驱动轮），无多余自动轮");
+        assertEquals(2, countEvent(sse, "round_complete"), "仅 2 轮，无多余自动轮");
     }
 
-    // ── ⑤ 会话销毁/停止清理 pending ──
+    // ── ⑤ 会话销毁/停止清理等待态 ──
 
     @Test
-    @DisplayName("⑤ stop() 取消 pending 自动续轮任务（防泄漏，stop 后不再自动跑轮）")
+    @DisplayName("⑤ stop() 清除等待点击推进态（stop 后点击信号 no-op，不再跑轮）")
     void stop_cancelsPendingAutoContinue() throws Exception {
         CaptureSSE sse = new CaptureSSE();
         RouterService router = newRouter(sse, "director");
         router.setAutoContinueMs(200);
 
         router.runRound(null, null);
-        assertTrue(router.hasPendingAutoContinue(), "轮后应有 pending 任务");
+        assertTrue(router.isAwaitingPlayback(), "轮后应进入等待点击推进");
         router.stop();
-        assertFalse(router.hasPendingAutoContinue(), "stop 后 pending 应被取消");
+        assertFalse(router.isAwaitingPlayback(), "stop 后等待态应清除");
+        assertFalse(router.onPlaybackDone(), "stop 后点击信号应 no-op");
 
         Thread.sleep(500);
-        assertEquals(1, countEvent(sse, "round_complete"), "stop 后不得再自动跑轮");
+        assertEquals(1, countEvent(sse, "round_complete"), "stop 后不得再跑轮");
         assertEquals(1, router.getState().get("round"));
     }
 
     @Test
-    @DisplayName("⑤b initSession（新会话重初始化）取消 pending 自动续轮任务（防旧会话续轮串场）")
+    @DisplayName("⑤b initSession（新会话重初始化）清除等待态（防旧会话等待态串场）")
     void reinit_cancelsPendingAutoContinue() {
         CaptureSSE sse = new CaptureSSE();
         RouterService router = newRouter(sse, "director");
         router.setAutoContinueMs(500);
 
         router.runRound(null, null);
-        assertTrue(router.hasPendingAutoContinue(), "轮后应有 pending 任务");
+        assertTrue(router.isAwaitingPlayback(), "轮后应进入等待点击推进");
         router.initSession(SESSION_ID,
                 List.of(new Persona("小铃", "温柔的女仆"), new Persona("凯尔", "沉默的管家")),
                 SCENE, "director", "", "");
-        assertFalse(router.hasPendingAutoContinue(), "重新 init 后 pending 应被取消");
+        assertFalse(router.isAwaitingPlayback(), "重新 init 后等待态应清除");
+        assertFalse(router.hasPendingAutoContinue(), "恒无 pending 定时任务");
         router.stop();
     }
 
-    // ── ⑥ 非一般模式不续轮 ──
+    // ── ⑥ 非一般模式不进入等待 ──
 
     @Test
-    @DisplayName("⑥ 非一般模式（werewolf/script）自动续轮不触发（走各自状态机）")
+    @DisplayName("⑥ 非一般模式（werewolf/script）不进入等待（走各自状态机，点击信号 no-op）")
     void nonGeneralMode_noAutoContinue() throws Exception {
         for (String mode : new String[]{"werewolf", "script"}) {
             CaptureSSE sse = new CaptureSSE();
@@ -244,7 +258,8 @@ class RouterServiceAutoContinueTest {
 
             router.runRound(null, null);
             assertEquals(1, router.getState().get("round"), "mode=" + mode + " round=1");
-            assertFalse(router.hasPendingAutoContinue(), "mode=" + mode + " 不应调度自动续轮");
+            assertFalse(router.isAwaitingPlayback(), "mode=" + mode + " 不应进入等待态");
+            assertFalse(router.onPlaybackDone(), "mode=" + mode + " 点击信号应 no-op");
 
             Thread.sleep(300);
             assertEquals(1, countEvent(sse, "round_complete"), "mode=" + mode + " 不应自动跑下一轮");
@@ -252,26 +267,29 @@ class RouterServiceAutoContinueTest {
         }
     }
 
-    // ── ⑦ 手动批量（runTurns）接管 ──
+    // ── ⑦ 手动批量（runTurns）批量中不置位，批量后统一进入等待 ──
 
     @Test
-    @DisplayName("⑦ 手动批量（runTurns）取消遗留 pending，且批量后不再自动续轮（防「三轮」后多跑一轮）")
+    @DisplayName("⑦ 手动批量（runTurns）批量后进入等待点击推进（无额外自动轮，点击可继续）")
     void runTurns_cancelsPending_noContinueAfterBatch() throws Exception {
         CaptureSSE sse = new CaptureSSE();
         RouterService router = newRouter(sse, "director");
         router.setAutoContinueMs(300);
 
-        router.runRound(null, null); // 第 1 轮完成 → 调度自动续轮（+300ms）
-        assertTrue(router.hasPendingAutoContinue(), "轮后应有 pending 任务");
+        router.runRound(null, null); // 第 1 轮完成 → 等待点击推进
+        assertTrue(router.isAwaitingPlayback(), "第 1 轮后应进入等待点击推进");
 
         List<RouterService.RoundResult> results = router.runTurns(null, 2); // 手动批量：第 2、3 轮
         assertEquals(2, results.size(), "手动批量应执行 2 轮");
-        assertFalse(router.hasPendingAutoContinue(), "批量进行中/结束后不应残留或新调度续轮");
+        assertTrue(router.isAwaitingPlayback(), "批量结束后应进入等待点击推进（点击可继续）");
 
-        // 不 stop，睡过原 pending 触发窗口：若未取消，第 1 轮遗留任务会在 +300ms 触发第 4 轮
+        // 睡过旧 pending 触发窗口：无额外自动轮；点击可继续第 4 轮
         Thread.sleep(500);
         assertEquals(3, router.getState().get("round"), "批量后停在手动轮数，无额外自动轮");
-        assertEquals(3, countEvent(sse, "round_complete"), "共 3 轮（1 自动 + 2 手动批量），无多余自动轮");
+        assertEquals(3, countEvent(sse, "round_complete"), "共 3 轮（1 + 2 手动批量），无多余自动轮");
+        assertTrue(router.onPlaybackDone(), "批量后点击应可继续推进");
+        awaitRoundCompletes(sse, 4, 10);
+        assertEquals(4, router.getState().get("round"), "点击推进了第 4 轮");
         router.stop();
     }
 }
