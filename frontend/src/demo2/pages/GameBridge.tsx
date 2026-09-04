@@ -39,8 +39,7 @@ export function GameBridge() {
   const playerRole = useDemoStore(s => s.playerRole);
   const generatedMurder = useDemoStore(s => s.generatedMurder);
   const generatedGeneral = useDemoStore(s => s.generatedGeneral);
-  // P-0816-L：后端场景剧本（source='backend'）——mockData 预设 / 生成剧本之后的第三解析源
-  const backendMurder = useDemoStore(s => s.backendMurder);
+  // 后端场景剧本（source='backend'）——仅一般模式；剧本杀不再接 /api/scenes（列表隔离）
   const backendGeneral = useDemoStore(s => s.backendGeneral);
   const freeRoles = useDemoStore(s => s.freeRoles);
   const genRoles = useDemoStore(s => s.genRoles);
@@ -68,7 +67,7 @@ export function GameBridge() {
   const script = useMemo(() => {
     if (gameMode === 'murder') {
       return selectCtx.scriptId
-        ? (getMurderScriptById(selectCtx.scriptId) ?? (generatedMurder?.id === selectCtx.scriptId ? generatedMurder : undefined) ?? backendMurder.find(x => x.id === selectCtx.scriptId))
+        ? (getMurderScriptById(selectCtx.scriptId) ?? (generatedMurder?.id === selectCtx.scriptId ? generatedMurder : undefined))
         : undefined;
     }
     if (gameMode === 'general') {
@@ -77,7 +76,7 @@ export function GameBridge() {
         : undefined;
     }
     return undefined;
-  }, [gameMode, selectCtx, generatedMurder, generatedGeneral, backendMurder, backendGeneral]);
+  }, [gameMode, selectCtx, generatedMurder, generatedGeneral, backendGeneral]);
 
   /** 角色名 → 完整角色（供 characterDetails 传 persona/voice/background） */
   const roleByName = useMemo(() => {

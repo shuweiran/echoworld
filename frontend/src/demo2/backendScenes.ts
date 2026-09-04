@@ -1,29 +1,18 @@
 /**
- * backendScenes.ts — P-0816-L：后端场景（GET /api/scenes）→ 前端剧本卡（MurderScript/GeneralScript）映射
+ * backendScenes.ts — 后端场景（GET /api/scenes）→ 一般模式剧本卡映射
  *
- * 后端 GET /api/scenes 返回结构（SceneController.list + DatabaseService.entityToMap）：
- *   scene_id / name / description / keywords / category(general|werewolf) /
- *   default_roles(List<string>) / default_map(契约 v1 对象或 null) / goals(对象或 null) /
- *   initial_agent_names(List<string>) / createdAt
+ * 重要边界：
+ * - /api/scenes 是通用「场景」数据源，不等于剧本杀 MurderScript 数据源。
+ * - 剧本杀必须保留 plot / clues / truth / killerId 等完整剧本字段，不能把普通 scene
+ *   仅凭 scene_id 前缀强转成 MurderScript。
+ * - scene_id 以 script_ 开头的旧记录视为历史/运行态遗留数据，不再注入任何剧本选择列表。
+ * - category=werewolf 由狼人杀入口管理，不再混入一般模式列表。
  *
- * ── 归属决策（murder tab vs general tab）──
- *   ① scene_id 前缀 'script_' → 剧本杀模式（murder）列表：
- *     这些是剧本杀对局链路保存的谋杀剧本（SceneController.create 支持客户端指定 scene_id，
- *     旧前端剧本杀链路固定 script_xxx 前缀；实测库中 陆宅迷局/夜来香血案/迷雾别墅 等均为此类）；
- *   ② category === 'werewolf' → 一般模式列表（带 🐺 chip）：
- *     demo2 无狼人杀剧本卡页签，对齐整机版 D-033「一般模式页签 = 一般+狼人杀剧本卡（带 chip）」先例；
- *   ③ 其余（category==='general' 且非 script_ 前缀）→ 一般模式列表。
- *
- * ── 字段映射 ──
- *   通用：scene_id→id / name→title / description→background(+desc)
- *   角色：initial_agent_names（后端真实角色名，滤除 'me' 玩家占位）→ 占位 RoleCard
- *     （id=backend_<scene_id>_<name>，intro 标注「后端场景角色」；personality 等留空——
- *     后端场景不携带角色卡五层数据，姓名来自真实数据，不虚构人格，避免造假）；
- *   人数（murder 卡）：playerMin=playerMax=角色名数量（后端场景无 min/max 字段，诚实取实际人数）；
- *   地图（general 卡）：default_map 为合法契约 v1 对象则直用；否则 buildMap BSP 占位
- *     （与 P-0811-G 兜底同源，保证角色选择页/2D 探索不因缺 map 崩溃）。
+ * 后端 GET /api/scenes 当前常见结构：
+ *   scene_id / name / description / category(general|werewolf) /
+ *   default_map / initial_agent_names 等。
  */
-import type { GeneralScript, MurderScript, RoleCard, RoleSource } from './types';
+import type { GeneralScript, RoleCard, RoleSource } from './types';
 import type { ScriptMap } from '../phaser/mapData';
 import { buildMap } from './mockData';
 
@@ -41,14 +30,30 @@ export interface BackendSceneRecord {
   createdAt?: string | null;
 }
 
-/** 后端场景归属判定：script_ 前缀 → 剧本杀（murder）剧本 */
-export function isMurderBackendScene(s: BackendSceneRecord): boolean {
-  return String(s.scene_id ?? '').startsWith('script_');
+/** 狼人杀场景由狼人杀入口管理，不进入一般模式剧本列表。 */
+export function isWerewolfBackendScene(s: BackendSceneRecord): boolean {
+  return String(s.category ?? '').trim().toLowerCase() === 'werewolf';
 }
 
-/** 后端场景归属判定：werewolf 分类（展示在一般模式列表，带 🐺 chip） */
-export function isWerewolfBackendScene(s: BackendSceneRecord): boolean {
-  return String(s.category ?? '').trim() === 'werewolf';
+/**
+ * 旧版/运行态 script_* scene 不是完整 MurderScript。
+ * 它们可能来自旧链路或会话运行数据，因此从剧本选择页直接排除。
+ */
+export function isLegacyScriptBackendScene(s: BackendSceneRecord): boolean {
+  return String(s.scene_id ?? '').trim().startsWith('script_');
+}
+
+/**
+ * 后端通用 scene 是否属于「一般模式」。
+ * - category=general：明确一般模式；
+ * - category 为空：兼容旧的一般场景数据；
+ * - werewolf / murder / 未知分类：不注入一般模式；
+ * - script_*：无论 category 如何都视为旧运行态记录，避免再次串栏。
+ */
+export function isGeneralBackendScene(s: BackendSceneRecord): boolean {
+  if (isLegacyScriptBackendScene(s)) return false;
+  const category = String(s.category ?? '').trim().toLowerCase();
+  return category === '' || category === 'general';
 }
 
 /** 后端真实角色名（滤除 'me' 玩家占位，去重） */
@@ -93,46 +98,20 @@ function defaultMapOf(s: BackendSceneRecord): ScriptMap | null {
   return null;
 }
 
-/** 后端场景 → 剧本杀（murder）剧本卡 */
-export function backendSceneToMurder(s: BackendSceneRecord): MurderScript {
-  const sceneId = String(s.scene_id ?? '');
-  const name = String(s.name ?? '未命名剧本');
-  const desc = String(s.description ?? '').trim() || name;
-  const roles = rolesOf(s);
-  const n = Math.max(1, roles.length);
-  return {
-    id: sceneId,
-    title: name,
-    tags: [isWerewolfBackendScene(s) ? '狼人杀' : '后端'],
-    background: desc,
-    playerMin: n,
-    playerMax: n,
-    plot: '',
-    relations: [],
-    roles,
-    clues: [],
-    locations: [],
-    truth: '',
-    killerId: '',
-    source: 'backend',
-  };
-}
-
-/** 后端场景 → 一般模式剧本卡（category=werewolf 时带 🐺 chip） */
+/** 后端场景 → 一般模式剧本卡。仅应对 isGeneralBackendScene(s)===true 的记录调用。 */
 export function backendSceneToGeneral(s: BackendSceneRecord): GeneralScript {
   const sceneId = String(s.scene_id ?? '');
   const name = String(s.name ?? '未命名场景');
   const desc = String(s.description ?? '').trim() || name;
-  const ww = isWerewolfBackendScene(s);
   // seed 取 scene_id 哈希，保证同场景同 seed（BSP 确定性，刷新不换图）
   let seed = 20260816;
   for (let i = 0; i < sceneId.length; i++) seed = (seed * 31 + sceneId.charCodeAt(i)) >>> 0;
   return {
     id: sceneId,
     title: name,
-    emoji: ww ? '🐺' : '🏞️',
-    theme: ww ? '狼人杀' : '一般模式',
-    tags: ww ? ['🐺 狼人杀', '后端'] : ['后端场景'],
+    emoji: '🏞️',
+    theme: '一般模式',
+    tags: ['后端场景'],
     desc,
     background: desc,
     relations: [],

@@ -242,11 +242,6 @@ interface DemoState {
   selectCtx: SelectCtx;
   enterRoles: (ctx: SelectCtx) => void;
 
-  // 剧本选择（A）
-  selectedMurderId: string | null;
-  selectedGeneralId: string | null;
-  pickScript: (kind: 'murder' | 'general', id: string) => void;
-
   runMode: RunMode;
   setRunMode: (m: RunMode) => void;
   /** 一般模式：是否带玩家（带=玩家化身进局；不带=纯 AI 观看） */
@@ -258,8 +253,6 @@ interface DemoState {
   playerRole: RoleCard | null;
   selectRole: (id: string | null) => void;
   setPlayerRole: (r: RoleCard | null) => void;
-  /** 进入角色选择页时选定的角色进入玩家位 */
-  choosePlayerRole: (r: RoleCard) => void;
 
   // 自由角色库
   freeRoles: RoleCard[];
@@ -270,8 +263,6 @@ interface DemoState {
   upsertRole: (r: RoleCard) => void;
   /** 统一角色库：删除（从自由角色库或 AI 生成库移除） */
   removeRole: (id: string) => void;
-  /** 把自由角色加入当前剧本默认角色（角色来源） */
-  importRoleToScript: (roleId: string) => void;
   /** 新增自定义角色并加入指定剧本 */
   addNewRoleToScript: (r: RoleCard, scriptId?: string | null) => void;
   /** 从其他剧本导入角色卡到当前剧本 */
@@ -280,14 +271,12 @@ interface DemoState {
   openRoleDetail: (kind: 'murder' | 'general', scriptId: string | null, roleId: string) => void;
   /** 当前剧本已添加的额外角色（按剧本 id 隔离） */
   extraRoles: Record<string, RoleCard[]>;
-  setExtraRoles: (scriptId: string, r: RoleCard[]) => void;
   /** 从指定剧本删除已添加的角色 */
   removeExtraRole: (scriptId: string, roleId: string) => void;
   /** 更新指定剧本中已添加的角色 */
   updateExtraRole: (scriptId: string, role: RoleCard) => void;
   /** 角色选择点亮态：剧本 id → 选中的角色 id 列表（没点亮的不进游戏） */
   litRoles: Record<string, string[]>;
-  toggleLitRole: (scriptId: string, roleId: string) => void;
   setLitRoles: (scriptId: string, ids: string[]) => void;
   /** 已从剧本移除的默认角色 id（持久，角色库/角色选择页均不显示） */
   removedScriptRoles: Record<string, string[]>;
@@ -302,10 +291,10 @@ interface DemoState {
   setGeneratedMurder: (s: MurderScript | null) => void;
   setGeneratedGeneral: (s: GeneralScript | null) => void;
   addGenRoles: (roles: RoleCard[]) => void;
-  /** P-0816-L：后端场景剧本（GET /api/scenes 映射，source='backend'；后端为数据源，不落 localStorage） */
-  backendMurder: MurderScript[];
+  /** P-0816-L：后端场景（GET /api/scenes 映射，source='backend'）——仅一般模式；
+   *  剧本杀列表不接 /api/scenes（旧 script_* 强转 MurderScript 的遗漏已随列表隔离移除） */
   backendGeneral: GeneralScript[];
-  setBackendScripts: (murder: MurderScript[], general: GeneralScript[]) => void;
+  setBackendScripts: (general: GeneralScript[]) => void;
   /** P-0816-L：删除后端场景后从列表移除（返回是否命中） */
   removeBackendScript: (id: string) => boolean;
   /** P-0811-G：一般模式 LLM 生成地图缓存（scriptId → 契约 v1 地图；进入 explore 复用） */
@@ -340,8 +329,7 @@ export const useDemoStore = create<DemoState>((set, get) => ({
   generatedMurder: loadGenerated().murder,
   generatedGeneral: loadGenerated().general,
   genRoles: loadJsonArr<RoleCard>(GEN_ROLES_KEY),
-  // P-0816-L：后端场景剧本初始为空，由 ScriptSelectPage 挂载时 GET /api/scenes 填充
-  backendMurder: [],
+  // P-0816-L：后端场景列表初始为空，由 ScriptSelectPage 挂载时 GET /api/scenes 填充（仅一般模式）
   backendGeneral: [],
   extraRoles: loadJsonRec<RoleCard[]>(EXTRA_KEY),
   litRoles: loadJsonRec<string[]>(LIT_KEY),
@@ -355,8 +343,6 @@ export const useDemoStore = create<DemoState>((set, get) => ({
   mode: 'murder',
   selectCtx: restoredGame.selectCtx ?? { kind: 'murder', scriptId: null },
 
-  selectedMurderId: null,
-  selectedGeneralId: null,
   runMode: restoredGame.runMode ?? 'chat',
   withPlayer: restoredGame.withPlayer ?? true,
 
@@ -404,17 +390,11 @@ export const useDemoStore = create<DemoState>((set, get) => ({
     if (typeof window !== 'undefined') window.history.pushState(null, '', viewToHash('roles'));
   },
 
-  pickScript: (kind, id) => {
-    if (kind === 'murder') set({ selectedMurderId: id });
-    else set({ selectedGeneralId: id });
-  },
-
   setRunMode: (m) => set({ runMode: m }),
   setWithPlayer: (v) => set({ withPlayer: v }),
 
   selectRole: (id) => set({ selectedRoleId: id }),
   setPlayerRole: (r) => set({ playerRole: r }),
-  choosePlayerRole: (r) => set({ playerRole: r, selectedRoleId: r.id }),
 
   addFreeRole: (r) => {
     const next = [...get().freeRoles, r];
@@ -462,17 +442,6 @@ export const useDemoStore = create<DemoState>((set, get) => ({
     }
   },
 
-  importRoleToScript: (roleId) => {
-    const s = get();
-    const role = s.freeRoles.find(r => r.id === roleId);
-    if (!role) return;
-    const scriptId = s.selectCtx.scriptId;
-    const copy: RoleCard = { ...role, source: 'free', homeScripts: scriptId ? [...role.homeScripts, scriptId] : role.homeScripts };
-    const next = { ...s.extraRoles, [scriptId ?? '']: [...(s.extraRoles[scriptId ?? ''] || []), copy] };
-    saveJson(EXTRA_KEY, next);
-    set({ extraRoles: next });
-  },
-
   addNewRoleToScript: (r, scriptId) => {
     const s = get();
     const key = scriptId ?? s.selectCtx.scriptId ?? '';
@@ -495,11 +464,6 @@ export const useDemoStore = create<DemoState>((set, get) => ({
       history: [...get().history, get().view].slice(-30),
     });
   },
-  setExtraRoles: (scriptId, r) => {
-    const next = { ...get().extraRoles, [scriptId]: r };
-    saveJson(EXTRA_KEY, next);
-    set({ extraRoles: next });
-  },
   removeExtraRole: (scriptId, roleId) => {
     const next = { ...get().extraRoles, [scriptId]: (get().extraRoles[scriptId] || []).filter(r => r.id !== roleId) };
     saveJson(EXTRA_KEY, next);
@@ -509,13 +473,6 @@ export const useDemoStore = create<DemoState>((set, get) => ({
     const next = { ...get().extraRoles, [scriptId]: (get().extraRoles[scriptId] || []).map(r => r.id === role.id ? role : r) };
     saveJson(EXTRA_KEY, next);
     set({ extraRoles: next });
-  },
-  toggleLitRole: (scriptId, roleId) => {
-    const cur = get().litRoles[scriptId] || [];
-    const next = cur.includes(roleId) ? cur.filter(id => id !== roleId) : [...cur, roleId];
-    const rec = { ...get().litRoles, [scriptId]: next };
-    saveJson(LIT_KEY, rec);
-    set({ litRoles: rec });
   },
   setLitRoles: (scriptId, ids) => {
     const rec = { ...get().litRoles, [scriptId]: ids };
@@ -540,16 +497,12 @@ export const useDemoStore = create<DemoState>((set, get) => ({
     saveGenerated({ murder: get().generatedMurder, general: s });
     set({ generatedGeneral: s });
   },
-  setBackendScripts: (murder, general) => set({ backendMurder: murder, backendGeneral: general }),
+  setBackendScripts: (general) => set({ backendGeneral: general }),
   removeBackendScript: (id) => {
     const s = get();
-    const inMurder = s.backendMurder.some(x => x.id === id);
     const inGeneral = s.backendGeneral.some(x => x.id === id);
-    if (!inMurder && !inGeneral) return false;
-    set({
-      backendMurder: inMurder ? s.backendMurder.filter(x => x.id !== id) : s.backendMurder,
-      backendGeneral: inGeneral ? s.backendGeneral.filter(x => x.id !== id) : s.backendGeneral,
-    });
+    if (!inGeneral) return false;
+    set({ backendGeneral: inGeneral ? s.backendGeneral.filter(x => x.id !== id) : s.backendGeneral });
     return true;
   },
   setGeneralMap: (scriptId, map) => {

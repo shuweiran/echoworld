@@ -1,17 +1,11 @@
 /**
  * ScriptSelectPage.tsx — 剧本选择（主页面 2，页 A）
  *
- * - 右上角：剧本杀模式 / 一般模式 切换
- * - 列表第一位固定「自由角色」入口（管理用户角色，也可作为角色来源）
- * - 剧本卡片保留部分信息（标题/背景/人数/标签）
- * - 点击剧本 → 进入角色选择页（B，按模式进入对应变体）
- * - P-0816-J：剧本卡新增删除按钮（右上角 ✕，hover 显现）——
- *     ① 预设剧本（mockData 代码常量，source='preset'）→ 不可删，点击提示「预设剧本不可删除」；
- *     ② AI 生成/导入剧本（localStorage roleplay_demo2_generated_v1 的 murder/general 槽位，
- *        source='ai'/'import'）→ confirm 后置空对应槽位（setGeneratedMurder/General(null)），
- *        列表经 useMemo 自动重算即时刷新；
- *     ③ 后端场景剧本（source='backend'，P-0816-L 转正式）→ confirm 后调 api.deleteScene(id)，
- *        成功后 removeBackendScript 从 store 移除（后端为数据源，刷新后亦已删）。
+ * 数据边界（合入 roleplay-v4 PR#1「isolate murder and general script lists」）：
+ * - 剧本杀：只展示完整 MurderScript（预设 / AI 生成 / 导入）。
+ * - 一般模式：展示 GeneralScript（预设 / AI 生成 / 后端 /api/scenes）。
+ * - 后端通用 scene 不再通过 scene_id 前缀强转成 MurderScript；狼人杀和旧 script_* 记录也不混入一般模式。
+ * - 删除入口：预设不可删；生成/导入置空 localStorage 槽位；后端场景走 DELETE /api/scenes/{id}。
  */
 import { useEffect, useMemo } from 'react';
 import { useDemoStore } from '../store';
@@ -19,8 +13,8 @@ import { getGeneralScripts, getMurderScripts } from '../mockData';
 import type { GameMode } from '../store';
 import type { GeneralScript, MurderScript } from '../types';
 import { api } from '../../api/client';
-// P-0816-L：后端场景 → 剧本卡映射（GET /api/scenes）
-import { backendSceneToGeneral, backendSceneToMurder, isMurderBackendScene } from '../backendScenes';
+// 后端场景 → 一般模式剧本卡映射（GET /api/scenes；不再产出 MurderScript）
+import { backendSceneToGeneral, isGeneralBackendScene, type BackendSceneRecord } from '../backendScenes';
 
 type ScriptLike = MurderScript | GeneralScript;
 const MOBILE_BUILD = import.meta.env.VITE_MOBILE_BUILD === 'true';
@@ -39,12 +33,9 @@ function sourceLabel(s: ScriptLike): string {
 }
 
 /**
- * P-0816-J：删除剧本入口（点击卡片 ✕ 触发）。
+ * 删除剧本入口（点击卡片 ✕ 触发）。
  * 预设 → 提示不可删（拦截）；生成/导入 → confirm 后置空 localStorage 槽位；
- * backend → 调 DELETE /api/scenes/{id}（预留分支）。
- * P-0816-L：backend 分支转正式 —— 列表已接入 GET /api/scenes；confirm 确认后调用
- * api.deleteScene(id)，成功则 removeBackendScript 从 store 移除（列表即时刷新，刷新页面后
- * 后端亦已删除）；失败 alert 提示。
+ * backend → confirm 后调 api.deleteScene(id)，成功则 removeBackendScript 从 store 移除。
  */
 async function handleDelete(e: React.MouseEvent, kind: 'murder' | 'general', s: ScriptLike): Promise<void> {
   e.stopPropagation(); // 不触发卡片「进入角色选择」
@@ -68,30 +59,37 @@ async function handleDelete(e: React.MouseEvent, kind: 'murder' | 'general', s: 
   else store.setGeneratedGeneral(null);
 }
 
+/**
+ * 兼容 /api/scenes 的两种历史响应形态：
+ * - 旧前端预期：Scene[]
+ * - 当前包装响应：{ scenes: Scene[] }
+ */
+function unwrapSceneList(payload: unknown): BackendSceneRecord[] {
+  if (Array.isArray(payload)) return payload as BackendSceneRecord[];
+  if (payload && typeof payload === 'object' && Array.isArray((payload as any).scenes)) {
+    return (payload as any).scenes as BackendSceneRecord[];
+  }
+  return [];
+}
+
 export function ScriptSelectPage() {
   const mode = useDemoStore(s => s.mode);
   const setMode = useDemoStore(s => s.setMode);
   const enterRoles = useDemoStore(s => s.enterRoles);
   const setBackendScripts = useDemoStore(s => s.setBackendScripts);
-  // P-0811-E：生成的剧本/场景合并进列表（刷新后仍可见，不再消失）
   const generatedMurder = useDemoStore(s => s.generatedMurder);
   const generatedGeneral = useDemoStore(s => s.generatedGeneral);
-  // P-0816-L：后端场景剧本（GET /api/scenes 映射，source='backend'）
-  const backendMurder = useDemoStore(s => s.backendMurder);
   const backendGeneral = useDemoStore(s => s.backendGeneral);
 
-  // P-0811-E：生成剧本置顶展示（与预设按 id 去重，防同 id 重复卡片）
-  // P-0816-L：合并后端场景 —— 顺序：生成 → 后端 → 预设；去重规则 = 按 id 先到先得
-  //   （实际 id 空间互不重叠：生成/预设为本地 id，后端为 scene_id script_*/hex；冲突时早出现者优先）
+  // 剧本杀只接受真正的 MurderScript 数据源（生成 → 预设），不接 /api/scenes。
   const murders = useMemo(() => {
     const out: MurderScript[] = [];
     const seen = new Set<string>();
     const push = (s?: MurderScript | null) => { if (s && !seen.has(s.id)) { seen.add(s.id); out.push(s); } };
     push(generatedMurder);
-    backendMurder.forEach(push);
     getMurderScripts().forEach(push);
     return out;
-  }, [generatedMurder, backendMurder]);
+  }, [generatedMurder]);
   const generals = useMemo(() => {
     const out: GeneralScript[] = [];
     const seen = new Set<string>();
@@ -104,23 +102,21 @@ export function ScriptSelectPage() {
 
   const switchMode = (m: GameMode) => setMode(m);
 
-  // P-0816-L：挂载时拉取后端场景（GET /api/scenes）→ 映射为剧本卡 → 合并进列表。
+  // /api/scenes 只装载一般模式场景；狼人杀、旧 script_*、未知分类全部跳过。
   // 降级策略：加载失败仅 console.warn（轻提示），预设与本地生成剧本不受影响；单条坏数据跳过。
   useEffect(() => {
     let alive = true;
     (async () => {
       try {
-        const list = await api.listScenes();
-        if (!alive || !Array.isArray(list)) return;
-        const murder: MurderScript[] = [];
+        const payload = await api.listScenes();
+        if (!alive) return;
         const general: GeneralScript[] = [];
-        for (const raw of list) {
+        for (const raw of unwrapSceneList(payload)) {
           try {
-            if (isMurderBackendScene(raw)) murder.push(backendSceneToMurder(raw));
-            else general.push(backendSceneToGeneral(raw));
+            if (isGeneralBackendScene(raw)) general.push(backendSceneToGeneral(raw));
           } catch { /* 单条坏数据跳过，不拖垮整列表 */ }
         }
-        setBackendScripts(murder, general);
+        setBackendScripts(general);
       } catch (err) {
         console.warn('[ScriptSelectPage] 后端场景加载失败（不影响预设与本地剧本）：', err);
       }

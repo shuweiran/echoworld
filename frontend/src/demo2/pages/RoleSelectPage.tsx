@@ -74,15 +74,14 @@ export function RoleSelectPage() {
 
   const generatedMurder = useDemoStore(s => s.generatedMurder);
   const generatedGeneral = useDemoStore(s => s.generatedGeneral);
-  // P-0816-L：后端场景剧本（source='backend'，GET /api/scenes 映射）——作为 mockData 预设 / 生成剧本之后的第三解析源
-  const backendMurder = useDemoStore(s => s.backendMurder);
+  // 后端场景（source='backend'）仅一般模式；剧本杀不再接 /api/scenes（列表隔离）
   const backendGeneral = useDemoStore(s => s.backendGeneral);
   // P-0811-E：剧本生成页 LLM 失败兜底提示（生成后跳转本页仍可见）
   const genNotice = useDemoStore(s => s.genNotice);
   const setGenNotice = useDemoStore(s => s.setGenNotice);
 
   const murder = (ctx.kind === 'murder' && ctx.scriptId)
-    ? (getMurderScriptById(ctx.scriptId) ?? (generatedMurder?.id === ctx.scriptId ? generatedMurder : undefined) ?? backendMurder.find(x => x.id === ctx.scriptId))
+    ? (getMurderScriptById(ctx.scriptId) ?? (generatedMurder?.id === ctx.scriptId ? generatedMurder : undefined))
     : undefined;
   const general = (ctx.kind === 'general' && ctx.scriptId)
     ? (getGeneralScriptById(ctx.scriptId) ?? (generatedGeneral?.id === ctx.scriptId ? generatedGeneral : undefined) ?? backendGeneral.find(x => x.id === ctx.scriptId))
@@ -153,7 +152,7 @@ export function RoleSelectPage() {
   const canEnterHistory = (h: SceneHistory): boolean => {
     if (h.kind === 'werewolf') return true;
     if (h.kind === 'murder' && h.scriptId) {
-      return !!getMurderScriptById(h.scriptId) || generatedMurder?.id === h.scriptId || backendMurder.some(x => x.id === h.scriptId);
+      return !!getMurderScriptById(h.scriptId) || generatedMurder?.id === h.scriptId;
     }
     if (h.kind === 'general' && h.scriptId) {
       return !!getGeneralScriptById(h.scriptId) || generatedGeneral?.id === h.scriptId || backendGeneral.some(x => x.id === h.scriptId);
