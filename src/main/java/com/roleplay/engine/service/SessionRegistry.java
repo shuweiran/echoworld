@@ -266,6 +266,15 @@ public class SessionRegistry {
         void onRemoved(String sessionId, RouterService removedRouter);
     }
 
+    /** P1 消息持久化：DatabaseService（Spring @Autowired setter 注入；测试直构缺省 null）。 */
+    private volatile com.roleplay.engine.db.service.DatabaseService databaseService;
+
+    /** P1 消息持久化：Spring 注入（手动构造的注册表无此调用 → 会话落库关闭，零破坏）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDatabaseService(com.roleplay.engine.db.service.DatabaseService databaseService) {
+        this.databaseService = databaseService;
+    }
+
     /** 创建会话专属 router 实例：独立 MemoryStore，共享无状态服务。 */
     private RouterService createRouter(String sessionId) {
         RouterService r = new RouterService(arbiter, executor, new MemoryStore(), compressor,
@@ -281,6 +290,8 @@ public class SessionRegistry {
         r.setSerialRound(serialRound);
         // P-0813-B：注入校准轮间隔（同上，显式透传）
         r.setCalibrateEvery(calibrateEvery);
+        // P1 消息持久化：透传 DatabaseService（null=关闭落库，测试直构零影响）
+        if (databaseService != null) r.setDatabaseService(databaseService);
         log.info("D11: created isolated RouterService for session {}", sessionId);
         return r;
     }

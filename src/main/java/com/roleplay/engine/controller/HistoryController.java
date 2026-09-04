@@ -39,6 +39,9 @@ public class HistoryController {
     private final CharacterController characterController;
     /** D11: 按 session_id 的 router 实例管理 —— 历史加载写回对应会话实例。 */
     private final SessionRegistry sessions;
+    /** P1 消息持久化读路径（字段注入：手动构造的测试实例缺省 null → 持久化读端点返回空列表）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.roleplay.engine.db.service.DatabaseService databaseService;
 
     public HistoryController(@Lazy RouterService router, LLMClient llmClient,
                              CharacterController characterController,
@@ -97,6 +100,8 @@ public class HistoryController {
     }
 
     /**
+     * P1 消息持久化读路径：GET /api/history/persisted?session_id=&limit= ——
+     * 读 chat_messages 表（内存会话已淘汰/服务重启后仍可回放；STREAMING 行表示中断前的进行中）。
      * 主路径 GET /api/history（内存）保持不变，本端点为增量只读通道。
      */
     @GetMapping("/persisted")
@@ -108,6 +113,8 @@ public class HistoryController {
         if (databaseService == null) {
             return ResponseEntity.ok(Map.of("messages", List.of(), "total", 0, "session_id", sid));
         }
+        sessions.require(sid);
+        List<Map<String, Object>> messages = databaseService.listChatMessages(session_id.trim(), limit);
         return ResponseEntity.ok(Map.of(
             "messages", messages,
             "total", messages.size(),

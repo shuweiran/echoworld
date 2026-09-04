@@ -31,6 +31,10 @@ public class DatabaseService {
     private final ScriptRepository scriptRepo;
     private final GameSessionRepository gameSessionRepo;
     private final AssetRepository assetRepo;
+    /** P1 消息持久化库（null=测试直构未传 → 相关方法空实现零破坏）。 */
+    private final ChatMessageRepository chatMessageRepo;
+    /** P1 角色版本库（null=测试直构未传 → 相关方法空实现零破坏）。 */
+    private final CharacterVersionRepository characterVersionRepo;
     private final ObjectMapper mapper;
 
     /**
@@ -46,7 +50,6 @@ public class DatabaseService {
         this(characterRepo, sceneRepo, conversationLogRepo, worldSnapshotRepo, scriptRepo, gameSessionRepo, null);
     }
 
-    @Autowired
     public DatabaseService(CharacterRepository characterRepo,
                            SceneRepository sceneRepo,
                            ConversationLogRepository conversationLogRepo,
@@ -54,6 +57,24 @@ public class DatabaseService {
                            ScriptRepository scriptRepo,
                            GameSessionRepository gameSessionRepo,
                            AssetRepository assetRepo) {
+        this(characterRepo, sceneRepo, conversationLogRepo, worldSnapshotRepo, scriptRepo,
+                gameSessionRepo, assetRepo, null, null);
+    }
+
+    /**
+     * P1 持久化扩展构造：新增 chatMessageRepo / characterVersionRepo（旧七参委托 null——
+     * 既有测试直构调用点零改动；两库 null 时相关方法空实现）。
+     */
+    @Autowired
+    public DatabaseService(CharacterRepository characterRepo,
+                           SceneRepository sceneRepo,
+                           ConversationLogRepository conversationLogRepo,
+                           WorldSnapshotRepository worldSnapshotRepo,
+                           ScriptRepository scriptRepo,
+                           GameSessionRepository gameSessionRepo,
+                           AssetRepository assetRepo,
+                           ChatMessageRepository chatMessageRepo,
+                           CharacterVersionRepository characterVersionRepo) {
         this.characterRepo = characterRepo;
         this.sceneRepo = sceneRepo;
         this.conversationLogRepo = conversationLogRepo;
@@ -61,6 +82,8 @@ public class DatabaseService {
         this.scriptRepo = scriptRepo;
         this.gameSessionRepo = gameSessionRepo;
         this.assetRepo = assetRepo;
+        this.chatMessageRepo = chatMessageRepo;
+        this.characterVersionRepo = characterVersionRepo;
         this.mapper = new ObjectMapper();
         mapper.findAndRegisterModules();
     }
@@ -145,6 +168,135 @@ public class DatabaseService {
     @Transactional
     public void deleteCharacter(String name) {
         characterRepo.findByName(name).ifPresent(characterRepo::delete);
+    }
+
+    // ── P1 角色来源（source） ────────────────────────────────────
+
+    /** 角色来源写入（MANUAL/AI_GENERATED/IMPORTED；角色行不存在时 no-op，不建幻影行）。 */
+    @Transactional
+    public void saveCharacterSource(String name, String source) {
+        if (name == null || name.isBlank() || source == null || source.isBlank()) return;
+        characterRepo.findByName(name).ifPresent(e -> {
+            e.setSource(source.trim().toUpperCase());
+            e.preUpdate();
+            characterRepo.save(e);
+        });
+    }
+
+    /** 角色来源读取（null=存量旧数据/角色不存在，调用方按 LEGACY 处理）。 */
+    public String getCharacterSource(String name) {
+        if (name == null || name.isBlank()) return null;
+        return characterRepo.findByName(name).map(CharacterEntity::getSource).orElse(null);
+    }
+
+    /** 是否显式用户内容（MANUAL/IMPORTED）：批量升级默认跳过，用户 force 才升级。 */
+    public static boolean isExplicitUserSource(String source) {
+        if (source == null) return false;
+        String s = source.trim().toUpperCase();
+        return "MANUAL".equals(s) || "IMPORTED".equals(s);
+    }
+
+    // ── P1 角色版本（character_versions） ─────────────────────────
+
+    /**
+     * 追加角色版本（versionNo 按角色自增；cardJson 可空）。
+     * 库缺失（测试直构）→ 返回 null 零破坏。
+     */
+    @Transactional
+    public Map<String, Object> saveCharacterVersion(String name, String source, String persona,
+                                                    String voice, String background, String cardJson) {
+        if (characterVersionRepo == null || name == null || name.isBlank()) return null;
+        int next = characterVersionRepo.findFirstByCharacterNameOrderByVersionNoDesc(name)
+                .map(v -> v.getVersionNo() + 1).orElse(1);
+        CharacterVersionEntity v = new CharacterVersionEntity();
+        v.setCharacterName(name);
+        v.setVersionNo(next);
+        v.setSource(source);
+        v.setPersona(persona);
+        v.setVoice(voice);
+        v.setBackground(background);
+        v.setCardJson(cardJson);
+        v.prePersist();
+        characterVersionRepo.save(v);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("name", name);
+        m.put("version", next);
+        m.put("source", source);
+        m.put("createdAt", v.getCreatedAt() != null ? v.getCreatedAt().toString() : null);
+        return m;
+    }
+
+    /** 角色版本列表（升序；库缺失 → 空列表）。 */
+    public List<Map<String, Object>> listCharacterVersions(String name) {
+        if (characterVersionRepo == null || name == null || name.isBlank()) return List.of();
+        return characterVersionRepo.findByCharacterNameOrderByVersionNoAsc(name).stream()
+                .map(v -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("name", v.getCharacterName());
+                    m.put("version", v.getVersionNo());
+                    m.put("source", v.getSource());
+                    m.put("persona", v.getPersona());
+                    m.put("voice", v.getVoice());
+                    m.put("background", v.getBackground());
+                    m.put("has_card", v.getCardJson() != null && !v.getCardJson().isBlank());
+                    m.put("createdAt", v.getCreatedAt() != null ? v.getCreatedAt().toString() : null);
+                    return m;
+                })
+                .collect(Collectors.toList());
+    }
+
+    /** 某版本完整卡 JSON（无则 Optional.empty）。 */
+    public Optional<String> getCharacterVersionCard(String name, int versionNo) {
+        if (characterVersionRepo == null || name == null || name.isBlank()) return Optional.empty();
+        return characterVersionRepo.findByCharacterNameOrderByVersionNoAsc(name).stream()
+                .filter(v -> v.getVersionNo() == versionNo)
+                .map(CharacterVersionEntity::getCardJson)
+                .findFirst();
+    }
+
+    // ── P1 聊天消息持久化（chat_messages） ────────────────────────
+
+    /**
+     * 消息落库（按 messageId upsert：STREAMING 建行 → FINAL/FAILED 更新同行）。
+     * 库缺失（测试直构）→ 空实现零破坏。调用方（RouterService）另有 try/catch，
+     * DB 异常恒不向上传染回合流程。
+     */
+    @Transactional
+    public void saveChatMessage(String messageId, String sessionId, int roundNumber,
+                                String role, String name, String content,
+                                String status, String trackId) {
+        if (chatMessageRepo == null || messageId == null || messageId.isBlank()) return;
+        ChatMessageEntity e = chatMessageRepo.findByMessageId(messageId).orElseGet(ChatMessageEntity::new);
+        e.setMessageId(messageId);
+        e.setSessionId(sessionId == null ? "" : sessionId);
+        e.setRoundNumber(roundNumber);
+        e.setRole(role == null ? "" : role.toLowerCase());
+        e.setName(name == null ? "" : name);
+        e.setContent(content == null ? "" : content);
+        e.setStatus(status == null ? ChatMessageEntity.STATUS_FINAL : status);
+        e.setTrackId(trackId == null ? "main" : trackId);
+        if (e.getId() == null) e.prePersist(); else e.preUpdate();
+        chatMessageRepo.save(e);
+    }
+
+    /** 会话消息列表（按入库序；limit<=0 不限；库缺失 → 空列表）。 */
+    public List<Map<String, Object>> listChatMessages(String sessionId, int limit) {
+        if (chatMessageRepo == null || sessionId == null) return List.of();
+        List<ChatMessageEntity> all = chatMessageRepo.findBySessionIdOrderByIdAsc(sessionId);
+        if (limit > 0 && all.size() > limit) all = all.subList(all.size() - limit, all.size());
+        return all.stream().map(e -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("message_id", e.getMessageId());
+            m.put("session_id", e.getSessionId());
+            m.put("round_number", e.getRoundNumber());
+            m.put("role", e.getRole());
+            m.put("name", e.getName());
+            m.put("content", e.getContent());
+            m.put("status", e.getStatus());
+            m.put("track_id", e.getTrackId());
+            m.put("created_at", e.getCreatedAt() != null ? e.getCreatedAt().toString() : null);
+            return m;
+        }).collect(Collectors.toList());
     }
 
     @Transactional
@@ -476,6 +628,8 @@ public class DatabaseService {
         map.put("voice_mode", e.getVoiceMode());
         map.put("voice_data", e.getVoiceData());
         map.put("player_id", e.getPlayerId());
+        // P1 角色来源（MANUAL/AI_GENERATED/IMPORTED；null=存量旧数据，调用方按 LEGACY 处理）
+        map.put("source", e.getSource());
         map.put("createdAt", e.getCreatedAt() != null ? e.getCreatedAt().toString() : null);
         return map;
     }

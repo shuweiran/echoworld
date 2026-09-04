@@ -107,17 +107,17 @@ class CharacterUpgradeTest {
         throw new AssertionError("upgrade 超时未完成: " + st);
     }
 
-    // ── ① 无卡角色升级 ──────────────────────────────────────────
+    // ── ① 无卡 LEGACY 角色升级（force 显式触发批量，覆盖手工来源保护） ──
 
     @Test
-    @DisplayName("① 无卡角色升级：卡写盘 + 挂载 + 表层替换（H2 四字段 + 内存列表）+ 汇总")
+    @DisplayName("① 无卡角色升级（force）：卡写盘 + 挂载 + 表层替换 + 来源切 AI_GENERATED + 版本记录")
     void upgradeNoCardCharacter() throws Exception {
         DatabaseService db = mock(DatabaseService.class);
         CharacterController cc = newController(mockLlmWithFailure(null), db, tempDir.toString());
         seed(cc, "张三", "旧人格", "旧嗓音", "旧背景");
 
-        // started 立即返回
-        ResponseEntity<Map<String, Object>> resp = cc.upgrade(Map.of());
+        // started 立即返回（P1：手工来源默认跳过，本例显式 force 触发批量）
+        ResponseEntity<Map<String, Object>> resp = cc.upgrade(Map.of("force", true));
         assertEquals(HttpStatus.OK, resp.getStatusCode());
         assertEquals(true, resp.getBody().get("started"), "响应立即返回 started=true");
 
@@ -136,6 +136,12 @@ class CharacterUpgradeTest {
 
         // 表层替换：H2 四字段用生成结果覆盖（升级路径显式「替换」，区别于常规 attach 不覆盖）
         verify(db).saveCharacter("张三", "升级后的人格设定（全新行为指令）", "升级后说话风格", "升级后背景故事");
+        // P1 来源切换 + 版本记录（升级前旧版 + 升级后新版）
+        verify(db).saveCharacterSource("张三", "AI_GENERATED");
+        verify(db, org.mockito.Mockito.atLeast(1)).saveCharacterVersion(
+                org.mockito.ArgumentMatchers.eq("张三"),
+                org.mockito.ArgumentMatchers.eq("AI_GENERATED"),
+                anyString(), anyString(), anyString(), anyString());
         // 内存列表同步替换
         Map<String, Object> listed = cc.getAll().stream()
                 .filter(x -> "张三".equals(x.get("name"))).findFirst().orElseThrow();
@@ -144,6 +150,7 @@ class CharacterUpgradeTest {
         assertEquals("升级后背景故事", listed.get("background"));
         assertEquals("升级后外观", listed.get("appearance"), "list 附加表层 appearance");
         assertFalse(listed.containsKey("layer0"), "list 不透出五层");
+        assertEquals("AI_GENERATED", listed.get("source"), "升级后来源切 AI_GENERATED");
 
         // 幂等：再跑一次 → 有卡跳过
         ResponseEntity<Map<String, Object>> again = cc.upgrade(Map.of());
@@ -188,7 +195,7 @@ class CharacterUpgradeTest {
         seed(cc, "王五", "P3", "V3", "B3");       // 无卡但 LLM 失败 → failed
         cc.importPersonaCard("钱七", Map.of("layer0", List.of("已有规则")));
 
-        cc.upgrade(Map.of());
+        cc.upgrade(Map.of("force", true));
         Map<String, Object> status = waitForUpgrade(cc, 5000);
         assertEquals(1, status.get("upgraded"));
         assertEquals(1, status.get("skipped"));
@@ -213,7 +220,7 @@ class CharacterUpgradeTest {
         seed(cc, "角色乙", "P", "V", "B");
         seed(cc, "角色丙", "P", "V", "B");
 
-        cc.upgrade(Map.of("max_roles", 2));
+        cc.upgrade(Map.of("max_roles", 2, "force", true));
         Map<String, Object> status = waitForUpgrade(cc, 5000);
         assertEquals(2, status.get("upgraded"), "max_roles=2 只升级 2 个");
         assertEquals(List.of("角色甲", "角色乙"), status.get("names"));
@@ -233,5 +240,92 @@ class CharacterUpgradeTest {
         Map<String, Object> idle = cc.upgradeStatus().getBody();
         assertNotNull(idle);
         assertFalse(Boolean.TRUE.equals(idle.get("running")), "空态 running 不为 true");
+    }
+
+    // ── ⑥ P1 来源保护：MANUAL 默认跳过，force 才升级 ──────────────
+
+    @Test
+    @DisplayName("⑥ 手工角色（MANUAL）默认跳过升级（防 AI 篡改）；force:true 才升级")
+    void manualSource_skippedByDefault_forceUpgrades() throws Exception {
+        DatabaseService db = mock(DatabaseService.class);
+        LLMClient llm = mockLlmWithFailure(null);
+        CharacterController cc = newController(llm, db, tempDir.toString());
+        seed(cc, "手工仔", "我的原始人设", "V", "B");
+
+        // 默认批量 → 跳过（不调 LLM，人设 untouched）
+        cc.upgrade(Map.of());
+        Map<String, Object> status = waitForUpgrade(cc, 5000);
+        assertEquals(0, status.get("upgraded"));
+        assertEquals(1, status.get("skipped"), "MANUAL 默认跳过");
+        verify(llm, org.mockito.Mockito.never()).callJson(anyString(), any());
+        Map<String, Object> listed = cc.getAll().stream()
+                .filter(x -> "手工仔".equals(x.get("name"))).findFirst().orElseThrow();
+        assertEquals("我的原始人设", listed.get("persona"), "跳过后用户人设 untouched");
+
+        // force → 升级
+        cc.upgrade(Map.of("force", true));
+        Map<String, Object> status2 = waitForUpgrade(cc, 5000);
+        assertEquals(1, status2.get("upgraded"), "force 升级 MANUAL");
+        Map<String, Object> listed2 = cc.getAll().stream()
+                .filter(x -> "手工仔".equals(x.get("name"))).findFirst().orElseThrow();
+        assertEquals("AI_GENERATED", listed2.get("source"), "升级后来源切换");
+    }
+
+    // ── ⑦ P1 卡片端点：GET/PUT/EXPORT/VERSIONS ────────────────────
+
+    @Test
+    @DisplayName("⑦ 卡片端点：GET 完整卡 + PUT 合并保存 + EXPORT 下载 + VERSIONS 列表")
+    void cardEndpoints_getPutExportVersions() {
+        DatabaseService db = mock(DatabaseService.class);
+        CharacterController cc = newController(mockLlmWithFailure(null), db, tempDir.toString());
+        seed(cc, "卡片仔", "表层人设", "V", "B");
+        cc.importPersonaCard("卡片仔", Map.of(
+                "layer0", List.of("铁律"),
+                "appearance", "红衣",
+                "summary", "摘要"));
+
+        // GET /card：完整卡 + 来源 IMPORTED（导入动作标记）
+        ResponseEntity<?> get = cc.getCard("卡片仔");
+        assertEquals(HttpStatus.OK, get.getStatusCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> card = (Map<String, Object>) get.getBody();
+        assertEquals("卡片仔", card.get("name"));
+        assertEquals("IMPORTED", card.get("source"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> full = (Map<String, Object>) card.get("card");
+        assertEquals(List.of("铁律"), full.get("layer0"), "GET 返回完整层内容");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> surface = (Map<String, Object>) card.get("surface");
+        assertEquals("红衣", surface.get("appearance"));
+
+        // PUT /card：部分合并 + 版本记录
+        ResponseEntity<?> put = cc.saveCard("卡片仔", Map.of("layer1", Map.of("identity", "新身份")));
+        assertEquals(HttpStatus.OK, put.getStatusCode());
+        @SuppressWarnings("unchecked")
+        Map<String, Object> putBody = (Map<String, Object>) put.getBody();
+        assertTrue(((List<?>) putBody.get("layers")).contains("layer1"));
+        assertEquals(List.of("铁律"), cc.personaCardFor("卡片仔").get("layer0"), "旧层保留");
+        assertEquals(Map.of("identity", "新身份"), cc.personaCardFor("卡片仔").get("layer1"), "新层合并");
+        // 导入记一版 + PUT 保存记一版 = 共 2 次版本记录
+        verify(db, org.mockito.Mockito.times(2)).saveCharacterVersion(
+                org.mockito.ArgumentMatchers.eq("卡片仔"),
+                org.mockito.ArgumentMatchers.eq("IMPORTED"),
+                any(), any(), any(), anyString());
+
+        // EXPORT：可下载 JSON（含层内容，与导入契约同形）
+        ResponseEntity<String> exp = cc.exportCard("卡片仔");
+        assertEquals(HttpStatus.OK, exp.getStatusCode());
+        assertTrue(exp.getBody().contains("铁律"), "导出含层内容");
+        assertTrue(String.valueOf(exp.getHeaders().getFirst("Content-Disposition")).contains("attachment"));
+
+        // VERSIONS：mock DB → 空列表不断言条数，只断形状
+        ResponseEntity<Map<String, Object>> vers = cc.listVersions("卡片仔");
+        assertEquals(HttpStatus.OK, vers.getStatusCode());
+        assertNotNull(vers.getBody().get("versions"));
+
+        // 不存在角色 → 404
+        assertEquals(HttpStatus.NOT_FOUND, cc.getCard("查无此人").getStatusCode());
+        assertEquals(HttpStatus.NOT_FOUND, cc.exportCard("查无此人").getStatusCode());
+        assertEquals(HttpStatus.BAD_REQUEST, cc.saveCard("卡片仔", Map.of()).getStatusCode());
     }
 }

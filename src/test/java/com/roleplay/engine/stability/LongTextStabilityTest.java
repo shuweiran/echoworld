@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.roleplay.engine.llm.LLMClient;
 import com.roleplay.engine.model.Session;
 import com.roleplay.engine.service.MemoryStore;
+import com.roleplay.engine.service.SessionRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -43,8 +44,9 @@ class LongTextStabilityTest {
     @Autowired
     private MockMvc mockMvc;
 
+    /** P0 会话隔离：断言一律按会话专属 MemoryStore（SessionRegistry），不再读默认单例。 */
     @Autowired
-    private MemoryStore memoryStore;
+    private SessionRegistry sessionRegistry;
 
     @MockBean
     private LLMClient llmClient;
@@ -91,18 +93,21 @@ class LongTextStabilityTest {
     @Test
     @DisplayName("LONG-01: 500轮/10万字上下文 无OOM、不卡死、内容不丢失、压缩链生效")
     void longContextStability() throws Exception {
-        // ① 建 1 角色会话
+        // ① 建 1 角色会话（P0 会话隔离：后续请求一律带 session_id，不再依赖默认单例镜像）
         String initBody = """
                 {"characters":[{"name":"小明","persona":"健谈开朗"}],"scene":"默认场景","mode":"free"}
                 """;
-        mockMvc.perform(post("/api/init")
+        String initResp = mockMvc.perform(post("/api/init")
                         .contentType(MediaType.APPLICATION_JSON).content(initBody))
-                .andExpect(result -> assertEquals(200, result.getResponse().getStatus()));
+                .andExpect(result -> assertEquals(200, result.getResponse().getStatus()))
+                .andReturn().getResponse().getContentAsString();
+        String sessionId = String.valueOf(mapper.readTree(initResp).path("session_id").asText(""));
+        assertFalse(sessionId.isBlank(), "init 应返回 session_id");
 
         // Spring/JIT/首次路由初始化不属于稳态性能样本，先做一轮无锚点预热。
         mockMvc.perform(post("/api/send")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(mapper.writeValueAsString(Map.of("message", "LONG-01 预热"))))
+                        .content(mapper.writeValueAsString(Map.of("message", "LONG-01 预热", "session_id", sessionId))))
                 .andExpect(result -> assertEquals(200, result.getResponse().getStatus()));
 
         // ② 500 轮 send，每轮 ~200 字
@@ -114,7 +119,7 @@ class LongTextStabilityTest {
         for (int round = 1; round <= ROUNDS; round++) {
             String msg = (round == 1 ? ANCHOR + " " : "")
                     + String.format("测试消息第%04d轮。", round) + filler;
-            String body = mapper.writeValueAsString(Map.of("message", msg));
+            String body = mapper.writeValueAsString(Map.of("message", msg, "session_id", sessionId));
 
             long t0 = System.nanoTime();
             var resp = mockMvc.perform(post("/api/send")
@@ -137,7 +142,8 @@ class LongTextStabilityTest {
         // ③ 断言：全程无 HTTP 500 / 失败轮次
         assertTrue(failureRounds.isEmpty(), "失败轮次: " + failureRounds);
 
-        // ④ 锚点词内容不丢失（原始消息全量保留）
+        // ④ 锚点词内容不丢失（原始消息全量保留；按会话专属记忆断言）
+        MemoryStore memoryStore = sessionRegistry.get(sessionId).getMemoryStore();
         Session session = memoryStore.getSession();
         assertNotNull(session, "session 不应为 null");
         boolean anchorFound = session.getMessages().stream()
@@ -150,7 +156,7 @@ class LongTextStabilityTest {
         assertTrue(summaryCtx.contains(SUMMARY_MARKER), "摘要上下文应包含压缩摘要标记");
 
         // ⑥ 会话状态完整：/api/state 可访问且 round 正确
-        String stateJson = mockMvc.perform(get("/api/state"))
+        String stateJson = mockMvc.perform(get("/api/state").param("session_id", sessionId))
                 .andExpect(result -> assertEquals(200, result.getResponse().getStatus()))
                 .andReturn().getResponse().getContentAsString();
         assertTrue(stateJson.contains("\"round\""), "state 应含 round 字段");

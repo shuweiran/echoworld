@@ -43,6 +43,13 @@ public class CharacterEntity {
     @Column(unique = true, nullable = true)
     private String playerId;
 
+    /**
+     * P1 角色来源：MANUAL（用户手工创建）/ AI_GENERATED（AI 生成·升级）/ IMPORTED（外部卡导入）。
+     * null = 存量旧数据（LEGACY，可升级）；升级批量跳过 MANUAL/IMPORTED（显式用户内容），除非 force。
+     */
+    @Column(length = 32)
+    private String source;
+
     private LocalDateTime createdAt;
 
     private LocalDateTime updatedAt;
@@ -93,6 +100,9 @@ public class CharacterEntity {
 
     public String getPlayerId() { return playerId; }
     public void setPlayerId(String playerId) { this.playerId = playerId; }
+
+    public String getSource() { return source; }
+    public void setSource(String source) { this.source = source; }
 
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }

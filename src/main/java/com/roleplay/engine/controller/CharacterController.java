@@ -189,6 +189,25 @@ public class CharacterController {
         personaCards.put(name, card);
         // P-0811-D：导入卡写盘（外部目录持久化，重启不丢）
         persistCardToDisk(name, card);
+        // P1 角色来源：外部卡导入 = IMPORTED（行存在才标记；纯卡导入不行建幻影行）；
+        // 版本化：导入记一版（含完整卡）
+        databaseService.saveCharacterSource(name, "IMPORTED");
+        for (int i = 0; i < characters.size(); i++) {
+            if (name.equals(characters.get(i).get("name"))) {
+                Map<String, Object> updated = new LinkedHashMap<>(characters.get(i));
+                updated.put("source", "IMPORTED");
+                characters.set(i, updated);
+                break;
+            }
+        }
+        try {
+            databaseService.saveCharacterVersion(name, "IMPORTED",
+                    str(card.get("personaDesc"), str(card.get("persona"), "")),
+                    str(card.get("voice"), ""), str(card.get("background"), ""),
+                    PERSONA_MAPPER.writeValueAsString(card));
+        } catch (Exception e) {
+            log.warn("CharacterController: 导入版本记录失败「{}」（已跳过）: {}", name, e.getMessage());
+        }
         // 表层响应：只回 name/appearance/summary + 层键名列表，绝不回 layer 内容
         Map<String, Object> res = new LinkedHashMap<>();
         res.put("status", "ok");
@@ -197,6 +216,180 @@ public class CharacterController {
         if (card.get("summary") != null) res.put("summary", card.get("summary"));
         res.put("layers", PersonaCardLoader.LAYER_KEYS.stream().filter(card::containsKey).toList());
         return ResponseEntity.ok(res);
+    }
+
+    /**
+     * P1 角色卡片读取（GET /api/characters/{name}/card）——返回完整卡片 JSON：
+     * {name, source, version, surface{persona/voice/background/appearance/summary},
+     *  card{五层完整内容}, versions[版本号列表]}。
+     * 卡来源：内存 personaCards → 磁盘/默认卡（PersonaCardLoader）；表层：内存列表 → H2。
+     * 角色与卡均不存在 → 404。
+     */
+    @GetMapping("/{name}/card")
+    public ResponseEntity<?> getCard(@PathVariable String name) {
+        Map<String, Object> card = personaCards.get(name);
+        if (card == null) {
+            try {
+                card = PersonaCardLoader.cardFor(name);
+            } catch (RuntimeException e) {
+                card = null;
+            }
+        }
+        Map<String, Object> surface = characters.stream()
+                .filter(c -> name.equals(c.get("name"))).findFirst().orElse(null);
+        if (surface == null) {
+            try {
+                java.util.Optional<Map<String, Object>> o = databaseService.getCharacter(name);
+                if (o != null && o.isPresent()) surface = o.get();
+            } catch (RuntimeException e) {
+                surface = null;
+            }
+        }
+        if (card == null && surface == null) {
+            return ResponseEntity.status(404).body(Map.of("error", "角色不存在: " + name));
+        }
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("name", name);
+        String source = surface != null ? strOf(surface.get("source")) : null;
+        if (source == null) {
+            try {
+                source = databaseService.getCharacterSource(name);
+            } catch (RuntimeException e) {
+                source = null;
+            }
+        }
+        res.put("source", source);
+        Map<String, Object> surfaceView = new LinkedHashMap<>();
+        if (surface != null) {
+            surfaceView.put("persona", surface.get("persona"));
+            surfaceView.put("voice", surface.get("voice"));
+            surfaceView.put("background", surface.get("background"));
+        }
+        if (card != null) {
+            if (card.get("appearance") != null) surfaceView.put("appearance", card.get("appearance"));
+            if (card.get("summary") != null) surfaceView.put("summary", card.get("summary"));
+        }
+        res.put("surface", surfaceView);
+        res.put("card", card != null ? new LinkedHashMap<>(card) : Map.of());
+        List<Integer> versionNos = new ArrayList<>();
+        Integer latest = null;
+        try {
+            List<Map<String, Object>> versions = databaseService.listCharacterVersions(name);
+            if (versions != null) {
+                for (Map<String, Object> v : versions) {
+                    Object vn = v.get("version");
+                    if (vn instanceof Number n) {
+                        versionNos.add(n.intValue());
+                        latest = latest == null ? n.intValue() : Math.max(latest, n.intValue());
+                    }
+                }
+            }
+        } catch (RuntimeException e) {
+            // 版本库不可用 → 版本信息置空，卡片主体照常返回
+        }
+        res.put("version", latest);
+        res.put("versions", versionNos);
+        return ResponseEntity.ok(res);
+    }
+
+    /**
+     * P1 角色卡片保存（PUT /api/characters/{name}/card）——body 为完整或部分卡 JSON，
+     * 与现有卡合并后存内存 + 写盘 + 记一版（来源保持不变）。空 body → 400。
+     * 响应 {status, name, layers[层键名], version}（绝不回 layer 内容）。
+     */
+    @PutMapping("/{name}/card")
+    public ResponseEntity<?> saveCard(@PathVariable String name, @RequestBody(required = false) Map<String, Object> body) {
+        if (body == null || body.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "卡片内容不能为空"));
+        }
+        Map<String, Object> merged = new LinkedHashMap<>();
+        Map<String, Object> existing = personaCards.get(name);
+        if (existing == null) {
+            try {
+                existing = PersonaCardLoader.cardFor(name);
+            } catch (RuntimeException e) {
+                existing = null;
+            }
+        }
+        if (existing != null) merged.putAll(existing);
+        merged.putAll(body);
+        merged.put("name", name);
+        personaCards.put(name, merged);
+        persistCardToDisk(name, merged);
+        String source = null;
+        for (Map<String, Object> c : characters) {
+            if (name.equals(c.get("name"))) {
+                source = strOf(c.get("source"));
+                break;
+            }
+        }
+        if (source == null) {
+            try {
+                source = databaseService.getCharacterSource(name);
+            } catch (RuntimeException e) {
+                source = null;
+            }
+        }
+        Integer version = null;
+        try {
+            Map<String, Object> v = databaseService.saveCharacterVersion(name, source,
+                    str(merged.get("personaDesc"), str(merged.get("persona"), "")),
+                    str(merged.get("voice"), ""), str(merged.get("background"), ""),
+                    PERSONA_MAPPER.writeValueAsString(merged));
+            if (v != null && v.get("version") instanceof Number n) version = n.intValue();
+        } catch (Exception e) {
+            log.warn("CharacterController: 卡片版本记录失败「{}」（已跳过）: {}", name, e.getMessage());
+        }
+        Map<String, Object> res = new LinkedHashMap<>();
+        res.put("status", "ok");
+        res.put("name", name);
+        res.put("layers", PersonaCardLoader.LAYER_KEYS.stream().filter(merged::containsKey).toList());
+        res.put("version", version);
+        return ResponseEntity.ok(res);
+    }
+
+    /**
+     * P1 角色卡片导出（GET /api/characters/{name}/card/export）——下载完整卡 JSON 文件
+     * （与 POST /{name}/persona 导入契约同形，可直接回导）。无卡 → 404。
+     */
+    @GetMapping("/{name}/card/export")
+    public ResponseEntity<String> exportCard(@PathVariable String name) {
+        Map<String, Object> card = personaCards.get(name);
+        if (card == null) {
+            try {
+                card = PersonaCardLoader.cardFor(name);
+            } catch (RuntimeException e) {
+                card = null;
+            }
+        }
+        if (card == null) {
+            return ResponseEntity.status(404).body("{\"error\":\"角色卡不存在: " + name + "\"}");
+        }
+        String json;
+        try {
+            json = PERSONA_MAPPER.writeValueAsString(card);
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().body("{\"error\":\"卡片序列化失败\"}");
+        }
+        return ResponseEntity.ok()
+                .header("Content-Type", "application/json; charset=UTF-8")
+                .header("Content-Disposition", "attachment; filename=\"character-" + name + ".json\"")
+                .body(json);
+    }
+
+    /**
+     * P1 角色版本列表（GET /api/characters/{name}/versions）——{name, versions[]}（升序，不含卡全文）。
+     */
+    @GetMapping("/{name}/versions")
+    public ResponseEntity<Map<String, Object>> listVersions(@PathVariable String name) {
+        List<Map<String, Object>> versions;
+        try {
+            versions = databaseService.listCharacterVersions(name);
+            if (versions == null) versions = List.of();
+        } catch (RuntimeException e) {
+            versions = List.of();
+        }
+        return ResponseEntity.ok(Map.of("name", name, "versions", versions));
     }
 
     @PostMapping
@@ -219,11 +412,17 @@ public class CharacterController {
         ch.put("voice_mode", nvl(body.get("voice_mode")));
         ch.put("voice_data", nvl(body.get("voice_data")));
         ch.put("player_id", pid);
+        // P1 角色来源：UI 手工创建 = MANUAL（后续批量升级默认跳过，防 AI 篡改用户人设）
+        ch.put("source", "MANUAL");
         characters.add(ch);
         try {
             databaseService.saveCharacter(nm, (String) ch.get("persona"),
                     (String) ch.get("voice"), (String) ch.get("background"), pid,
                     (String) ch.get("voice_mode"), (String) ch.get("voice_data"));
+            databaseService.saveCharacterSource(nm, "MANUAL");
+            // P1 版本化：手工创建记 v1（纯表层，无卡）
+            databaseService.saveCharacterVersion(nm, "MANUAL", (String) ch.get("persona"),
+                    (String) ch.get("voice"), (String) ch.get("background"), null);
         } catch (DataIntegrityViolationException e) {
             // DB unique 兜底（③层，并发窗口）：player_id/name 被并发占用 → 回滚内存列表
             characters.removeIf(c -> nm.equals(c.get("name")));
@@ -316,9 +515,12 @@ public class CharacterController {
         ch.put("voice", voice);
         ch.put("background", background);
         ch.put("player_id", null);
+        // P1 角色来源：AI 生成 = AI_GENERATED
+        ch.put("source", "AI_GENERATED");
         characters.add(ch);
         try {
             databaseService.saveCharacter(name, persona, voice, background);
+            databaseService.saveCharacterSource(name, "AI_GENERATED");
         } catch (DataIntegrityViolationException e) {
             // DB unique 兜底（并发窗口）：回滚内存列表
             characters.removeIf(c -> name.equals(c.get("name")));
@@ -331,6 +533,13 @@ public class CharacterController {
             Map<String, Object> card = buildCardFromResult(name, result);
             personaCards.put(name, card);
             persistCardToDisk(name, card);
+            // P1 版本化：AI 生成记 v1（含完整卡）
+            try {
+                databaseService.saveCharacterVersion(name, "AI_GENERATED", persona, voice, background,
+                        PERSONA_MAPPER.writeValueAsString(card));
+            } catch (Exception e) {
+                log.warn("CharacterController: 生成版本记录失败「{}」（已跳过）: {}", name, e.getMessage());
+            }
             // P-0817-A：异步生成 TTS 音色描述（不阻塞响应）
             generateTtsToneAsync(name, persona, voice, str(result.get("appearance"), ""), card);
         }
@@ -373,9 +582,12 @@ public class CharacterController {
             trial.put("voice", voice);
             trial.put("background", background);
             trial.put("player_id", null);
+            // P1 角色来源：场景配套自动落库 = AI_GENERATED
+            trial.put("source", "AI_GENERATED");
             characters.add(trial);
             try {
                 databaseService.saveCharacter(candidate, persona, voice, background);
+                databaseService.saveCharacterSource(candidate, "AI_GENERATED");
                 persisted = trial;
                 finalName = candidate;
                 break;
@@ -422,6 +634,9 @@ public class CharacterController {
      * <p>幂等：有卡的跳过；单角色失败跳过继续（log.warn），汇总 {upgraded, skipped, failed, names[]}
      * 经 GET /api/characters/upgrade/status 查询。body 可选 {@code max_roles} 限制升级数（缺省全部；
      * ≤0 视同全部）。响应立即返回 {started:true}。
+     *
+     * <p>P1 来源保护：source=MANUAL/IMPORTED（用户显式内容）默认跳过，防 AI 批量篡改用户人设；
+     * 存量无 source（LEGACY）与 AI 生成无卡的可升级；body {@code force:true} 强制升级全部无卡角色。
      */
     @PostMapping("/upgrade")
     public ResponseEntity<Map<String, Object>> upgrade(@RequestBody(required = false) Map<String, Object> body) {
@@ -429,15 +644,20 @@ public class CharacterController {
             return ResponseEntity.ok(Map.of("started", false, "message", "已有升级任务运行中"));
         }
         int maxRoles = 0;
-        if (body != null && body.get("max_roles") instanceof Number n) {
-            maxRoles = n.intValue();
+        boolean force = false;
+        if (body != null) {
+            if (body.get("max_roles") instanceof Number n) {
+                maxRoles = n.intValue();
+            }
+            force = Boolean.TRUE.equals(body.get("force"));
         }
         upgradeStatus.clear();
         upgradeStatus.put("running", true);
         upgradeStatus.put("startedAt", LocalDateTime.now().toString());
         // 虚拟线程异步执行，响应立即返回（不阻塞主线程）
         final int roles = maxRoles;
-        Thread.startVirtualThread(() -> runUpgrade(roles));
+        final boolean forceUpgrade = force;
+        Thread.startVirtualThread(() -> runUpgrade(roles, forceUpgrade));
         return ResponseEntity.ok(Map.of("started", true));
     }
 
@@ -448,7 +668,7 @@ public class CharacterController {
     }
 
     /** P-0811-D：升级主循环（虚拟线程内执行）。 */
-    private void runUpgrade(int maxRoles) {
+    private void runUpgrade(int maxRoles, boolean force) {
         int upgraded = 0;
         int skipped = 0;
         int failed = 0;
@@ -460,6 +680,11 @@ public class CharacterController {
                 String name = str(ch.get("name"), "");
                 if (name.isEmpty()) continue;
                 if (hasCardForUpgrade(name)) { // 幂等：有卡跳过
+                    skipped++;
+                    continue;
+                }
+                if (!force && isExplicitUserCharacter(name, ch)) {
+                    // P1 来源保护：用户手工/导入人设默认跳过（force:true 才升级）
                     skipped++;
                     continue;
                 }
@@ -491,28 +716,74 @@ public class CharacterController {
         return personaCards.containsKey(name) || PersonaCardLoader.hasCard(name);
     }
 
+    /**
+     * P1 来源保护判定：内存 source 字段 → DB source 字段，任一为 MANUAL/IMPORTED 即视为用户显式内容。
+     * DB 缺失/异常 → 保守放行（LEGACY 可升级；mock DB 测试默认放行）。
+     */
+    private boolean isExplicitUserCharacter(String name, Map<String, Object> ch) {
+        Object memSource = ch != null ? ch.get("source") : null;
+        if (com.roleplay.engine.db.service.DatabaseService.isExplicitUserSource(strOf(memSource))) return true;
+        try {
+            String dbSource = databaseService.getCharacterSource(name);
+            return com.roleplay.engine.db.service.DatabaseService.isExplicitUserSource(dbSource);
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    private static String strOf(Object o) {
+        return o == null ? null : String.valueOf(o);
+    }
+
     /** P-0811-D：升级结果落地——表层替换（H2 四字段 + 内存列表）+ 五层卡写盘 + personaCards 挂载。 */
     private void applyUpgradeResult(String name, Map<String, Object> result) {
         String persona = str(result.get("persona"), "");
         String voice = str(result.get("voice"), "");
         String background = str(result.get("background"), "");
+        // P1 版本化：升级前快照旧版（来源保持旧值，便于回溯用户原始人设）
+        Map<String, Object> before = characters.stream()
+                .filter(c -> name.equals(c.get("name"))).findFirst().orElse(Map.of());
+        String oldSource = strOf(before.get("source"));
+        if (oldSource == null) {
+            try {
+                oldSource = databaseService.getCharacterSource(name);
+            } catch (RuntimeException e) {
+                oldSource = null;
+            }
+        }
+        Map<String, Object> oldCard = personaCards.get(name);
         // 表层替换：显式「替换」动作（仅升级路径覆盖，区别于常规 attach 的不覆盖规则）
         databaseService.saveCharacter(name, persona, voice, background);
+        // P1 来源切换：升级产物 = AI_GENERATED（内存 + H2）
+        databaseService.saveCharacterSource(name, "AI_GENERATED");
         for (int i = 0; i < characters.size(); i++) {
             if (name.equals(characters.get(i).get("name"))) {
                 Map<String, Object> updated = new LinkedHashMap<>(characters.get(i));
                 updated.put("persona", persona);
                 updated.put("voice", voice);
                 updated.put("background", background);
+                updated.put("source", "AI_GENERATED");
                 characters.set(i, updated);
                 break;
             }
         }
         boolean hasLayer = PersonaCardLoader.LAYER_KEYS.stream().anyMatch(result::containsKey);
+        Map<String, Object> card = null;
         if (hasLayer) {
-            Map<String, Object> card = buildCardFromResult(name, result);
+            card = buildCardFromResult(name, result);
             personaCards.put(name, card);
             persistCardToDisk(name, card);
+        }
+        // P1 版本化：升级前旧版 + 升级后新版各记一行（DB 异常只记日志，不中断升级）
+        try {
+            databaseService.saveCharacterVersion(name, oldSource,
+                    str(before.get("persona"), ""), str(before.get("voice"), ""),
+                    str(before.get("background"), ""),
+                    oldCard == null ? null : PERSONA_MAPPER.writeValueAsString(oldCard));
+            databaseService.saveCharacterVersion(name, "AI_GENERATED", persona, voice, background,
+                    card == null ? null : PERSONA_MAPPER.writeValueAsString(card));
+        } catch (Exception e) {
+            log.warn("CharacterController: 升级版本记录失败「{}」（已跳过）: {}", name, e.getMessage());
         }
     }
 
@@ -623,11 +894,14 @@ public class CharacterController {
             clean.put("voice", str(ch.get("voice"), ""));
             clean.put("background", str(ch.get("background"), ""));
             clean.put("player_id", pid(ch.get("player_id")));
+            // P1 角色来源：批量导入 = IMPORTED（body 可显式覆盖；用户内容升级默认跳过）
+            clean.put("source", str(ch.get("source"), "IMPORTED"));
             characters.add(clean);
             try {
                 databaseService.saveCharacter((String) clean.get("name"), (String) clean.get("persona"),
                         (String) clean.get("voice"), (String) clean.get("background"),
                         (String) clean.get("player_id"));
+                databaseService.saveCharacterSource((String) clean.get("name"), (String) clean.get("source"));
             } catch (DataIntegrityViolationException e) {
                 // DB unique 兜底（并发窗口）：回滚本批已加项
                 characters.removeIf(c -> seenNames.contains(c.get("name")));

@@ -146,6 +146,8 @@ public class RouterService {
     private volatile Map<String, Object> sceneGoals = null;
     /** 已向玩家揭示过全文的目标键（完成/失败各揭示一次，防重复广播）。 */
     private final Set<String> goalRevealed = ConcurrentHashMap.newKeySet();
+    /** P1 消息持久化：DatabaseService（SessionRegistry 显式透传；null=关闭落库）。 */
+    private volatile com.roleplay.engine.db.service.DatabaseService databaseService = null;
     /** P0 主控导演指令：后台导演指令文本（WorldRuntimeService 每轮后推送；开场轮为空）。 */
     private volatile String directorDirective = "";
     /**
@@ -290,13 +292,18 @@ public class RouterService {
     public boolean isRunning() { return running; }
 
     /** 会话专属记忆存储（每个 SessionRegistry 会话独立实例；测试/运维按会话断言用）。 */
+    public MemoryStore getMemoryStore() { return memory; }
 
     /**
+     * P1 消息持久化：单行落库（best-effort —— 未注入 DatabaseService 或 DB 异常时
      * 静默跳过，恒不传染回合流程；messageId 为空时同样跳过）。
      */
+    private void persistChatMessage(String messageId, String role, String name, String content,
                                     String status, String trackId) {
+        com.roleplay.engine.db.service.DatabaseService db = this.databaseService;
         if (db == null || messageId == null || messageId.isBlank()) return;
         try {
+            db.saveChatMessage(messageId, sessionId, roundCount, role, name, content, status, trackId);
         } catch (RuntimeException e) {
             log.warn("消息持久化失败（已跳过，不影响回合）: session={} msg={} err={}",
                     sessionId, messageId, e.getMessage());
@@ -799,9 +806,14 @@ public class RouterService {
                 Message agentSpoke = new Message(Message.Role.AGENT, speaker, userInput);
                 agentSpoke.setRoundNumber(roundCount);
                 memory.addMessage(agentSpoke);
+                // P1 消息持久化（FINAL 即时落库，与内存同源 messageId）
+                persistChatMessage(agentSpoke.getMessageId(), "agent", speaker, userInput,
+                        com.roleplay.engine.db.entity.ChatMessageEntity.STATUS_FINAL, "main");
                 if (sse != null) {
                     sse.broadcastUserInput(sessionId, userInput, "human_discussion", speaker, roundCount);
                 }
+                userCategory = "dialogue";
+                narration = userInput;
             } else {
                 UserInputCategory cat = arbiter.classifyUserInput(
                     userInput, "always", memory.getShortTermContextRaw(2));
@@ -815,6 +827,9 @@ public class RouterService {
                 Message userMsg = new Message(Message.Role.USER, speakerName, narration);
                 userMsg.setRoundNumber(roundCount);
                 memory.addMessage(userMsg);
+                // P1 消息持久化（FINAL 即时落库）
+                persistChatMessage(userMsg.getMessageId(), "user", speakerName, narration,
+                        com.roleplay.engine.db.entity.ChatMessageEntity.STATUS_FINAL, "main");
                 // D8: 非命令输入 → 推送 user_input 事件（前端回显主控输入）
                 if (sse != null && !userInput.startsWith("/")) {
                     sse.broadcastUserInput(sessionId, narration, userCategory, speakerName, roundCount);
@@ -906,6 +921,9 @@ public class RouterService {
                     agentMsg.setVisibleTo(output.visibleTo());
                     agentMsg.setMessageId(agentMessageId);
                     memory.addMessage(agentMsg);
+                    // P1 消息持久化（FINAL 即时落库）
+                    persistChatMessage(agentMessageId, "agent", output.agentName(), output.content(),
+                            com.roleplay.engine.db.entity.ChatMessageEntity.STATUS_FINAL, output.trackId());
 
                     Map<String, Object> outMap = new LinkedHashMap<>();
                     outMap.put("agent_name", output.agentName());
@@ -965,6 +983,9 @@ public class RouterService {
             Message arbiterMsg = new Message(Message.Role.ARBITER, "主控", narrationText);
             arbiterMsg.setRoundNumber(roundCount);
             memory.addMessage(arbiterMsg);
+            // P1 消息持久化（FINAL 即时落库）
+            persistChatMessage(arbiterMsg.getMessageId(), "arbiter", "主控", narrationText,
+                    com.roleplay.engine.db.entity.ChatMessageEntity.STATUS_FINAL, "main");
             // D8: 主控整合旁白推送（前端 addIntegration 上屏）
             if (sse != null) sse.broadcastArbiterIntegrate(roundCount, narrationText);
             if (sse != null) sse.broadcastArbiterIntegrate(sessionId, roundCount, narrationText);
@@ -1384,6 +1405,8 @@ public class RouterService {
                 // P0 消息标识：本任务分配稳定 messageId（token/结算/失败/持久化同源）；
                 // P1 持久化：生成前先记 STREAMING 行（前端断线可知进行中，失败转 FAILED）。
                 serialMessageId[0] = newMessageId();
+                persistChatMessage(serialMessageId[0], "agent", task.agentName(), "",
+                        com.roleplay.engine.db.entity.ChatMessageEntity.STATUS_STREAMING, task.trackId());
                 java.util.concurrent.atomic.AtomicInteger tokenSeq = new java.util.concurrent.atomic.AtomicInteger(0);
                 // P-0802-M：后端真·流式 —— 增量经 SSE agent_token 逐片推送（前端逐字渲染）；
                 // 完整内容仍由下方 broadcastAgentOutput 结算（流式失败自动降级非流式，内容不丢）
@@ -1411,6 +1434,9 @@ public class RouterService {
                     agentMsg.setVisibleTo(task.visibleTo());
                     agentMsg.setMessageId(serialMessageId[0]);
                     memory.addMessage(agentMsg);
+                    // P1 消息持久化（STREAMING → FINAL）
+                    persistChatMessage(serialMessageId[0], "agent", task.agentName(), content,
+                            com.roleplay.engine.db.entity.ChatMessageEntity.STATUS_FINAL, task.trackId());
 
                     Map<String, Object> outMap = new LinkedHashMap<>();
                     outMap.put("agent_name", task.agentName());
@@ -1438,8 +1464,12 @@ public class RouterService {
                 it.saveUnfinished(e.getPartial());
                 interruptManager.unregister(it.getId());
                 // P0 流式失败：本流以 FAILED 结算（STREAMING → FAILED），前端不再悬挂未完成句
+                String partial = e.getPartial();
+                persistChatMessage(serialMessageId[0], "agent", task.agentName(),
                         partial == null ? "" : partial,
+                        com.roleplay.engine.db.entity.ChatMessageEntity.STATUS_FAILED, task.trackId());
                 if (sse != null) sse.broadcastAgentError(sessionId, serialMessageId[0],
+                        task.agentName(), e.getReason());
                 log.info("Agent {} serial task cancelled: {}", task.agentName(), e.getReason());
                 break;
             } catch (Exception e) {
@@ -1448,11 +1478,14 @@ public class RouterService {
                 interruptManager.markFailed(it.getId(), e.getMessage());
                 interruptManager.unregister(it.getId());
                 // P0 流式失败：本流以 FAILED 结算（前端按 message_id 结算对应流，不覆盖他句）
+                String placeholder = "[" + task.agentName() + " 走神了: " + e.getMessage() + "]";
+                persistChatMessage(serialMessageId[0], "agent", task.agentName(), placeholder,
+                        com.roleplay.engine.db.entity.ChatMessageEntity.STATUS_FAILED, task.trackId());
                 if (sse != null) sse.broadcastAgentError(sessionId, serialMessageId[0],
                         task.agentName(), e.getMessage());
                 outputs.add(new AgentExecutor.AgentOutput(
                         task.agentName(),
-                        "[" + task.agentName() + " 走神了: " + e.getMessage() + "]",
+                        placeholder,
                         task.trackId(), List.of(), elapsed, e.getMessage()));
                 log.warn("Agent {} serial failed: {}", task.agentName(), e.getMessage());
             }
@@ -1561,6 +1594,10 @@ public class RouterService {
     public void setSerialRound(boolean serialRound) { this.serialRound = serialRound; }
     public boolean isSerialRound() { return serialRound; }
 
+    /** P1 消息持久化：注入 DatabaseService（SessionRegistry 显式透传；null=关闭落库，测试直构零影响）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    public void setDatabaseService(com.roleplay.engine.db.service.DatabaseService databaseService) {
+        this.databaseService = databaseService;
     }
 
     /** P0 主控导演指令：写入后台导演指令（WorldRuntimeService 每轮后推送；buildAgentContext 注入）。 */
