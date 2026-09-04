@@ -6,7 +6,6 @@
  */
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { useAppStore } from '../../store/appStore';
-import { api } from '../../api/client';
 import { AnnouncementBanner } from '../AnnouncementBanner';
 import { PhaserSimulationView } from '../../phaser/PhaserSimulationView';
 import { PhaserScriptMapView } from '../../phaser/PhaserScriptMapView';
@@ -54,43 +53,6 @@ export function ChatMessageFlow({ showSimPanel, toggleSimPanel, scriptState, sim
   const protoMain = store.mode === 'script' && UI_PROTO_V2_ENABLED && !!scriptState;
   const scriptPhase = String(scriptState?.phase || store.scriptPhase || '');
   const convRef = useRef<HTMLDivElement>(null);
-  /** P-0814-C：轮询兜底武装 —— 已发过 playback_done 信号的轮次（后端 roundCount=最近完成轮）；
-   *  后端空闲（status=idle）且 round 推进到未发信号的轮次 → 武装，由自动推进 effect 发信号。
-   *  自愈覆盖：SSE round_complete 错过 / 断线重连 / 挂载前轮次已播完（原 mountRound 基准轮 diff 会漏） */
-  const lastFiredRoundRef = useRef(0);
-
-  // P-0814-B/C：经典视图武装轮询兜底 —— round_complete SSE 错过（重连/连接前广播完）时，
-  // 5s 轮询发现后端「等待播出完毕」（awaiting_playback=true，P-0814-C 后端 /api/state 暴露）且
-  // 轮次推进到未发信号轮次即重新武装；武装后由自动推进 effect 发信号（仅一般模式）。
-  // P-0814-E：有玩家（currentPlayer 在 agents 中=玩家角色在场）时不武装不推进——一问一答：
-  // AI 播完即停等玩家输入（ChatComposer 输入 → api.send → 后端输入即推进）；导演/无玩家仍自动推进。
-  useEffect(() => {
-    const sid = store.sessionId;
-    if (!sid) return;
-    let alive = true;
-    const check = async () => {
-      try {
-        const st: any = await api.getState(sid);
-        if (!alive) return;
-        const round = Number(st?.round ?? 0);
-        const awaiting = st?.awaiting_playback === true;
-        if (round > 0 && awaiting && round > lastFiredRoundRef.current) {
-          const s = useAppStore.getState();
-          if (s.mode !== 'script' && s.mode !== 'werewolf') {
-            // P-0814-E：有玩家（玩家角色在场）不武装——AI 播完即停等玩家输入，不自动推进
-            if (!s.agents.includes(s.currentPlayer)) {
-              if (round > s.currentRound) useAppStore.setState({ currentRound: round });
-              useAppStore.setState({ playbackArmed: true });
-            }
-          }
-        }
-      } catch { /* 后端不可达：忽略 */ }
-    };
-    void check();
-    const t = setInterval(check, 5000);
-    return () => { alive = false; clearInterval(t); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [store.sessionId]);
 
   // P-0802-M：流式增量只改 content 不改 length —— 依赖末尾消息内容才能逐字跟滚
   useEffect(() => {
@@ -114,32 +76,8 @@ export function ChatMessageFlow({ showSimPanel, toggleSimPanel, scriptState, sim
     });
   }, [store.historyFilter, store.messages, store.mode, store.directorCharacter]);
 
-  // P-0814-C：自动推进（删「▶ 推进下一轮」按钮）——经典视图的「播放完毕」检测点 = round_complete
-  //（SSE 已按序送达本轮回 agent_output/agent_token，消息全部渲染完成）；武装后自动 POST
-  // /api/simulation/playback_done 驱动下一轮（一般模式无 group_id）。触发点是轮次完成事件，
-  // 不是定时器；发信号前同步清除武装并记录已发信号轮次（每轮一次防重复）。
-  // ⚠️ 不可在此 effect 内 setTimeout 后同步清 armed：清 armed 触发重渲染 → effect cleanup 会
-  // 取消未执行的 timer（P-0814-C 实测：fire 永远不发出、lastFired 提前置位导致永久停摆）——
-  // 故直接即时发信号（后端为阻塞式端点，同步生成下一轮期间 UI 有充足时间渲染落定）。
-  // 失败 3s 后重新武装重试（轮询兜底 5s 也会重新武装）。
-  // P-0814-E：有玩家（currentPlayer 在 agents 中=玩家角色在场）时不自动推进——一问一答：
-  // AI 轮播完即停，等玩家输入（ChatComposer 输入 → api.send → 后端 runRound 玩家分支输入即
-  // 推进，无需 playback_done）；导演/无玩家模式维持播完自动推进（防卡死）。
-  useEffect(() => {
-    const sid = store.sessionId;
-    if (!store.playbackArmed || !sid) return;
-    if (store.mode === 'script' || store.mode === 'werewolf') return;
-    if (store.agents.includes(store.currentPlayer)) return; // 有玩家：不自动发信号，停等输入
-    useAppStore.setState({ playbackArmed: false });
-    const firedRound = useAppStore.getState().currentRound;
-    if (firedRound > lastFiredRoundRef.current) lastFiredRoundRef.current = firedRound;
-    api
-      .simPlaybackDone({ session_id: sid })
-      .catch((e) => {
-        console.warn('自动推进 playback_done 失败（经典视图，将重试）', e);
-        setTimeout(() => useAppStore.setState({ playbackArmed: true }), 3000);
-      });
-  }, [store.playbackArmed, store.mode, store.sessionId]);
+  // P0 Gal 收敛：经典一般模式自动推进已删除（一般模式唯一入口 GalGeneralView，
+  // 等待态点击/输入驱动；本文件只服务剧本杀/狼人杀，不再消费 playbackArmed）。
 
   return (
     <main className="chat-main">
@@ -351,8 +289,8 @@ export function ChatMessageFlow({ showSimPanel, toggleSimPanel, scriptState, sim
       <div ref={convRef} className="conversation">
         {visibleMessages.length === 0 ? (
           <div className="empty-state">
-            <div className="empty-title">从一轮对话开始</div>
-            <div>点击“推进一轮”让角色自动互动，或在底部输入主控旁白来改变节奏、补充事实、指定行动方向。</div>
+            <div className="empty-title">等待对局消息</div>
+            <div>狼人杀发言与阶段推进将显示在这里。P0 Gal 收敛：一般模式请走 Gal 界面，本页只服务剧本杀/狼人杀。</div>
           </div>
         ) : visibleMessages.map((msg, i) => {
           if (msg.role === 'system') {
@@ -380,15 +318,6 @@ export function ChatMessageFlow({ showSimPanel, toggleSimPanel, scriptState, sim
         })}
       </div>
       ) : null}
-
-      {store.currentTasks.length > 0 && (
-        <div className="task-box">
-          <div className="label" style={{ marginBottom: 5 }}>本轮任务分配</div>
-          {store.currentTasks.map((task, i) => (
-            <div className="task-row" key={`${task.agent_name}-${i}`}><strong>{task.agent_name}</strong>：{task.task}</div>
-          ))}
-        </div>
-      )}
 
       {store.ttsStatus && <div className="tts-indicator">{store.ttsStatus}</div>}
       {/* P-0815-B：剧本杀模式隐藏 ChatComposer——发言统一走 gal 输入区（ScriptGalChatPanel liveSay 路由），

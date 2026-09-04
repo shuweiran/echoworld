@@ -9,8 +9,6 @@ import com.roleplay.engine.llm.LLMClient;
 import com.roleplay.engine.service.ArbiterService.TrackConfigResult;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -18,7 +16,6 @@ import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyList;
@@ -34,11 +31,12 @@ import static org.mockito.Mockito.when;
  * P-0815-C：一般模式双人场景取消 next_round 预测（跳过主控整合 LLM）。
  *
  * <p>验证：
- * ① 一般模式双人（2 active AI）→ integrateOutputs 不被调用；
- * ② 一般模式双人（AI + 玩家角色，protagonist 模式）→ integrateOutputs 不被调用；
+ * ① 一般模式双人（2 active AI）→ 主控配置/整合均不被调用；
+ * ② 一般模式双人（AI + 玩家角色，protagonist 模式）→ 主控配置/整合均不被调用；
  * ③ 一般模式多人（3 active）→ integrateOutputs 仍被调用（预测闭环零变化）；
  * ④ 狼人杀模式（2 active）→ integrateOutputs 仍被调用（GM 推进必须保留）；
- * ⑤ 双人场景跳过 → pendingNextRound 清空（下轮 configureTracks 收到 null 预测）。
+ * ⑤ 玩家与单 Agent 直聊 → 玩家原文入史，不经主控分类/改写。
+ * ⑥ 玩家与双 Agent 直聊、⑦ 大 roster 定向双 Agent 均不启用主控。
  */
 class RouterServiceDuoSkipIntegrateTest {
 
@@ -109,6 +107,8 @@ class RouterServiceDuoSkipIntegrateTest {
 
         assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
         assertEquals(2, result.agentOutputs.size(), "双 AI 角色均应发言");
+        verify(arbiter, never()).configureTracks(anyString(), anyList(), anyString(), anyString(),
+                anyString(), anyList(), anyList(), anySet(), any());
         verify(arbiter, never()).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
     }
 
@@ -124,6 +124,8 @@ class RouterServiceDuoSkipIntegrateTest {
 
         assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
         assertEquals(1, result.agentOutputs.size(), "仅 AI 角色发言（玩家角色被排除生成）");
+        verify(arbiter, never()).configureTracks(anyString(), anyList(), anyString(), anyString(),
+                anyString(), anyList(), anyList(), anySet(), any());
         verify(arbiter, never()).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
     }
 
@@ -138,6 +140,8 @@ class RouterServiceDuoSkipIntegrateTest {
 
         assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
         assertEquals(3, result.agentOutputs.size());
+        verify(arbiter, times(1)).configureTracks(anyString(), anyList(), anyString(), anyString(),
+                anyString(), anyList(), anyList(), anySet(), any());
         verify(arbiter, times(1)).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
     }
 
@@ -152,24 +156,59 @@ class RouterServiceDuoSkipIntegrateTest {
 
         assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
         assertEquals(2, result.agentOutputs.size());
+        verify(arbiter, times(1)).configureTracks(anyString(), anyList(), anyString(), anyString(),
+                anyString(), anyList(), anyList(), anySet(), any());
         verify(arbiter, times(1)).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
     }
 
-    // ── ⑤ 双人跳过 → pendingNextRound 清空（下轮 configureTracks 收 null 预测）──
+    // ── ⑤ 玩家 + 单 Agent 直聊 → 原文入史，不经主控分类/改写 ──
 
     @Test
-    @DisplayName("⑤ 双人场景跳过整合 → 下轮 configureTracks 收到 null 预测（pendingNextRound 清空）")
-    void duoSkip_clearsPendingNextRound() {
-        RouterService router = newRouter("free", "", List.of("A", "B"), List.of("A", "B"));
+    @DisplayName("⑤ 玩家与单 Agent 直聊 → 跳过主控配置、分类、改写与整合")
+    void playerAndSingleAgent_skipsAllControllerLlmCalls() {
+        RouterService router = newRouter("protagonist", "P", List.of("A", "P"), List.of("A", "P"));
 
-        router.runRound(null, null);
-        router.runRound(null, null);
+        RouterService.RoundResult result = router.runRound("你好，直接回答我。", null);
 
-        @SuppressWarnings("unchecked")
-        ArgumentCaptor<Map<String, Object>> predictionCaptor = ArgumentCaptor.forClass(Map.class);
-        verify(arbiter, times(2)).configureTracks(anyString(), anyList(), anyString(), anyString(),
-                anyString(), anyList(), anyList(), anySet(), predictionCaptor.capture());
-        assertNull(predictionCaptor.getAllValues().get(1),
-                "双人场景跳过整合后，下一轮 configureTracks 不应收到上轮预测");
+        assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
+        assertEquals(1, result.agentOutputs.size(), "仅单个 AI 回复玩家");
+        verify(arbiter, never()).configureTracks(anyString(), anyList(), anyString(), anyString(),
+                anyString(), anyList(), anyList(), anySet(), any());
+        verify(arbiter, never()).classifyUserInput(anyString(), anyString(), anyList());
+        verify(arbiter, never()).processUserInput(anyString(), any(), anyString(), anyList(), anyList());
+        verify(arbiter, never()).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("⑥ 玩家与双 Agent 直聊 → 两个 AI 回复且不启用主控")
+    void playerAndTwoAgents_stayDirect() {
+        RouterService router = newRouter("protagonist", "P", List.of("A", "B", "P"), List.of("A", "B", "P"));
+
+        RouterService.RoundResult result = router.runRound("你们怎么看？", null);
+
+        assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
+        assertEquals(List.of("A", "B"), result.agentOutputs.stream()
+                .map(output -> String.valueOf(output.get("agent_name"))).sorted().toList());
+        verify(arbiter, never()).configureTracks(anyString(), anyList(), anyString(), anyString(),
+                anyString(), anyList(), anyList(), anySet(), any());
+        verify(arbiter, never()).classifyUserInput(anyString(), anyString(), anyList());
+        verify(arbiter, never()).processUserInput(anyString(), any(), anyString(), anyList(), anyList());
+        verify(arbiter, never()).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
+    }
+
+    @Test
+    @DisplayName("⑦ 大 roster 精确定向两个 Agent → 仅目标回复且不启用主控")
+    void largerRosterTargetingTwoAgents_staysDirect() {
+        RouterService router = newRouter("free", "", List.of("A", "B", "C", "D"), List.of("A", "B", "C", "D"));
+
+        RouterService.RoundResult result = router.runRoundTargeted(
+                "A 和 C 回答", null, "玩家", null, List.of("A", "C"));
+
+        assertFalse(result.status.startsWith("error"), "round should not error: " + result.status);
+        assertEquals(List.of("A", "C"), result.agentOutputs.stream()
+                .map(output -> String.valueOf(output.get("agent_name"))).sorted().toList());
+        verify(arbiter, never()).configureTracks(anyString(), anyList(), anyString(), anyString(),
+                anyString(), anyList(), anyList(), anySet(), any());
+        verify(arbiter, never()).integrateOutputs(anyString(), anyList(), anyList(), anyBoolean());
     }
 }

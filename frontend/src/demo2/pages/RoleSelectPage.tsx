@@ -517,7 +517,7 @@ export function RoleSelectPage() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               <button className="role-add" onClick={() => setAddModal('new')}>✨ 新增自定义角色（手动）</button>
               <button className="role-add" onClick={() => setAddModal('ai')}>🤖 AI 生成角色</button>
-              <button className="role-add" onClick={() => setAddModal('import')}>📥 从其他剧本导入角色</button>
+              <button className="role-add" onClick={() => setAddModal('import')}>📥 从角色库或其他剧本导入角色</button>
             </div>
           </div>
         </div>

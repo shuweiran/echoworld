@@ -760,13 +760,33 @@ public class RouterService {
         // Step 2: Silent process pending track requests
         trackRequestService.silentProcessPending(sessionId, goals);
 
-        // Step 2: Configure tracks via Arbiter
+        // Step 2: Configure tracks via Arbiter. 一般模式至多两个可回复 Agent 时，
+        // 对话轨道唯一，直接构造 MERGED 轨道，不调用主控 LLM。
         String enrichedScene = loreContext.isEmpty() ? sceneDescription
             : sceneDescription + loreContext;
         List<Map<String, Object>> prevTrackLayout = previousTracks;
-        TrackConfigResult trackResult = arbiter.configureTracks(
-            enrichedScene, agentNames, historySummary,
-            mode, protagonist, previousTracks, goals, restrictedAgents, pendingNextRound);
+        List<String> directResponders = agentNames.stream()
+                .filter(name -> protagonist == null || !name.equals(protagonist))
+                .filter(name -> !restrictedAgents.contains(name))
+                .filter(name -> responseAgents == null || responseAgents.isEmpty() || responseAgents.contains(name))
+                .toList();
+        boolean directConversation = isGeneralMode(mode) && !directResponders.isEmpty()
+                && directResponders.size() <= 2;
+        TrackConfigResult trackResult;
+        if (directConversation) {
+            List<String> directMembers = new ArrayList<>();
+            if (protagonist != null && !protagonist.isBlank() && agentNames.contains(protagonist)) {
+                directMembers.add(protagonist);
+            }
+            directMembers.addAll(directResponders);
+            Track directTrack = new Track("main", Track.Mode.MERGED)
+                    .withAgents(directMembers).withLabel("直接对话");
+            trackResult = new TrackConfigResult(List.of(directTrack.toMap()), "deterministic direct conversation");
+        } else {
+            trackResult = arbiter.configureTracks(
+                enrichedScene, agentNames, historySummary,
+                mode, protagonist, previousTracks, goals, restrictedAgents, pendingNextRound);
+        }
         // D1: 轨道变化 → 发布 TrackChangeEvent（事件驱动中断：取消不属于新轨道的生成任务）
         boolean layoutChanged = prevTrackLayout != null
                 && tracksLayoutChanged(prevTrackLayout, trackResult.tracks);
@@ -812,6 +832,8 @@ public class RouterService {
                 if (sse != null) {
                     sse.broadcastUserInput(sessionId, userInput, "human_discussion", speaker, roundCount);
                 }
+            } else if (directConversation) {
+                // 外部玩家与 1~2 个 Agent 的直聊保留原文，不先改写成「主控旁白」。
                 userCategory = "dialogue";
                 narration = userInput;
             } else {
@@ -953,6 +975,7 @@ public class RouterService {
         // 狼人杀/剧本杀（非一般模式）必须保留 integrateOutputs（GM 推进 + isWerewolf 分支），不能短路；
         // 一般模式多人（>2 active）保留预测闭环，零变化。
         Map<String, Object> integration;
+        if (directConversation || (isGeneralMode(mode) && !"director".equals(mode) && isDuoScene(config))) {
             integration = new LinkedHashMap<>();
             integration.put("narration", "");
             integration.put("scene_progress", "");
@@ -987,7 +1010,6 @@ public class RouterService {
             persistChatMessage(arbiterMsg.getMessageId(), "arbiter", "主控", narrationText,
                     com.roleplay.engine.db.entity.ChatMessageEntity.STATUS_FINAL, "main");
             // D8: 主控整合旁白推送（前端 addIntegration 上屏）
-            if (sse != null) sse.broadcastArbiterIntegrate(roundCount, narrationText);
             if (sse != null) sse.broadcastArbiterIntegrate(sessionId, roundCount, narrationText);
         }
 

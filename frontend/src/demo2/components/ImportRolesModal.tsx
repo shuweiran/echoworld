@@ -1,5 +1,5 @@
 /**
- * ImportRolesModal.tsx — 从其他剧本导入角色（共享组件）
+ * ImportRolesModal.tsx — 从角色库或其他剧本导入角色（共享组件）
  *
  * 左右结构：左 = 来源剧本列表（分组，排除当前剧本）；右 = 该剧本角色小卡。
  * 点击角色即导入到当前剧本并标记「已导入」（✓ / 置灰，不可重复导入）。
@@ -22,6 +22,7 @@ interface ImportRolesModalProps {
 }
 
 export function ImportRolesModal({ currentScriptId, currentKind, importedIds, onImport, onClose }: ImportRolesModalProps) {
+  const freeRoles = useDemoStore(s => s.freeRoles);
   // P-0811-E：生成的剧本/场景合并进可导入来源（刷新后仍可见）
   const generatedMurder = useDemoStore(s => s.generatedMurder);
   const generatedGeneral = useDemoStore(s => s.generatedGeneral);
@@ -47,7 +48,10 @@ export function ImportRolesModal({ currentScriptId, currentKind, importedIds, on
     return { murder: m, general: g };
   }, [murders, generals, currentScriptId, currentKind]);
 
-  const all = [...otherScripts.murder, ...otherScripts.general];
+  const freeRoleSources = freeRoles.length > 0
+    ? [{ id: '__free_roles__', title: '自由角色库', emoji: '🧩', roles: freeRoles }]
+    : [];
+  const all = [...freeRoleSources, ...otherScripts.murder, ...otherScripts.general];
   const [sourceId, setSourceId] = useState<string | null>(all[0]?.id ?? null);
   const source = all.find(s => s.id === sourceId);
 
@@ -57,7 +61,7 @@ export function ImportRolesModal({ currentScriptId, currentKind, importedIds, on
     <div className="modal-mask" onClick={onClose}>
       <div className="modal-box" onClick={e => e.stopPropagation()} style={{ maxWidth: 860 }}>
         <div className="modal-head">
-          <div className="modal-title">📥 从其他剧本导入角色</div>
+          <div className="modal-title">📥 从角色库或其他剧本导入角色</div>
           <button className="modal-close" onClick={onClose}>✕</button>
         </div>
 
@@ -73,6 +77,11 @@ export function ImportRolesModal({ currentScriptId, currentKind, importedIds, on
                 <span className="panel-col-sub">选择后查看角色</span>
               </div>
               <div style={{ padding: 10, maxHeight: 400, overflowY: 'auto' }}>
+                {freeRoleSources.map(s => (
+                  <button key={s.id} className={`script-chip ${sourceId === s.id ? 'selected' : ''}`} onClick={() => setSourceId(s.id)}>
+                    {s.emoji} {s.title}<span className="sc-sub">{s.roles.length} 个角色</span>
+                  </button>
+                ))}
                 {otherScripts.murder.length > 0 && <div className="lib-mode-label">剧本杀模式</div>}
                 {otherScripts.murder.map(s => (
                   <button key={s.id} className={`script-chip ${sourceId === s.id ? 'selected' : ''}`} onClick={() => setSourceId(s.id)}>

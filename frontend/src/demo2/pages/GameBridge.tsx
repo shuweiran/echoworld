@@ -52,8 +52,8 @@ export function GameBridge() {
   const [step, setStep] = useState('正在初始化…');
   const [error, setError] = useState('');
   const startedRef = useRef(false);
-  // P-0810-08：一般模式 chat 默认 Gal 视图；经典视图（ChatPage 同会话）回退开关
-  const [galClassic, setGalClassic] = useState(false);
+  // P0 Gal 收敛：一般模式 chat 只保留 Gal 视图（经典 ChatPage 回退已移除；
+  // 剧本杀/狼人杀仍走 ChatPage 外壳，见下方最终 else 分支）。
   // startScene 返回的独立会话 session_id（与 appStore 显式 session 状态同步）。
   const [chatSessionId, setChatSessionId] = useState('');
   // P-0820-M：一般模式 2D 探索统一使用设置页的结构地图配置（复用角色选择页缓存；无缓存则生成）
@@ -336,26 +336,12 @@ export function GameBridge() {
               <WorldGameplayPanel actorName={withPlayer && playerRole ? playerRole.name : undefined} />
             </div>
           ) : gameMode === 'general' && runMode === 'chat' ? (
-            // P-0810-08：一般模式会话呈现入口 = Gal 界面（默认）；右上「经典视图」回退 ChatPage 同会话
-            galClassic ? (
-              <div style={{ position: 'relative' }}>
-                <button
-                  className="btn2 btn2-ghost btn2-sm"
-                  style={{ position: 'fixed', top: 74, right: 14, zIndex: 2000 }}
-                  onClick={() => setGalClassic(false)}
-                >
-                  ← 返回 Gal 视图
-                </button>
-                <ChatPage />
-              </div>
-            ) : (
-              <GalGeneralView
-                sessionId={chatSessionId || generalSessionId}
-                playerName={withPlayer && playerRole ? playerRole.name : undefined}
-                onBack={back}
-                onClassic={() => setGalClassic(true)}
-              />
-            )
+            // P0 Gal 收敛：一般模式会话呈现入口 = Gal 界面（唯一；经典回退已移除）
+            <GalGeneralView
+              sessionId={chatSessionId || generalSessionId}
+              playerName={withPlayer && playerRole ? playerRole.name : undefined}
+              onBack={back}
+            />
           ) : (
             <ChatPage />
           )}

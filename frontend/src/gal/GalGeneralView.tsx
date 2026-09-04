@@ -2,7 +2,7 @@
  * GalGeneralView.tsx — 一般模式「呈现接管」Gal 界面（P-0810-08，主人拍板）
  *
  * 一般模式会话的呈现入口直接就是 Gal 视觉小说式角色扮演聊天视图
- * （替换 ChatPage 聊天视图作为默认呈现；经典视图保留为右上角回退按钮）。
+ * （替换 ChatPage 聊天视图，作为一般模式的唯一呈现入口）。
  *
  * 去对局化（需求）：
  *  - 顶部栏：返回（回会话列表）+ 会话标题/场景名 + mode 标签（一般·主角/导演）+ 角色成员小头像；
@@ -26,7 +26,6 @@ import { hashHue, buildPlaceholderSpeaker, backendIdForName, GAL_SPEAKERS } from
 import { GalGeneralStage } from './GalGeneralStage';
 import { GalHistoryDrawer } from './GalHistoryDrawer';
 import { GalSceneCard, type GalSceneInfo } from './GalSceneCard';
-import { useAutoPlaybackDone } from './useAutoPlaybackDone';
 import { startLiveSync, pullGeneralHistory, refreshSuggestions } from './galSseAdapter';
 // P-0817-I：Gal 视图顶栏全局静音开关
 import { TtsMuteButton } from '../components/TtsMuteButton';
@@ -55,6 +54,8 @@ function GalGeneralSseBridge() {
   const applySseEvent = useGalStore(s => s.applySseEvent);
   const bumpLiveEvent = useGalStore(s => s.bumpLiveEvent);
   const setLiveStatus = useGalStore(s => s.setLiveStatus);
+  // P0 断线最小恢复：仅在进入 open 的边沿触发一次（初连 + 每次重连），防 open 重复回调刷屏
+  const prevOpenRef = useRef(false);
 
   const onEvent = useCallback((evt: string, data: any) => {
     bumpLiveEvent();
@@ -71,12 +72,20 @@ function GalGeneralSseBridge() {
       void pullGeneralHistory(useGalStore.getState().liveSessionId);
       // P-0810-21-D：AI 回合完成 → 刷新玩家发言候选（仅一般模式）
       void refreshSuggestions(useGalStore.getState().liveSessionId);
-      // P-0814-A：点击驱动对话模式 —— 本轮生成完 → 置「播出完毕待推进」标志；
-      // P-0814-C：不再显示按钮，队列排空后由 useAutoPlaybackDone 自动推进下一轮。
-      useGalStore.getState().setLivePlaybackArmed(true);
+      // P0 点击驱动：本轮播完即停，不再自动推进 —— 用户在等待态点击对话框
+      // （GalStore.requestNextRound → POST /api/simulation/playback_done）或输入才生成下一轮。
     }
   }, [applySseEvent, bumpLiveEvent]);
-  const onStatus = useCallback((st: any) => setLiveStatus(st), [setLiveStatus]);
+  const onStatus = useCallback((st: any) => {
+    setLiveStatus(st);
+    // P0 断线最小恢复：进入 open（初连/重连）→ 按 message_id 对账 DB 落库
+    //（FINAL 补结算、缺失补入队、陈旧 STREAMING 判失败；完整 Last-Event-ID 另起 PR）
+    const open = st === 'open';
+    if (open && !prevOpenRef.current) {
+      void useGalStore.getState().resyncFromPersisted();
+    }
+    prevOpenRef.current = open;
+  }, [setLiveStatus]);
 
   useSSE(onEvent, sessionId, onStatus);
   return null;
@@ -89,11 +98,9 @@ interface GalGeneralViewProps {
   playerName?: string;
   /** 返回（回会话列表 / 上一页） */
   onBack?: () => void;
-  /** 切经典视图（ChatPage 同会话，右上角回退按钮） */
-  onClassic?: () => void;
 }
 
-export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: GalGeneralViewProps) {
+export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralViewProps) {
   const enterLiveMode = useGalStore(s => s.enterLiveMode);
   const exitLiveMode = useGalStore(s => s.exitLiveMode);
   const setHidePlayerBubbles = useGalStore(s => s.setHidePlayerBubbles);
@@ -105,12 +112,7 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
   const tick = useGalStore(s => s.tick);
   const liveGeneralMode = useGalStore(s => s.liveGeneralMode);
   const livePlayerName = useGalStore(s => s.livePlayerName);
-  // P-0814-A：点击驱动对话模式 —— 待推进标志 + 队列排空检测（「播出完毕」→ 显示推进按钮）
-  const livePlaybackArmed = useGalStore(s => s.livePlaybackArmed);
-  const setLivePlaybackArmed = useGalStore(s => s.setLivePlaybackArmed);
-  const liveQueue = useGalStore(s => s.liveQueue);
-  const typing = useGalStore(s => s.typing);
-  const current = useGalStore(s => s.current);
+  // P0 点击驱动：本视图不再使用 livePlaybackArmed 自动推进（等待态点击/输入驱动下一轮）
   // P-0810-16：场景卡目标（起局响应 / /api/state scene_goals / scene_target_update SSE 合并）
   const liveGoals = useGalStore(s => s.liveGoals);
   const setLiveGoals = useGalStore(s => s.setLiveGoals);
@@ -127,6 +129,17 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
   const [knownRoleIds, setKnownRoleIds] = useState<Record<string, string>>({});
   const [storyScript, setStoryScript] = useState<any>(null);
   const [storyOpen, setStoryOpen] = useState(false);
+  // P0 主控侧栏：给主控的导演指令（POST /api/goals，会话目标，主控后台约束后续剧情，不入对话流）
+  const [directiveDraft, setDirectiveDraft] = useState('');
+  const [directiveSending, setDirectiveSending] = useState(false);
+  const [directiveHint, setDirectiveHint] = useState('');
+  // P1 角色卡片：查看/编辑/导出（GET/PUT /api/characters/{name}/card）
+  const [cardName, setCardName] = useState('');
+  const [cardJson, setCardJson] = useState('');
+  const [cardMeta, setCardMeta] = useState<any>(null);
+  const [cardLoading, setCardLoading] = useState(false);
+  const [cardSaving, setCardSaving] = useState(false);
+  const [cardError, setCardError] = useState('');
 
   // ── 抽屉/卡片开关 ──
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -164,12 +177,6 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
 
   // 元信息拉取（挂载 + 5s 轮询：scene / roster / mode 变化可见）
   const seededRosterRef = useRef('');
-  /** P-0814-C：轮询兜底武装 —— 已发过 playback_done 信号的轮次（后端 roundCount=最近完成轮）；
-   *  后端空闲（status=idle）且 round 推进到未发信号的轮次 → 武装，由自动推进 hook 在队列排空后发信号。
-   *  自愈覆盖：SSE round_complete 错过 / 断线重连 / 挂载前轮次已播完（原 mountRound 基准轮 diff 会漏） */
-  const lastFiredRoundRef = useRef(0);
-  /** 最近一次轮询到的后端轮次（发信号时记录用） */
-  const backendRoundRef = useRef(0);
   useEffect(() => {
     if (!sessionId) return;
     let alive = true;
@@ -183,16 +190,8 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
         if (st?.scene_goals && typeof st.scene_goals === 'object') {
           setLiveGoals(st.scene_goals);
         }
-        // P-0814-B/C：导演模式武装轮询兜底 —— round_complete SSE 错过（重连/连接前广播完）时，
-        // 5s 轮询发现后端「等待播出完毕」（awaiting_playback=true）且轮次推进到未发信号轮次即武装；
-        // 自动推进 hook 在队列排空后发信号。awaiting_playback 由后端 /api/state 暴露（P-0814-C），
-        // 精确区分「轮次完成待信号」与「生成中」（status 常驻 running 不可作完成信号）。
-        const round = Number(st?.round ?? 0);
-        const awaiting = st?.awaiting_playback === true;
-        backendRoundRef.current = round;
-        if (round > 0 && awaiting && round > lastFiredRoundRef.current) {
-          useGalStore.getState().setLivePlaybackArmed(true);
-        }
+        // P0 点击驱动：轮询仅刷新元信息，不再据 awaiting_playback 自动武装推进 ——
+        // 下一轮只由等待态点击（GalStore.requestNextRound）或玩家输入驱动。
         if (Array.isArray(st?.agents)) {
           const names = st.agents.map(String).filter(Boolean);
           setRoster(names);
@@ -305,32 +304,11 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
     ? { name: scene.length > 20 ? scene.slice(0, 20) + '…' : scene, description: scene }
     : undefined;
 
-  // P-0814-C：自动推进（删「▶ 推进下一轮」按钮）——本轮播放完毕（打字机队列排空）自动
-  // POST /api/simulation/playback_done 驱动下一轮（一般模式无 group_id）。触发点是「播放完成」
-  // 事件（队列排空），不是定时器；节奏由播放速度天然控制。
-  // P-0814-E：一问一答门控 —— 有玩家（livePlayerName 非空）：AI 轮播完即**停**，不自动发
-  // playback_done（AI 绝不自动连说），候选选项自动出现等玩家输入——玩家输入（liveSay →
-  // api.send）后端 runRound 玩家分支输入即推进（无需播放完成信号）；无玩家（导演模式）：
-  // 维持 P-0814-C 播完自动推进（无输入者，播完自动下一轮防卡死）。2D（SimGalChatPanel）
-  // 保持自动推进（主人拍板 2D 群聊氛围保留，本文件只改一般模式）。
+  // P0 点击驱动：无玩家的纯 Agent 场景在队列排空后可点击对话框生成下一轮；
+  // 有玩家时严格一问一答，只能由输入（liveSay → 世界邮箱/后端 runRound）生成回复。
+  // 2D（SimGalChatPanel）保持播完自动推进（组 hook，本文件只改一般模式）。
   const hasPlayer = !!livePlayerName && String(livePlayerName).trim().length > 0
     || !!playerName && String(playerName).trim().length > 0;
-  const autoDrained = !liveQueue.length && !typing && !current;
-  useAutoPlaybackDone({
-    enabled: !hasPlayer,
-    armed: livePlaybackArmed,
-    drained: autoDrained,
-    sessionId,
-    onAdvancing: () => {
-      setLivePlaybackArmed(false);
-      // 同步记录已发信号的轮次（防轮询/SSE 对同一轮重复武装）：后端轮次再推进才再次武装
-      lastFiredRoundRef.current = backendRoundRef.current;
-    },
-    onAdvanceFailed: () => {
-      // 失败延迟重新武装（3s 后；轮询兜底 5s 也会重新武装）——自动推进不因单次失败永久停摆
-      setTimeout(() => useGalStore.getState().setLivePlaybackArmed(true), 3000);
-    },
-  });
 
   const displayName = livePlayerName || playerName || '';
   const ambientNames = new Set(ambientRoles.map(role => role.name));
@@ -355,6 +333,69 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
     if (groupDraft.length < 2) return;
     setLiveConversation(groupDraft, groupDraft.map(name => knownRoleIds[name]).filter(Boolean));
     setRoleDrawerOpen(false);
+  };
+
+  // P0 主控侧栏：发送导演指令（会话目标；主控只约束后续，不改写历史/不入对话流）
+  const sendDirective = async () => {
+    const text = directiveDraft.trim();
+    if (!text || !sessionId || directiveSending) return;
+    setDirectiveSending(true);
+    setDirectiveHint('');
+    try {
+      await api.setGoals([text], sessionId);
+      setDirectiveDraft('');
+      setDirectiveHint('✓ 已设为导演目标，主控将在后续剧情中贯彻');
+    } catch (e: any) {
+      setDirectiveHint(`✕ 发送失败：${e?.message || '未知错误'}`);
+    } finally {
+      setDirectiveSending(false);
+    }
+  };
+
+  // P1 角色卡片：打开查看（完整卡 JSON + 来源/版本元信息）
+  const openCard = async (name: string) => {
+    if (!name || cardLoading) return;
+    setCardName(name);
+    setCardJson('');
+    setCardMeta(null);
+    setCardError('');
+    setCardLoading(true);
+    try {
+      const res: any = await api.getCharacterCard(name);
+      setCardMeta({ source: res?.source, version: res?.version, versions: res?.versions, surface: res?.surface });
+      setCardJson(JSON.stringify(res?.card ?? {}, null, 2));
+    } catch (e: any) {
+      setCardError(`加载失败：${e?.message || '未知错误'}`);
+    } finally {
+      setCardLoading(false);
+    }
+  };
+
+  // P1 角色卡片：保存编辑（PUT 合并；非法 JSON 拒绝落盘）
+  const saveCard = async () => {
+    if (!cardName || cardSaving) return;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(cardJson || '{}');
+    } catch {
+      setCardError('JSON 格式非法，未保存');
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed) || Object.keys(parsed).length === 0) {
+      setCardError('卡片内容不能为空');
+      return;
+    }
+    setCardSaving(true);
+    setCardError('');
+    try {
+      const res: any = await api.saveCharacterCard(cardName, parsed);
+      setCardMeta((m: any) => ({ ...(m || {}), version: res?.version ?? m?.version }));
+      setCardError('');
+    } catch (e: any) {
+      setCardError(`保存失败：${e?.message || '未知错误'}`);
+    } finally {
+      setCardSaving(false);
+    }
   };
 
   return (
@@ -392,9 +433,7 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
           <button className="galg-top-btn" onClick={() => setHistoryOpen(true)} title="历史记录（消息列表 / 回滚）">
             📜 历史记录
           </button>
-          <button className="galg-top-btn galg-classic-btn" onClick={onClassic} title="切换到经典聊天视图（同会话）">
-            经典视图
-          </button>
+          {/* P0 Gal 收敛：经典视图回退已移除，一般模式只保留 Gal */}
         </div>
       </div>
 
@@ -436,6 +475,24 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
             <section><small>当前阶段 · 张力 {Number(storyScript?.stage?.tension || 0)}%</small><p><strong>{storyScript?.stage?.title || '开场'}</strong>：{storyScript?.stage?.goal || '等待阶段目标'}</p></section>
             <section><small>主控手里的下一页</small><p>{storyScript.script || '剧情会随每一步更新。'}</p><p className="galg-story-next">下一拍：{storyScript.next_beat || '等待下一次互动。'}</p></section>
             {Array.isArray(storyScript.recent_changes) && storyScript.recent_changes.length > 0 && <section><small>已发生</small><ul>{storyScript.recent_changes.map((change: string, index: number) => <li key={`${index}:${change}`}>{change}</li>)}</ul></section>}
+            {/* P0 主控侧栏：给主控的导演指令（独立通道，不入对话流；主控只约束后续剧情） */}
+            <section>
+              <small>给主控的指令</small>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  value={directiveDraft}
+                  onChange={e => setDirectiveDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') void sendDirective(); }}
+                  placeholder="如：下一幕转入雨夜追逐…"
+                  disabled={directiveSending}
+                  style={{ flex: 1, minWidth: 0 }}
+                />
+                <button onClick={() => void sendDirective()} disabled={directiveSending || !directiveDraft.trim()}>
+                  {directiveSending ? '发送中…' : '设为导演目标'}
+                </button>
+              </div>
+              {directiveHint && <p className="galg-story-next">{directiveHint}</p>}
+            </section>
           </aside>
         </div>
       )}
@@ -468,6 +525,8 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
                       <button className={selected ? 'active' : ''} onClick={() => toggleGroupRole(role.name)}>
                         {selected ? '已加入群聊' : '加入群聊'}
                       </button>
+                      {/* P1 角色卡片：查看/编辑完整卡 */}
+                      <button onClick={() => void openCard(role.name)} title="查看完整角色卡（来源/版本/五层）">🪪 卡片</button>
                     </div>
                   </article>
                 );
@@ -477,6 +536,44 @@ export function GalGeneralView({ sessionId, playerName, onBack, onClassic }: Gal
               <span>已选 {groupDraft.length} 名角色（至少 2 名）</span>
               <button disabled={groupDraft.length < 2} onClick={createGroupChat}>建立群聊</button>
             </div>
+          </aside>
+        </div>
+      )}
+
+      {/* P1 角色卡片：查看/编辑/导出完整卡（含来源/版本/五层） */}
+      {cardName && (
+        <div className="galg-role-mask" onClick={() => setCardName('')}>
+          <aside className="galg-role-drawer galg-card-drawer" onClick={event => event.stopPropagation()}>
+            <div className="galg-role-head">
+              <div>
+                <strong>🪪 {cardName}</strong>
+                <small>
+                  {cardMeta ? `来源 ${cardMeta.source || 'LEGACY'} · 版本 ${cardMeta.version ?? '—'}` : '加载中…'}
+                </small>
+              </div>
+              <button onClick={() => setCardName('')}>✕</button>
+            </div>
+            {cardLoading && <div className="hint" style={{ padding: 12 }}>加载中…</div>}
+            {cardError && <div className="gal-live-error" style={{ margin: 12 }}>{cardError}</div>}
+            {!cardLoading && !cardError && (
+              <>
+                <textarea
+                  value={cardJson}
+                  onChange={e => setCardJson(e.target.value)}
+                  spellCheck={false}
+                  rows={18}
+                  style={{ width: '100%', boxSizing: 'border-box', fontFamily: 'monospace', fontSize: 12 }}
+                />
+                <div className="galg-role-footer">
+                  <a href={api.characterCardExportUrl(cardName)} download>
+                    <button type="button">导出 JSON</button>
+                  </a>
+                  <button onClick={() => void saveCard()} disabled={cardSaving}>
+                    {cardSaving ? '保存中…' : '保存修改'}
+                  </button>
+                </div>
+              </>
+            )}
           </aside>
         </div>
       )}

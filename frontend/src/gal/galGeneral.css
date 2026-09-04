@@ -20,6 +20,10 @@
   --gal-text: #e8eef9;
   --gal-dim: #93a1bd;
   --gal-font: 'Courier New', 'NSimSun', 'SimSun', monospace;
+  /* P2 对话宽度统一：会话三件套（对话框/候选条/输入区）与预览面板同宽，单变量收敛 */
+  --conversation-width: min(96vw, 1600px);
+  /* P2 信息密集弹窗（场景卡/角色抽屉/角色卡/动态剧本）统一宽幅 */
+  --modal-wide-width: min(92vw, 1400px);
 
   position: relative;
   min-height: calc(100vh - 72px);
@@ -275,6 +279,21 @@
   background: #10192a;
   border-left: 1px solid rgba(139, 123, 255, 0.42);
   box-shadow: -14px 0 38px rgba(0, 0, 0, 0.42);
+}
+/* P1 角色卡片抽屉：JSON 编辑器需要更宽（信息密集弹窗走宽幅；右侧抽屉形态保留） */
+.galg-card-drawer {
+  width: min(720px, 94vw);
+}
+.galg-card-drawer textarea {
+  margin: 12px;
+  width: calc(100% - 24px);
+  min-height: 320px;
+  background: #0b1220;
+  color: #dbe5f5;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 8px;
+  padding: 10px;
+  resize: vertical;
 }
 .galg-role-head, .galg-role-footer {
   display: flex;
@@ -978,12 +997,13 @@
 
 /* ── 前景层（z2 底部居中）：候选区(上方) + 对话框 + 输入框；容器穿透、子元素恢复可点 ── */
 /* P-0811-G(A-2)：全宽长条 —— 对话框横贯底部（用户确认目标样式：全宽长条） */
+/* P2：宽度收敛到 --conversation-width（与三件套/预览同源单变量） */
 .galg-foreground {
   position: absolute;
   left: 50%;
   bottom: 0;
   transform: translateX(-50%);
-  width: min(98%, 1600px);
+  width: var(--conversation-width);
   z-index: 2;
   display: flex;
   flex-direction: column;

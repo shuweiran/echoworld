@@ -265,6 +265,18 @@ export const api = {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
     return request<any>(`/api/history${qs}`);
   },
+  /** P1 持久化读路径：GET /api/history/persisted?session_id=&limit=（DB 落库消息，含 STREAMING/FAILED 态） */
+  getPersistedHistory: (sessionId: string, limit?: number) =>
+    request<any>(`/api/history/persisted?session_id=${encodeURIComponent(sessionId)}${limit ? `&limit=${limit}` : ''}`),
+  /** P1 角色卡片：GET 完整卡 / PUT 保存 / EXPORT 下载 / VERSIONS 版本列表 */
+  getCharacterCard: (name: string) =>
+    request<any>(`/api/characters/${encodeURIComponent(name)}/card`),
+  saveCharacterCard: (name: string, card: Record<string, unknown>) =>
+    request<any>(`/api/characters/${encodeURIComponent(name)}/card`, { method: 'PUT', body: JSON.stringify(card) }),
+  characterCardExportUrl: (name: string) =>
+    `${API_ORIGIN}/api/characters/${encodeURIComponent(name)}/card/export`,
+  listCharacterVersions: (name: string) =>
+    request<any>(`/api/characters/${encodeURIComponent(name)}/versions`),
   getHistorySessions: () => request<any>('/api/history/sessions'),
   getHistorySessionMessages: (sessionId: string, params?: Record<string, string>) => {
     const qs = params ? '?' + new URLSearchParams(params).toString() : '';
@@ -499,10 +511,12 @@ export const api = {
    *  - 否则 → 一般模式 RouterService 轮次推进（下一轮）。
    * 幂等：非等待态重复信号被后端忽略（不产生多余轮次）。
    */
-  simPlaybackDone: (body: { session_id?: string; group_id?: string }) =>
+  simPlaybackDone: (body: { session_id?: string; group_id?: string }, timeout?: number) =>
     request<any>('/api/simulation/playback_done', {
       method: 'POST',
       body: JSON.stringify(body),
+      // 点击推进下一轮是阻塞式（服务端同步生成完才返回，10-60s+）；调用方可传更大超时
+      ...(timeout ? { timeout } : {}),
     }),
   // 演讲+广播合并地基（demo 入口）
   /** 玩家发广播：POST /api/announcements（默认 PLAYER 级全局公告） */

@@ -264,7 +264,7 @@ export async function refreshSuggestions(sessionId: string): Promise<void> {
 export async function liveSay(text: string): Promise<void> {
   const st = useGalStore.getState();
   const body = text.trim();
-  if (!body || !st.liveMode || !st.liveSessionId || st.liveSending) return;
+  if (!body || !st.liveMode || !st.liveSessionId || st.liveSending || !!st.livePendingInputId) return;
   const player = st.livePlayerName || 'player';
   const key = st.livePlayerKey;
   st.setSending(true);
@@ -280,9 +280,14 @@ export async function liveSay(text: string): Promise<void> {
       // P-0824-L：一般模式改走异步输入邮箱，请求线程立即返回；同 session 后台顺序消费，
       // AI 增量/结算继续走既有定向 SSE。旧/默认会话无 session_id 时保留同步 send 兼容。
       if (st.liveSessionId) {
-        const queued: any = await api.worldInput(body, player, st.liveSessionId, undefined,
+        // 请求前先占住 pending，避免后台极快完成时 processed SSE 早于 202 响应到达，
+        // 随后又被迟到响应写回成永久 pending；同一个 id 同时作为后端幂等键。
+        const inputId = globalThis.crypto?.randomUUID?.() ?? `input-${Date.now()}`;
+        useGalStore.setState({ livePendingInputId: inputId });
+        const queued: any = await api.worldInput(body, player, st.liveSessionId, inputId,
           st.liveFocusedRoleId || undefined, st.liveFocusedRoleIds, st.liveConversationMembers);
-        useGalStore.setState({ livePendingInputId: String(queued?.input_id || '') });
+        const acceptedId = String(queued?.input_id || inputId);
+        if (acceptedId !== inputId) useGalStore.setState({ livePendingInputId: acceptedId });
       } else {
         const resp: any = await api.send(body, player, st.liveSessionId);
         agentOutputs = Array.isArray(resp?.agent_outputs) ? resp.agent_outputs : [];

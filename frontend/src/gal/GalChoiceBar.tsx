@@ -14,9 +14,8 @@
  *  ① 候选条闪烁根因 —— isPlayerTurnGate 旧条件 queueLen<=1 在「round_complete 到达前、
  *     本轮第一句 AI 消息停驻（q=1）」时即误判为玩家回合 → 候选条出现；随后同轮其余 AI
  *     消息陆续入队（串行生成逐条广播，q>1）→ 候选条消失。多 AI 轮下反复出现/消失=闪烁。
- *     修复：玩家回合 = 队列完全读空（q===0，任何视图稳定成立）或（本轮播完 roundComplete
- *     已到 + 队列只剩当前句 q===1——round_complete 后同轮不再有新消息顶替，候选条稳定）；
- *     新消息入队（队列尾变化）即清除 roundComplete 标志（防跨轮残留误判）。
+ *     修复：玩家回合必须已收到 roundComplete，且队列完全读空（q===0）或只剩当前句
+ *     （q===1）；新 token/消息入队会在 Store 内同步清除 roundComplete，防跨轮残留误判。
  *  ② 发送无反应根因 —— liveSending 在途（LLM 10-40s）时：候选按钮 disabled（点击无效）、
  *     输入框发送按钮 disabled 但 Enter 仍触发 send() → liveSay 守卫静默返回 + 输入框清空
  *     （丢字无反馈=“发送无响应”）。修复：send() 内 guard liveSending/liveSessionId（不吞字），
@@ -26,10 +25,11 @@
  * 选项条：仅当 choiceNode 存在时显示（3-4 个预设选项，demo 模式）。
  * 自选输入框：常驻，随时可打字发言（Enter / 发送按钮）。
  */
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useGalStore } from './GalStore';
 import { liveSay } from './galSseAdapter';
 import { buildLiveChoices } from './galChoices';
+import { isPlayerTurnGate } from './playerTurnGate';
 
 /**
  * P-0813-D：实际发言发送器——2D 模拟视图注入 liveSayOverride（走 /api/simulation/send）时优先使用，
@@ -55,49 +55,17 @@ function useSend() {
  *    → 候选条出现后随即被后续消息顶掉（q>1）= 反复刷新/闪烁（主人 12:11 实测）。
  *  - round_complete 在全部 agent_output 广播之后到达 → 到点即代表同轮消息已全部入队，
  *    候选条在「最后一句停驻」时出现后不再有新消息顶替 = 稳定。
- *  - liveSending 不再参与门控：发送中候选保持可见（disabled），条目不消失（闪烁观感消除）。
+ *  - HTTP 发送态只禁用按钮；异步邮箱 inputPending 则退出玩家回合，直到世界终态事件解除，
+ *    避免同一玩家连续提交并让候选与下一轮生成并发。
  */
-export function isPlayerTurnGate(opts: {
-  liveMode: boolean;
-  liveGameType: string;
-  liveStatus: string;
-  liveSending: boolean;
-  queueLen: number;
-  typing: { done: boolean } | null;
-  /** P-0815-D：本轮「播出完毕待推进」标志（round_complete 到达 = 本轮全部 AI 输出已入队） */
-  roundComplete: boolean;
-}): boolean {
-  const playing = !!opts.typing && !opts.typing.done;
-  return opts.liveMode
-    && opts.liveGameType === 'general'
-    && opts.liveStatus === 'open'
-    && !playing
-    && (opts.queueLen === 0 || (opts.roundComplete && opts.queueLen <= 1));
-}
-
 function usePlayerTurn(): boolean {
   const liveMode = useGalStore(s => s.liveMode);
   const liveGameType = useGalStore(s => s.liveGameType);
   const liveStatus = useGalStore(s => s.liveStatus);
-  const liveSending = useGalStore(s => s.liveSending);
   const liveQueue = useGalStore(s => s.liveQueue);
   const typing = useGalStore(s => s.typing);
   const roundComplete = useGalStore(s => s.livePlaybackArmed);
-  // P-0815-D：队列尾签名（新消息入队 → 尾 id 变化）——新消息到达即清除「本轮播完」标志。
-  // 防跨轮残留：round_complete 置位后若无清除，下一轮首条消息停驻（q=1）会被误判为玩家回合
-  // （候选条提前出现 → 下一条消息到达时消失 = 闪烁）。
-  const queueTailSig = useGalStore(s => {
-    const q = s.liveQueue;
-    return q.length > 0 ? String(q[q.length - 1].id) : '';
-  });
-  const setLivePlaybackArmed = useGalStore(s => s.setLivePlaybackArmed);
-  const prevQueueTailRef = useRef(queueTailSig);
-  useEffect(() => {
-    if (prevQueueTailRef.current !== queueTailSig) {
-      prevQueueTailRef.current = queueTailSig;
-      setLivePlaybackArmed(false);
-    }
-  }, [queueTailSig, setLivePlaybackArmed]);
+  const inputPending = useGalStore(s => !!s.livePendingInputId);
   // P-0815-D：2D 常流式视图（SimGalChatPanel 伪会话 '2d-' 前缀）无 round_complete 概念——
   // 保持旧行为（q<=1 即玩家回合），不误伤 2D DYAD/群聊。
   const liveSessionId = useGalStore(s => s.liveSessionId);
@@ -106,10 +74,10 @@ function usePlayerTurn(): boolean {
     liveMode,
     liveGameType,
     liveStatus,
-    liveSending,
     queueLen: liveQueue.length,
     typing,
     roundComplete: roundComplete || is2dStreaming,
+    inputPending,
   });
 }
 
@@ -144,6 +112,7 @@ export function GalChoicesArea() {
   const choose = useGalStore(s => s.choose);
   const liveMode = useGalStore(s => s.liveMode);
   const liveSending = useGalStore(s => s.liveSending);
+  const inputPending = useGalStore(s => !!s.livePendingInputId);
   // P-0811-G：导演模式（无玩家）不渲染候选区（防御：即使外部未门控也不显示）
   const livePlayerName = useGalStore(s => s.livePlayerName);
   const hasPlayer = liveMode ? !!livePlayerName && String(livePlayerName).trim().length > 0 : true;
@@ -182,10 +151,11 @@ export function GalChoicesArea() {
       {liveMode && hasPlayer && isPlayerTurn && safeSuggestions.length > 0 && (
         <div className="gal-choices">
           {safeSuggestions.map((sug, i) => (
-            <button key={i} className="gal-choice-btn" disabled={liveSending} onClick={() => {
+            <button key={i} className="gal-choice-btn" disabled={liveSending || inputPending} onClick={() => {
               // P-0814-G：候选出现时 AI 消息可能仍停驻（播完未点击）——先弹队再发言，
               // 避免发言后旧消息还挡在队列头（新回复需玩家再点一次才播）。
-              useGalStore.getState().advance();
+              const current = useGalStore.getState();
+              if (current.typing?.done && !(current.current as any)?.streamed) current.advance();
               void send(sug);
             }}>
               <span className="gal-choice-arrow">▶</span>
@@ -199,9 +169,10 @@ export function GalChoicesArea() {
         <div className="gal-choices gal-live-choices">
           <div className="gal-live-choices-label">💬 你可以说：</div>
           {liveChoices.map((c, i) => (
-            <button key={i} className="gal-choice-btn" disabled={liveSending} onClick={() => {
+            <button key={i} className="gal-choice-btn" disabled={liveSending || inputPending} onClick={() => {
               // P-0814-G：同后端候选——先弹队再发言
-              useGalStore.getState().advance();
+              const current = useGalStore.getState();
+              if (current.typing?.done && !(current.current as any)?.streamed) current.advance();
               void send(c);
             }}>
               <span className="gal-choice-arrow">▶</span>
@@ -247,7 +218,7 @@ export function GalInputArea() {
     return () => clearTimeout(t);
   }, [liveLastSent]);
 
-  const canSend = liveMode ? (!!liveSessionId && !liveSending && !!text.trim()) : !!text.trim();
+  const canSend = liveMode ? (!!liveSessionId && !liveSending && !livePendingInputId && !!text.trim()) : !!text.trim();
   const send = () => {
     const t = text.trim();
     if (!t) return;
@@ -255,10 +226,12 @@ export function GalInputArea() {
       // P-0815-D：发送中（LLM 10-40s 在途）或未连接 → 保留输入文本不吞字、不静默清空
       //（旧行为 Enter 触发 liveSay 守卫静默 return + 输入框清空 = 用户以为发送成功实际丢字）。
       if (liveSending) return;
+      if (livePendingInputId) return;
       if (!liveSessionId) return;
       // P-0814-G：同候选点击——先弹队（AI 播完停驻时），发言后新回复直接入队播放，
       // 旧消息不再挡队头等第二次点击。
-      useGalStore.getState().advance();
+      const current = useGalStore.getState();
+      if (current.typing?.done && !(current.current as any)?.streamed) current.advance();
       void sendText(t);
     } else {
       submitText(t);
@@ -294,7 +267,7 @@ export function GalInputArea() {
               : liveSending
                 ? <span className="gal-live-sending">⏳ 发送中…（AI 正在生成回复，约 10-40 秒）</span>
                 : livePendingInputId
-                  ? <span className="gal-live-sending">⏳ 已入世界邮箱，主控正在安排回应…</span>
+                  ? <span className="gal-live-sending">⏳ 已入世界邮箱，正在等待角色回应…</span>
                 : sentFlash
                   ? <span className="gal-live-sent">✅ 已发送（AI 正听见你说话…）</span>
                   : (liveSessionId ? '发言按对局类型路由（讨论阶段入讨论流 / 其他走一般对话）' : '连接真实对局后可发言'))

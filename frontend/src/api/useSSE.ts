@@ -96,8 +96,9 @@ export function useSSE(
         reconnectTimerRef.current = setTimeout(connect, delay);
       };
 
-      const events = ['round_start', 'arbiter_task', 'agent_output', 'agent_silent',
+      const events = ['round_start', 'arbiter_task', 'agent_output', 'agent_error', 'agent_silent',
         'arbiter_integrate', 'round_complete', 'compression', 'user_input',
+        'world_input_processed', 'world_input_retrying', 'world_input_failed',
         'auto_complete', 'stopped', 'error', 'saved',
         // P-0802-M：LLM 流式增量（逐字渲染）
         'agent_token',

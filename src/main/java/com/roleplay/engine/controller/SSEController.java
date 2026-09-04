@@ -427,6 +427,8 @@ public class SSEController implements SseBroadcaster {
         broadcast("arbiter_integrate", Map.of("round", round, "narration", narration == null ? "" : narration));
     }
 
+    /** 会话定向的主控整合旁白，防止并行对局串入。 */
+    public void broadcastArbiterIntegrate(String sessionId, int round, String narration) {
         Map<String, Object> payload = new java.util.LinkedHashMap<>();
         if (sessionId != null && !sessionId.isBlank()) payload.put("session_id", sessionId);
         payload.put("round", round);

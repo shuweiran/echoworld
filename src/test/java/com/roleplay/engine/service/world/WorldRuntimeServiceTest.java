@@ -103,6 +103,34 @@ class WorldRuntimeServiceTest {
     }
 
     @Test
+    void returnedRoundErrorBroadcastsFailedTerminalInsteadOfProcessed() throws Exception {
+        SessionRegistry sessions = mock(SessionRegistry.class);
+        RouterService router = mock(RouterService.class);
+        SSEController sse = mock(SSEController.class);
+        when(sessions.get("error-session")).thenReturn(router);
+        when(router.runRound("失败输入", null, "玩家", null))
+                .thenReturn(RouterService.RoundResult.error("quota exhausted"));
+        runtime = new WorldRuntimeService(new InputMailbox(), sessions, mock(SimulationService.class),
+                sse, mock(StructureMapService.class), null,
+                false, 0, 80, 8, 1, 60_000);
+
+        assertTrue(runtime.enqueueInput(new InputMailbox.MailboxInput(
+                "error-session", "error-input", "失败输入", InputMailbox.Priority.CRITICAL,
+                Instant.now(), Map.of("speaker", "玩家"))).accepted());
+        runtime.dispatchInputs();
+
+        verify(sse, timeout(2000)).broadcastToSession(eq("error-session"), eq("world_input_failed"),
+                argThat(payload -> payload instanceof Map<?, ?> map
+                        && "error-input".equals(map.get("input_id"))
+                        && String.valueOf(map.get("error")).contains("quota exhausted")));
+        verify(sse, never()).broadcastToSession(eq("error-session"), eq("world_input_processed"), anyMap());
+        await(() -> ((List<?>) runtime.state("error-session").get("recent_results")).stream()
+                .anyMatch(item -> item instanceof Map<?, ?> result
+                        && "error-input".equals(result.get("input_id"))
+                        && "failed".equals(result.get("status"))));
+    }
+
+    @Test
     void delayedOldGenerationCleanupCannotEraseRecreatedSession() {
         SessionRegistry sessions = mock(SessionRegistry.class);
         RouterService oldRouter = mock(RouterService.class);

@@ -4,12 +4,10 @@
  * 背景（docs/ui-api-survey.md §4.3 关键发现①）：useSSE 此前只在 AppLegacy.tsx（死代码）被调用，
  * 活跃构建（App2 → GameBridge → ChatPage）未接线 → 剧本杀/狼人杀状态全靠 3s 轮询、
  * 公告横幅无数据源、agent_token 流式打字机失效。本钩子把 AppLegacy 的 38 事件处理逻辑
- * 收敛到对局 UI 层（仅在 ChatPage 挂载时建立连接）：
- *   - 对局状态（script 星号 与 werewolf 星号事件）→ 写 store（轮询降级为兜底）
- *   - announcement → store.addAnnouncement（横幅/公告栏数据源恢复）
- *   - agent_token → 流式打字机逐字渲染
- * 会话定向：script 模式带 scriptSessionId + 玩家凭证，werewolf 带 werewolfSessionId，
- * 一般模式带 Router sessionId；无匹配会话时定向事件静默丢弃，前端轮询兜底。
+ * 收敛到对局 UI 层（仅在 ChatPage 挂载时建立连接）。
+ * P0 Gal 收敛：本桥只服务剧本杀/狼人杀 —— 一般模式（agent_output/agent_token/
+ * round_start/arbiter_task/agent_silent 等）已删除，只走 GalStore 管线；
+ * 剧本杀/狼人杀私密事件仍按会话 + 玩家凭证订阅。
  */
 import { useCallback, useEffect, useRef } from 'react';
 import { useAppStore } from '../../store/appStore';
@@ -33,7 +31,6 @@ const WW_ROLE_CN: Record<string, string> = {
 export function useGameSse() {
   const scriptSessionId = useAppStore(s => s.scriptSessionId);
   const werewolfSessionId = useAppStore(s => s.werewolfSessionId);
-  const generalSessionId = useAppStore(s => s.sessionId);
   const currentPlayer = useAppStore(s => s.currentPlayer);
   const scriptRoleKey = useAppStore(s => s.scriptRoleKey);
   const werewolfRoleKey = useAppStore(s => s.werewolfRoleKey);
@@ -43,41 +40,8 @@ export function useGameSse() {
   const handlerRef = useRef((eventType: string, data: any) => {
     const store = useAppStore.getState();
     switch (eventType) {
-      case 'round_start': {
-        store.setCurrentRound(data.round);
-        store.settleAllStreaming();
-        const rs = useAppStore.getState();
-        const smallMode = rs.mode === 'free' || rs.mode === 'director';
-        if (!(smallMode && rs.agents.length < 3)) {
-          store.addSystemMsg(`第 ${data.round} 轮开始`);
-        }
-        break;
-      }
-      case 'arbiter_task': {
-        const at = useAppStore.getState();
-        const smallMode = at.mode === 'free' || at.mode === 'director';
-        if (!(smallMode && at.agents.length < 3)) {
-          if (at.mode !== 'werewolf' && data.tasks?.length) store.addTaskBlock(data.tasks);
-        }
-        break;
-      }
-      case 'agent_output': {
-        store.addAgentMsg(data.agent_name, data.content, data.track_id, data.track_label, data.track_mode, data.visible_to);
-        store.setCharStatus(data.agent_name, 'active');
-        break;
-      }
-      // P-0802-M：LLM 流式增量 —— 逐片累积到同名草稿消息（完整内容由 agent_output 结算）
-      case 'agent_token': {
-        if (data.agent_name && data.delta) {
-          store.appendAgentToken(data.agent_name, data.delta, data.track_id, data.track_label, data.track_mode);
-        }
-        break;
-      }
-      case 'agent_silent': {
-        store.addSystemMsg(`${data.agent_name} 本轮旁听`);
-        store.setCharStatus(data.agent_name, 'silent');
-        break;
-      }
+      // P0 Gal 收敛：一般模式事件（round_start/arbiter_task/agent_output/agent_token/
+      // agent_silent）已删除 —— 一般模式只走 GalStore 管线，本桥只消费剧本杀/狼人杀事件。
       case 'arbiter_integrate': {
         if (data.narration) {
           const ai = useAppStore.getState();
@@ -92,15 +56,9 @@ export function useGameSse() {
         store.setCurrentRound(data.round);
         store.setRunning(false);
         store.settleAllStreaming();
-        // P-0814-C：经典视图自动推进武装 —— 一般模式轮完即停，置「播出完毕待推进」标志
-        // → ChatMessageFlow 自动 POST playback_done 驱动下一轮（原 P-0814-A 武装加在
-        // AppLegacy 死代码上未生效，本桥才是经典视图（ChatPage）的 SSE 入口）
+        // P0 Gal 收敛：经典一般模式自动推进武装已删除（一般模式只走 Gal；本桥只服务剧本杀/狼人杀）。
+        // round_complete 为一般模式事件，剧本杀/狼人杀引擎不发送；保留基础状态结算以兼容。
         const rc = useAppStore.getState();
-        const evtSid = data && typeof data === 'object' ? (data as any).session_id : undefined;
-        if (rc.mode !== 'script' && rc.mode !== 'werewolf'
-            && (!evtSid || !rc.sessionId || evtSid === rc.sessionId)) {
-          useAppStore.setState({ playbackArmed: true });
-        }
         const smallMode2 = rc.mode === 'free' || rc.mode === 'director';
         if (!(smallMode2 && rc.agents.length < 3)) {
           store.addSystemMsg(`第 ${data.round} 轮完成`);
@@ -383,6 +341,7 @@ export function useGameSse() {
     const st = useAppStore.getState();
     if (st.mode === 'script') return st.scriptSessionId;
     if (st.mode === 'werewolf') return st.werewolfSessionId;
+    // P0 Gal 收敛：一般模式走 GalStore 管线，本桥不再订阅一般会话
     return '';
   }, []);
 
@@ -392,9 +351,10 @@ export function useGameSse() {
   }, []);
 
   // 所有模式都按当前 session 订阅；剧本杀额外携带本人身份，才能收到服务端私密事件。
+  // P0 Gal 收敛：一般模式不订阅（空 sessionId = 仅收全局事件；一般事件已会话定向，不会串入）。
   const sseSessionId = mode === 'script'
     ? scriptSessionId
-    : (mode === 'werewolf' ? werewolfSessionId : generalSessionId);
+    : (mode === 'werewolf' ? werewolfSessionId : undefined);
   const gameIdentity = mode === 'script'
     ? { player: currentPlayer, playerKey: scriptRoleKey }
     : (mode === 'werewolf' ? { player: currentPlayer, playerKey: werewolfRoleKey } : undefined);

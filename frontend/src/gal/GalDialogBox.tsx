@@ -16,6 +16,7 @@ import { speakerName, speakerOf } from './galDemoData';
 import { GalSprite, GalNamePlate } from './GalCharacter';
 import { portraitUrlFor } from './GalStage';
 import { TtsPlayButton } from '../components/TtsPlayButton';
+import { isAutonomousAdvanceGate } from './playerTurnGate';
 
 /** 名字越长字号越收敛，名称框保持内容自适应而不压坏左上对话头。 */
 function namePlateStyle(name: string, color: string): CSSProperties {
@@ -32,9 +33,17 @@ export function GalDialogBox() {
   const finished = useGalStore(s => s.finished);
   const liveMode = useGalStore(s => s.liveMode);
   const liveSessionId = useGalStore(s => s.liveSessionId);
+  const livePlayerName = useGalStore(s => s.livePlayerName);
   const hidePlayerBubbles = useGalStore(s => s.hidePlayerBubbles);
   const liveGameType = useGalStore(s => s.liveGameType);
   const livePhase = useGalStore(s => s.livePhase);
+  const liveQueue = useGalStore(s => s.liveQueue);
+  const liveSending = useGalStore(s => s.liveSending);
+  const livePendingInputId = useGalStore(s => s.livePendingInputId);
+  const liveAdvancing = useGalStore(s => s.liveAdvancing);
+  const liveSendError = useGalStore(s => s.liveSendError);
+  const liveSayOverride = useGalStore(s => s.liveSayOverride);
+  const requestNextRound = useGalStore(s => s.requestNextRound);
   const speakers = useGalStore(s => s.speakers);
   const portraits = useGalStore(s => s.portraits);
   const advance = useGalStore(s => s.advance);
@@ -57,14 +66,37 @@ export function GalDialogBox() {
     const waitLabel = liveGameType === 'script'
       ? (String(livePhase).toLowerCase() === 'discussion' ? '💬 讨论进行中…' : '⏳ 对局准备中…（消息将在这里播放）')
       : (liveSessionId ? '◉ 已连接 · 等待对局消息…' : '○ 未连接对局');
+    // P0 点击驱动：仅无真人玩家的纯 Agent 场景可在整轮播完后点击生成下一轮。
+    // 有玩家时严格一问一答，必须等待输入；2D/剧本杀/狼人杀也不参与。
+    const drained = liveQueue.length === 0 && !typing;
+    const busy = liveSending || !!livePendingInputId || liveAdvancing;
+    const canAdvance = isAutonomousAdvanceGate({
+      hasSession: !!liveSessionId,
+      hasPlayer: !!String(livePlayerName || '').trim(),
+      hasOverride: !!liveSayOverride,
+      gameType: liveGameType,
+      drained,
+      busy,
+    });
     const waitHint = liveGameType === 'script'
       ? (String(livePhase).toLowerCase() === 'discussion' ? 'AI 发言 / 阶段变化将在这里播放' : '完整剧本生成中，搜证 / 讨论消息将在这里播放')
-      : (liveSessionId ? 'AI 发言 / 公告 / 阶段变化将在这里播放' : '顶部切换「🔌 真实对局」并输入 session_id / 房间码连接');
+      : busy
+        ? '✦ 生成中…'
+        : canAdvance
+          ? '▼ 点击继续下一轮'
+          : (liveSessionId ? 'AI 发言 / 公告 / 阶段变化将在这里播放' : '顶部切换「🔌 真实对局」并输入 session_id / 房间码连接');
     return (
       <div className="gal-dialog-wrap">
-        <div className="gal-dialog gal-dialog-wait">
+        <div
+          className="gal-dialog gal-dialog-wait"
+          style={canAdvance ? { cursor: 'pointer' } : undefined}
+          onClick={canAdvance ? () => void requestNextRound() : undefined}
+          role={canAdvance ? 'button' : undefined}
+          title={canAdvance ? '点击生成下一轮' : undefined}
+        >
           <div className="gal-wait-label">{waitLabel}</div>
           <div className="gal-wait-hint">{waitHint}</div>
+          {!!liveSendError && <div className="gal-live-error">{liveSendError}</div>}
         </div>
       </div>
     );

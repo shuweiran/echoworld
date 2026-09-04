@@ -9,6 +9,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint src desktop/main.cjs desktop/preload.cjs",
     "test:projection": "node --test tools/floor-projection.test.mjs",
+    "test:gal-turn": "node --test --experimental-strip-types tools/player-turn-gate.test.mjs",
     "preview": "vite preview",
     "mobile:build": "tsc -b && vite build --mode mobile",
     "mobile:sync": "npm run mobile:build && npx cap sync android",

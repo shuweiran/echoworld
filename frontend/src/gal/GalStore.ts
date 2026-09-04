@@ -25,6 +25,7 @@ import {
   subscribeAiImageEvents,
   triggerGenerate,
 } from '../api/aiImage';
+import { api } from '../api/client';
 import type { AiImageErrorPayload, AiImageReadyPayload } from '../api/aiImage';
 
 export type GalMode = 'chat' | '2d';
@@ -158,8 +159,11 @@ interface GalState {
   liveGeneralMode: string;
   /** 待播放消息队列（SSE 入队 → 打字机播放） */
   liveQueue: GalLiveMessage[];
-  /** agent → 流式 token 累计缓冲（agent_token 追加，agent_output 结算清空） */
+  /** 消息 id → 流式 token 累计缓冲（agent_token 追加，agent_output 结算删除；
+   *  P0 按消息隔离：同角色多句互不覆盖；旧按 agent 名键缓冲已废弃，结算时一并清理） */
   liveStreams: Record<string, string>;
+  /** 消息 id → 已消费最大 event_seq（重发/乱序去重；无序号旧协议不记） */
+  liveStreamSeq: Record<string, number>;
   /** 当前玩家名（发言用） */
   livePlayerName: string;
   /** 剧本杀 roleKey（可选，身份校验） */
@@ -186,12 +190,25 @@ interface GalState {
   liveSayOverride?: (text: string) => Promise<void>;
   /** P-0813-D：设置/清除 liveSayOverride（2D 视图挂载注入，卸载清除） */
   setLiveSayOverride: (fn?: (text: string) => Promise<void>) => void;
-  /** P-0814-A/C：播放完毕自动推进 —— 新一轮「播出完毕」待推进标志（round_complete 置位；
-   *  队列排空后由 useAutoPlaybackDone 自动 POST /api/simulation/playback_done → 清除）。
-   *  后端幂等：非等待态重复信号被忽略。 */
+  /** 新一轮「播出完毕」标志（round_complete 置位）。
+   *  一般模式用于玩家选项/点击门控；2D 视图仍由 useAutoPlaybackDone 消费。 */
   livePlaybackArmed: boolean;
-  /** P-0814-A/C：设置/清除 livePlaybackArmed（round_complete 置位；自动推进 hook 消费/新会话清除）。 */
+  /** 设置/清除 livePlaybackArmed（一般模式作为回合门控，2D 视图可作为自动推进信号）。 */
   setLivePlaybackArmed: (v: boolean) => void;
+  /** P0 点击驱动：等待态点击「继续」后下一轮生成中（阻塞请求在途；防连点重复推进） */
+  liveAdvancing: boolean;
+  /** P0 点击驱动：队列排空后点击对话框 → 请求生成下一轮（幂等：后端非等待态直接 no-op） */
+  requestNextRound: () => Promise<void>;
+  /** P0 断线最小恢复：SSE 重连中（防并发重入） */
+  liveResyncing: boolean;
+  /**
+   * P0 断线最小恢复（非完整 Last-Event-ID 协议）：重连后拉 DB 落库消息按 message_id 对账 ——
+   * 1) 本地 STREAMING 句在 DB 已 FINAL → 直接结算；DB 已 FAILED → 标失败；
+   * 2) DB FINAL 但本地缺失 → 入队（与历史补拉同去重规则，玩家消息仍受 hidePlayerBubbles 约束）；
+   * 3) 本地 STREAMING 无 DB 记录且超过 30s → 判 FAILED（防永久“生成中”）；
+   * DB 仍 STREAMING 的不动（服务端可能仍在生成，SSE 会续流）。失败静默，下次继续。
+   */
+  resyncFromPersisted: () => Promise<void>;
   /** 已生成占位的未知角色名（面板「可注册生成」数据源） */
   liveUnknownRoles: string[];
   /** P-0810-16：场景卡目标状态（后端 goals 视图 + scene_target_update 增量合并；null=无目标/未就绪） */
@@ -221,12 +238,14 @@ interface GalState {
   applySceneTargetUpdate: (data: any) => void;
   /** 注册未知说话者为占位立绘角色（幂等） */
   liveEnsureSpeaker: (name: string) => void;
-  /** agent_token 流式增量（缓冲 + 打字机实时渲染） */
-  liveToken: (agent: string, delta: string) => void;
-  /** agent_output 结算（完成当前流式句） */
-  liveCompleteAgent: (agent: string, content: string) => void;
-  /** 完整消息入队（公告/狼人杀发言/剧本杀轮询增量等） */
-  liveEnqueue: (msg: Omit<GalLiveMessage, 'id' | 'ts'>) => void;
+  /** agent_token 流式增量（缓冲 + 打字机实时渲染；messageId/eventSeq 为空走旧协议兼容） */
+  liveToken: (agent: string, delta: string, messageId?: string, eventSeq?: number) => void;
+  /** agent_output 结算（完成当前流式句；messageId 为空走旧协议兼容） */
+  liveCompleteAgent: (agent: string, content: string, messageId?: string) => void;
+  /** agent_error 失败结算（对应流标 FAILED 显示，不覆盖他句） */
+  liveFailAgent: (agent: string, messageId?: string, error?: string) => void;
+  /** 完整消息入队（公告/狼人杀发言/剧本杀轮询增量等；可选 id：DB 对账时保留后端 message_id） */
+  liveEnqueue: (msg: Omit<GalLiveMessage, 'id' | 'ts'> & { id?: string }) => void;
   /** 玩家本地回显（user_input 去重） */
   enqueuePlayerEcho: (text: string) => void;
   setLiveIdentity: (playerName?: string, playerKey?: string) => void;
@@ -312,7 +331,11 @@ function ensureLivePlay(s: GalState, set: (p: Partial<GalState>) => void) {
   }
   const head = s.liveQueue[0];
   if (!head) return;
-  const full = head.streamed ? (s.liveStreams[head.speakerId] || head.text) : head.text;
+  // P0 按消息隔离：流式句的完整文本取自本消息 id 的缓冲（同角色他句 token 不再串入）；
+  // liveStreams[head.speakerId] 为旧按 agent 名键缓冲的兼容回退（热更新残留），新缓冲恒按 id 写
+  const full = head.streamed
+    ? (s.liveStreams[head.id] ?? s.liveStreams[head.speakerId] ?? head.text)
+    : head.text;
   set({
     current: head,
     typing: { speakerId: head.speakerId, full, chars: 0, done: full.length === 0 },
@@ -426,6 +449,7 @@ export function createGalStore() {
   liveGeneralMode: '',
   liveQueue: [],
   liveStreams: {},
+  liveStreamSeq: {},
   livePlayerName: '',
   livePlayerKey: '',
   liveFocusedRoleId: '',
@@ -444,6 +468,10 @@ export function createGalStore() {
   liveSayOverride: undefined,
   /** P-0814-A：默认无待推进（round_complete 置位；自动推进 hook 消费/新会话清除） */
   livePlaybackArmed: false,
+  /** P0 点击驱动：默认不在推进中 */
+  liveAdvancing: false,
+  /** P0 断线最小恢复：默认不在对账中 */
+  liveResyncing: false,
 
   start: () => {
     // P-0810-06：真实对局模式下不重置（防直播状态被 demo 重置清空）
@@ -466,6 +494,9 @@ export function createGalStore() {
       return;
     }
     if (s.liveMode) {
+      // 流式结算前只允许跳过打字效果，不能弹出未完成消息；
+      // 否则迟到 agent_output 会把完整文本再入队，造成同一句重复播放。
+      if ((s.current as GalLiveMessage | null)?.streamed) return;
       // live 分支：完成态点击 → 入 log → 弹队首 → 播下一条
       advanceLiveMessage(set, get);
       return;
@@ -561,6 +592,7 @@ export function createGalStore() {
       liveGeneralMode: '',
       liveQueue: [],
       liveStreams: {},
+      liveStreamSeq: {},
       livePlayerName: opts?.playerName || '',
       livePlayerKey: opts?.playerKey || '',
       liveFocusedRoleId: '',
@@ -574,6 +606,8 @@ export function createGalStore() {
       liveUnknownRoles: [],
       liveSayOverride: undefined,
       livePlaybackArmed: false,
+      liveAdvancing: false,
+      liveResyncing: false,
       started: true,
       finished: false,
       index: 0,
@@ -598,6 +632,7 @@ export function createGalStore() {
       liveGeneralMode: '',
       liveQueue: [],
       liveStreams: {},
+      liveStreamSeq: {},
       liveFocusedRoleId: '',
       liveFocusedRoleIds: [],
       liveConversationMembers: [],
@@ -609,6 +644,8 @@ export function createGalStore() {
       liveUnknownRoles: [],
       liveSayOverride: undefined,
       livePlaybackArmed: false,
+      liveAdvancing: false,
+      liveResyncing: false,
       liveGoals: null,
       started: false,
       finished: false,
@@ -657,7 +694,8 @@ export function createGalStore() {
           break;
         }
         s.liveEnsureSpeaker(agent);
-        s.liveCompleteAgent(agent, content);
+        // P0 消息标识：后端 message_id（新协议）直达结算；缺省走旧协议兼容
+        s.liveCompleteAgent(agent, content, data?.message_id);
         break;
       }
       case 'agent_token': {
@@ -666,7 +704,24 @@ export function createGalStore() {
         const delta = data?.delta;
         if (!agent || !delta) return;
         s.liveEnsureSpeaker(agent);
-        s.liveToken(agent, delta);
+        // P0 消息标识：message_id + event_seq（新协议）；缺省走旧协议兼容
+        s.liveToken(agent, delta, data?.message_id, data?.event_seq);
+        break;
+      }
+      case 'agent_error': {
+        // P0 流式失败：对应流标 FAILED，不覆盖他句；剧本杀/狼人杀不经此管线
+        if (s.liveGameType === 'script' || s.liveGameType === 'werewolf') break;
+        const agent = data?.agent_name;
+        if (!agent) break;
+        s.liveFailAgent(agent, data?.message_id, data?.error);
+        break;
+      }
+      case 'round_complete': {
+        // 本轮所有输出已结算入队；候选门控据此进入稳定的玩家回合。
+        // 新 token/消息到达时 liveToken/liveEnqueue 会同步清除此标志。
+        if (s.liveGameType === 'general' || s.liveGameType === 'unknown') {
+          set({ livePlaybackArmed: true });
+        }
         break;
       }
       case 'werewolf_speech': {
@@ -727,6 +782,20 @@ export function createGalStore() {
         s.liveEnqueue({ kind: 'player', speakerId: 'player', name: character, text: content });
         break;
       }
+      case 'world_input_processed': {
+        if (data?.input_id && data.input_id === s.livePendingInputId) {
+          set({ livePendingInputId: '', liveSendError: '' });
+        }
+        break;
+      }
+      case 'world_input_failed': {
+        if (data?.input_id && data.input_id === s.livePendingInputId) {
+          set({ livePendingInputId: '', liveSendError: String(data?.error || '世界调度失败，请稍后重试') });
+        }
+        break;
+      }
+      case 'world_input_retrying':
+        break;
       case 'script_phase': {
         if (data?.session_id && data.session_id !== s.liveSessionId) break;
         s.setLiveGameType('script', data?.phase || '', s.liveScriptTitle);
@@ -861,57 +930,114 @@ export function createGalStore() {
     }));
   },
 
-  liveToken: (agent, delta) => {
+  liveToken: (agent, delta, messageId, eventSeq) => {
     const s = get();
     if (!s.liveMode || !agent || !delta) return;
-    const prev = s.liveStreams[agent] || '';
-    const text = prev + delta;
-    // 队列中若无该 agent 的流式消息 → 建一条（打字机实时渲染的载体，agent_output 结算替换文本）
+    // P0 按消息隔离：后端 message_id（新协议）直接定位，无则回退“同发言者最近流式句”（旧协议兼容）
+    const mid = messageId ? String(messageId) : null;
+    const cur = s.current as GalLiveMessage | null;
     let msgId: string | null = null;
-    for (let i = s.liveQueue.length - 1; i >= 0; i--) {
-      if (s.liveQueue[i].speakerId === agent && s.liveQueue[i].streamed) {
-        msgId = s.liveQueue[i].id;
-        break;
+    if (mid) {
+      for (let i = s.liveQueue.length - 1; i >= 0; i--) {
+        if (s.liveQueue[i].id === mid && s.liveQueue[i].streamed) {
+          msgId = s.liveQueue[i].id;
+          break;
+        }
+      }
+      if (!msgId && cur && cur.streamed && cur.id === mid) {
+        msgId = cur.id; // 已弹队但正在播放的流式句
+      }
+      // 序号去重：重发/乱序直接丢弃（SSE 保序为主，此为兜底；无序号旧协议恒追加）
+      if (msgId && eventSeq != null && Number.isFinite(eventSeq)) {
+        const last = s.liveStreamSeq[msgId] ?? 0;
+        if (eventSeq <= last) return;
       }
     }
-    const newMsg: GalLiveMessage = {
-      id: `live-${++logSeq}-${Date.now()}`,
-      kind: 'agent',
-      speakerId: agent,
-      name: agent,
-      text: '',
-      streamed: true,
-      ts: Date.now(),
-    };
+    if (!msgId) {
+      // 旧协议：同发言者最近流式句；已弹队但正在播放的归属到 current
+      for (let i = s.liveQueue.length - 1; i >= 0; i--) {
+        if (s.liveQueue[i].speakerId === agent && s.liveQueue[i].streamed) {
+          msgId = s.liveQueue[i].id;
+          break;
+        }
+      }
+      if (!msgId && cur && cur.streamed && cur.speakerId === agent) {
+        msgId = cur.id;
+      }
+    }
+    let newMsg: GalLiveMessage | null = null;
+    if (!msgId) {
+      // 队列无该 agent 流式消息 → 建一条（新协议直接以后端 message_id 为 id，保证结算对齐）
+      newMsg = {
+        id: mid || `live-${++logSeq}-${Date.now()}`,
+        kind: 'agent',
+        speakerId: agent,
+        name: agent,
+        text: '',
+        streamed: true,
+        ts: Date.now(),
+      };
+      msgId = newMsg.id;
+    }
+    const target: string = msgId;
+    const text = (s.liveStreams[target] || '') + delta;
+    const trackSeq = mid && eventSeq != null && Number.isFinite(eventSeq) ? eventSeq : null;
     set(st => ({
-      liveStreams: { ...st.liveStreams, [agent]: text },
-      liveQueue: msgId ? st.liveQueue : [...st.liveQueue, newMsg],
-      // 正在播放该 agent 的流式句 → 打字机文本实时增长（逐字重放）
+      liveStreams: { ...st.liveStreams, [target]: text },
+      liveStreamSeq: trackSeq != null ? { ...st.liveStreamSeq, [target]: trackSeq } : st.liveStreamSeq,
+      liveQueue: newMsg ? [...st.liveQueue, newMsg] : st.liveQueue,
+      livePlaybackArmed: false,
+      // 仅当正在播放的正是这条消息时，打字机文本才跟随增长（逐字重放）——
+      // 同角色另一条流式句的 token 不再污染当前播放句
       // P-0810-08 fix：即使已 done（缓冲文本曾很短先播完）也要继续更新 full ——
       // 流式 token 仍在增长时，tick 会随 full 变长自动重新打开打字机（done 在 tick 内重算）
       typing: st.typing && st.typing.speakerId === agent
-        ? { ...st.typing, full: text }
+        && (!st.current || (st.current as GalLiveMessage).id === target)
+        ? { ...st.typing, full: text, done: st.typing.chars >= text.length }
         : st.typing,
     }));
     ensureLivePlay(get(), set);
   },
 
-  liveCompleteAgent: (agent, content) => {
+  liveCompleteAgent: (agent, content, messageId) => {
     const s = get();
     if (!s.liveMode || !agent) return;
-    // 找队列中该 agent 最近一条流式消息
+    // P0 按消息隔离：新协议按 message_id 精确定位；无则回退“该 agent 最近流式句”（旧协议兼容）
+    const mid = messageId ? String(messageId) : null;
     let foundId: string | null = null;
-    for (let i = s.liveQueue.length - 1; i >= 0; i--) {
-      if (s.liveQueue[i].speakerId === agent && s.liveQueue[i].streamed) {
-        foundId = s.liveQueue[i].id;
-        break;
+    if (mid) {
+      for (let i = s.liveQueue.length - 1; i >= 0; i--) {
+        if (s.liveQueue[i].id === mid) {
+          foundId = s.liveQueue[i].id;
+          break;
+        }
+      }
+      if (!foundId && s.current && (s.current as unknown as GalLiveMessage).id === mid) {
+        foundId = mid; // 已弹队但正在播放
+      }
+    }
+    if (!foundId) {
+      // 找队列中该 agent 最近一条流式消息
+      for (let i = s.liveQueue.length - 1; i >= 0; i--) {
+        if (s.liveQueue[i].speakerId === agent && s.liveQueue[i].streamed) {
+          foundId = s.liveQueue[i].id;
+          break;
+        }
       }
     }
     const isCurrent = s.current && (s.current as unknown as GalLiveMessage).id === foundId;
+    const settledId: string | null = foundId;
     set(st => ({
-      liveStreams: Object.fromEntries(Object.entries(st.liveStreams).filter(([k]) => k !== agent)),
+      // P0 按消息隔离：只删本消息 id 的缓冲与序号（同角色他句保留）+ 兼容清理旧 agent 名键缓冲
+      liveStreams: Object.fromEntries(Object.entries(st.liveStreams).filter(([k]) => k !== settledId && k !== agent)),
+      liveStreamSeq: settledId
+        ? Object.fromEntries(Object.entries(st.liveStreamSeq).filter(([k]) => k !== settledId))
+        : st.liveStreamSeq,
       liveQueue: st.liveQueue.map(m =>
         m.id === foundId ? { ...m, text: content, streamed: false } : m),
+      current: isCurrent && st.current
+        ? { ...st.current, text: content, streamed: false } as GalLiveMessage
+        : st.current,
       // 结算后：正在播放 → 立即完成当前句（P-0810-08 fix：即使已 done 也替换为完整内容，
       // 防流式先播完的短缓冲把完整文本冻结）；未播放 → 文本已替换，播放时逐字重放
       typing: isCurrent && st.typing
@@ -937,7 +1063,11 @@ export function createGalStore() {
       // P-0814-G：双路径去重 —— /api/send 同步返回的 agent_outputs 已先入队（非流式）时，
       // SSE agent_output 结算找不到流式消息，不能再次入队（否则 AI 消息重复/批量出现）。
       // 与 liveSay 同步入队前的去重同源（同 speaker+text 已在队/log 则跳过）。
+      // P0 message_id：同 id 已在队/log（迟到结算/重发）同样跳过。
       const st = get();
+      if (mid && [...st.liveQueue, ...st.log].some(m => (m as GalLiveMessage).id === mid)) {
+        return;
+      }
       const dup = [...st.liveQueue, ...st.log].some(m =>
         (m as GalLiveMessage).speakerId === agent && m.text === content);
       if (!dup) {
@@ -951,12 +1081,66 @@ export function createGalStore() {
     }
   },
 
+  /**
+   * P0 流式失败结算：agent_error 到达 → 对应流式句标 FAILED（保留已播文本 + 中断后缀，
+   * streamed 置 false 解除“流式中不可弹出”锁定）；找不到对应流时 system 提示一行。
+   * 失败永不覆盖他句文本（与旧“失败重试覆盖”行为决裂）。
+   */
+  liveFailAgent: (agent, messageId, error) => {
+    const s = get();
+    if (!s.liveMode || !agent) return;
+    const mid = messageId ? String(messageId) : null;
+    let foundId: string | null = null;
+    if (mid) {
+      for (let i = s.liveQueue.length - 1; i >= 0; i--) {
+        if (s.liveQueue[i].id === mid && s.liveQueue[i].streamed) {
+          foundId = s.liveQueue[i].id;
+          break;
+        }
+      }
+    }
+    if (!foundId) {
+      for (let i = s.liveQueue.length - 1; i >= 0; i--) {
+        if (s.liveQueue[i].speakerId === agent && s.liveQueue[i].streamed) {
+          foundId = s.liveQueue[i].id;
+          break;
+        }
+      }
+    }
+    const suffix = `（生成中断${error ? '：' + error : ''}）`;
+    if (!foundId) {
+      get().liveEnqueue({
+        kind: 'system', speakerId: 'system', name: '⚠️ 系统', text: `${agent} ${suffix}`,
+      });
+      return;
+    }
+    const failedId: string = foundId;
+    const isCurrent = s.current && (s.current as unknown as GalLiveMessage).id === failedId;
+    set(st => {
+      const target = st.liveQueue.find(m => m.id === failedId);
+      // 若队内句已有完整结算文本（非流式），只追加后缀；否则用缓冲 partial + 后缀
+      const finalText = target && !target.streamed ? target.text + suffix : ((st.liveStreams[failedId] || target?.text || '') + suffix);
+      return {
+        liveStreams: Object.fromEntries(Object.entries(st.liveStreams).filter(([k]) => k !== failedId)),
+        liveStreamSeq: Object.fromEntries(Object.entries(st.liveStreamSeq).filter(([k]) => k !== failedId)),
+        liveQueue: st.liveQueue.map(m =>
+          m.id === failedId ? { ...m, text: finalText, streamed: false } : m),
+        current: isCurrent && st.current
+          ? { ...st.current, text: finalText, streamed: false } as GalLiveMessage
+          : st.current,
+        typing: isCurrent && st.typing
+          ? { speakerId: agent, full: finalText, chars: finalText.length, done: true }
+          : st.typing,
+      };
+    });
+  },
+
   liveEnqueue: (msg) => {
     if (!get().liveMode) return;
     // P-0810-08：呈现接管视图隐藏玩家气泡 → 玩家消息不入队（不渲染；后端历史仍可查）
     if (get().hidePlayerBubbles && msg.kind === 'player') return;
     const m: GalLiveMessage = { id: `live-${++logSeq}-${Date.now()}`, ts: Date.now(), ...msg };
-    set(st => ({ liveQueue: [...st.liveQueue, m] }));
+    set(st => ({ liveQueue: [...st.liveQueue, m], livePlaybackArmed: false }));
     ensureLivePlay(get(), set);
   },
 
@@ -997,6 +1181,117 @@ export function createGalStore() {
   setLiveSayOverride: (fn) => set({ liveSayOverride: fn }),
   /** P-0814-A：置位/清除「播出完毕待推进」标志（round_complete 置位；推进按钮点击/新会话清除）。 */
   setLivePlaybackArmed: (v) => set({ livePlaybackArmed: v }),
+
+  /**
+   * P0 点击驱动：等待态点击「继续」→ 请求生成下一轮。
+   *
+   * 无真人玩家的一般模式：整轮播完（队列排空）后点击对话框调本方法。
+   * 通道复用 POST /api/simulation/playback_done（session 路径，阻塞到本轮生成完才返回，
+   * 新轮 token/结算继续走既有会话定向 SSE 入队；round_complete 后的历史补拉/候选刷新不变）。
+   * 幂等：后端非等待态直接 no-op（重复点击不产生多余轮次）+ 本地 liveAdvancing 防连点。
+   * 非一般模式（剧本杀/狼人杀）与 2D（liveSayOverride，自有组推进）直接返回。
+   */
+  requestNextRound: async () => {
+    const s = get();
+    if (!s.liveMode || !s.liveSessionId) return;
+    // 有真人玩家的一般模式严格一问一答：点击只能推进现有消息，不能凭空生成下一轮。
+    if (String(s.livePlayerName || '').trim()) return;
+    if (s.liveSayOverride) return;
+    if (s.liveGameType === 'script' || s.liveGameType === 'werewolf') return;
+    if (s.liveSending || s.livePendingInputId || s.liveAdvancing) return;
+    // 仅队列排空可推进 —— 播放中点击走 advance（打字跳过/下一条），流式生成中不推进
+    if (s.liveQueue.length > 0) return;
+    if (s.typing && !s.typing.done) return;
+    if (s.current && (s.current as GalLiveMessage).streamed) return;
+    set({ liveAdvancing: true, liveSendError: '' });
+    try {
+      const res: any = await api.simPlaybackDone({ session_id: s.liveSessionId }, 180000);
+      if (!res?.advanced) {
+        set({ liveSendError: '暂无可推进的内容（生成中或已结束），稍后再试' });
+      }
+    } catch (e: any) {
+      set({ liveSendError: `推进下一轮失败：${e?.message || '未知错误'}` });
+    } finally {
+      set({ liveAdvancing: false });
+    }
+  },
+
+  resyncFromPersisted: async () => {
+    const s = get();
+    if (!s.liveMode || !s.liveSessionId || s.liveResyncing) return;
+    if (s.liveSayOverride) return;
+    if (s.liveGameType === 'script' || s.liveGameType === 'werewolf') return;
+    set({ liveResyncing: true });
+    try {
+      const res: any = await api.getPersistedHistory(s.liveSessionId, 200);
+      const list: any[] = Array.isArray(res?.messages) ? res.messages : [];
+      const st = get();
+      if (!st.liveMode || st.liveSessionId !== s.liveSessionId) return;
+      const playerName = st.livePlayerName || '';
+      const knownIds = new Set<string>([
+        ...st.liveQueue.map(m => m.id),
+        ...st.log.map(m => m.id),
+      ]);
+      const knownText = new Set<string>([
+        ...st.liveQueue.map(m => `${m.speakerId}\u0000${m.text}`),
+        ...st.log.map(m => `${m.speakerId}\u0000${m.text}`),
+      ]);
+      for (const m of list) {
+        const role = String(m?.role || '');
+        const name = String(m?.name || '');
+        const content = String(m?.content || '');
+        if (!content.trim()) continue;
+        const mid = String(m?.message_id || '');
+        const status = String(m?.status || 'FINAL');
+        // 本地同 id 流式句：DB 终态直接结算（token 收到但 final 丢失 / 永久生成中的恢复）
+        const local = mid ? st.liveQueue.find(q => q.id === mid && q.streamed) : undefined;
+        if (local) {
+          if (status === 'FINAL') {
+            st.liveCompleteAgent(local.speakerId, content, mid);
+            continue;
+          }
+          if (status === 'FAILED') {
+            st.liveFailAgent(local.speakerId, mid, '中断前已失败');
+            continue;
+          }
+          continue; // DB 仍 STREAMING：服务端可能仍在生成，等 SSE 续流
+        }
+        if (status !== 'FINAL') continue; // 陈旧 STREAMING 行不补（服务端经 SSE 推进）
+        if (mid && knownIds.has(mid)) continue;
+        // P-0814-G 同源去重 + 玩家归类（与 pullGeneralHistory 一致；受 hidePlayerBubbles 约束）
+        const isPlayerMsg = role === 'user'
+          || (role === 'agent' && !!name && (name === 'me' || (playerName && name === playerName)));
+        const sid = isPlayerMsg ? 'player' : role === 'agent' ? name : 'system';
+        const key = `${sid}\u0000${content}`;
+        if (knownText.has(key)) continue;
+        knownText.add(key);
+        if (isPlayerMsg) {
+          st.liveEnqueue({ id: mid || undefined, kind: 'player', speakerId: 'player', name: name || playerName || '你', text: content });
+        } else if (role === 'agent') {
+          st.liveEnsureSpeaker(name);
+          st.liveEnqueue({ id: mid || undefined, kind: 'agent', speakerId: name, name, text: content });
+        } else {
+          st.liveEnqueue({ id: mid || undefined, kind: 'system', speakerId: 'system', name: `📢 ${name || '系统'}`, text: content });
+        }
+      }
+      // 本地残留流式句：DB 无记录且超过 30s → 判 FAILED（防永久“生成中”；
+      // 30s 内或 DB 仍 STREAMING 的不动，服务端 SSE 仍可续流）
+      const after = get();
+      if (!after.liveMode || after.liveSessionId !== s.liveSessionId) return;
+      const now = Date.now();
+      const dbIds = new Set(list.map(m => String(m?.message_id || '')).filter(Boolean));
+      for (const q of [...after.liveQueue]) {
+        if (!q.streamed) continue;
+        if (q.id && dbIds.has(q.id)) continue;
+        if (now - q.ts < 30000) continue;
+        after.liveFailAgent(q.speakerId, q.id, '连接中断');
+      }
+    } catch {
+      // 失败静默（下次重连/round_complete 补拉继续覆盖）
+    } finally {
+      set({ liveResyncing: false });
+    }
+  },
 
   setSpeakers: (speakers) => set({ speakers }),
 

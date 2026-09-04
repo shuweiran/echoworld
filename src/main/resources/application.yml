@@ -79,10 +79,11 @@ roleplay:
   # 默认与角色 LLM 同端点同模型；可在设置页单独改为上下文与推理能力更强的模型。
   arbiter-llm:
     # P-0902-A（2026-09-02）：随主链路切换 DeepSeek 官方端点。
-    #   注：model=flash 非笔误——v4-pro 在 PLANNING 任务下会被 ModelRequestProfile 加
-    #   thinking=enabled+reasoning_effort=high，max_tokens 全被 reasoning 吃满→content 空→
-    #   角色/地图生成静默失败（2026-09-02 直连复现实测 finish=length/content_len=0）；
-    #   flash 在 PLANNING 下 thinking=disabled，实测 12-13s 产出合法 JSON。
+    #   注：model=flash 非笔误——v4-pro 在结构化生成（callJson 400-4000 token）下无论旧 jar
+    #   （默认思考）还是新 jar（PLANNING→ModelRequestProfile thinking=enabled）都会 reasoning
+    #   吃满 max_tokens→content 空→角色/地图生成静默失败（2026-09-02 两阶段直连复现
+    #   finish=length/content_len=0，.local/secrets/matrix-test.mjs + oldjar-probe.mjs）；
+    #   flash 实测 12-27s 产出合法五层 JSON。arbiter 长期保持 flash。
     api-base: "https://api.deepseek.com/v1/chat/completions"
     api-key: "${ROLEPLAY_ARBITER_LLM_API_KEY:${ROLEPLAY_LLM_API_KEY:}}"
     model: "deepseek-v4-flash"

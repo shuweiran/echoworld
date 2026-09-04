@@ -555,7 +555,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   rollback: async (round) => {
-    await api.rollback(round, get().sessionId);
+    try {
+      await api.rollback(round, get().sessionId);
+    } catch (e: any) {
+      set({ statusPhase: `回滚失败：${e?.message || '未知错误'}` });
+      return;
+    }
     set({ messages: [], currentRound: round, statusPhase: `已回滚到第 ${round} 轮` });
     await get().loadHistory();
   },
