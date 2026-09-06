@@ -48,6 +48,11 @@ interface AmbientRole {
   line?: string;
 }
 
+interface DirectorChatLine {
+  role: 'player' | 'director';
+  text: string;
+}
+
 /** SSE 桥（hook 必须常驻已挂载组件 → 独立组件按 sessionId 条件渲染） */
 function GalGeneralSseBridge() {
   const sessionId = useGalStore(s => s.liveSessionId);
@@ -129,10 +134,12 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
   const [knownRoleIds, setKnownRoleIds] = useState<Record<string, string>>({});
   const [storyScript, setStoryScript] = useState<any>(null);
   const [storyOpen, setStoryOpen] = useState(false);
-  // P0 主控侧栏：给主控的导演指令（POST /api/goals，会话目标，主控后台约束后续剧情，不入对话流）
-  const [directiveDraft, setDirectiveDraft] = useState('');
-  const [directiveSending, setDirectiveSending] = useState(false);
-  const [directiveHint, setDirectiveHint] = useState('');
+  const [directorDraft, setDirectorDraft] = useState('');
+  const [directorSending, setDirectorSending] = useState(false);
+  const [directorChat, setDirectorChat] = useState<DirectorChatLine[]>([{
+    role: 'director',
+    text: '我是动态剧本主控。我能解释公开剧情、安排后续线索与选择；不能改写已发生的事、替你决定或直接执行世界动作。',
+  }]);
   // P1 角色卡片：查看/编辑/导出（GET/PUT /api/characters/{name}/card）
   const [cardName, setCardName] = useState('');
   const [cardJson, setCardJson] = useState('');
@@ -154,6 +161,11 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
   // 进入即连接 live（hidePlayerBubbles=true：玩家发言不渲染气泡）
   useEffect(() => {
     if (!sessionId) return;
+    setDirectorDraft('');
+    setDirectorChat([{
+      role: 'director',
+      text: '我是动态剧本主控。我能解释公开剧情、安排后续线索与选择；不能改写已发生的事、替你决定或直接执行世界动作。',
+    }]);
     // P-0811-G：玩家名只取显式传入的 playerName —— 不再回退 localStorage.playerId
     // （用户反馈：未选定玩家角色时仍判定自己在说话；导演模式应无玩家身份）
     const name = playerName || '';
@@ -335,20 +347,20 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
     setRoleDrawerOpen(false);
   };
 
-  // P0 主控侧栏：发送导演指令（会话目标；主控只约束后续，不改写历史/不入对话流）
-  const sendDirective = async () => {
-    const text = directiveDraft.trim();
-    if (!text || !sessionId || directiveSending) return;
-    setDirectiveSending(true);
-    setDirectiveHint('');
+  const sendDirectorChat = async () => {
+    const text = directorDraft.trim();
+    if (!text || !sessionId || directorSending) return;
+    setDirectorSending(true);
+    setDirectorChat(lines => [...lines, { role: 'player', text }]);
+    setDirectorDraft('');
     try {
-      await api.setGoals([text], sessionId);
-      setDirectiveDraft('');
-      setDirectiveHint('✓ 已设为导演目标，主控将在后续剧情中贯彻');
+      const result = await api.directorChat(sessionId, text);
+      if (result.story) setStoryScript(result.story);
+      setDirectorChat(lines => [...lines, { role: 'director', text: result.reply }]);
     } catch (e: any) {
-      setDirectiveHint(`✕ 发送失败：${e?.message || '未知错误'}`);
+      setDirectorChat(lines => [...lines, { role: 'director', text: `暂时无法回复：${e?.message || '未知错误'}` }]);
     } finally {
-      setDirectiveSending(false);
+      setDirectorSending(false);
     }
   };
 
@@ -475,23 +487,29 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
             <section><small>当前阶段 · 张力 {Number(storyScript?.stage?.tension || 0)}%</small><p><strong>{storyScript?.stage?.title || '开场'}</strong>：{storyScript?.stage?.goal || '等待阶段目标'}</p></section>
             <section><small>主控手里的下一页</small><p>{storyScript.script || '剧情会随每一步更新。'}</p><p className="galg-story-next">下一拍：{storyScript.next_beat || '等待下一次互动。'}</p></section>
             {Array.isArray(storyScript.recent_changes) && storyScript.recent_changes.length > 0 && <section><small>已发生</small><ul>{storyScript.recent_changes.map((change: string, index: number) => <li key={`${index}:${change}`}>{change}</li>)}</ul></section>}
-            {/* P0 主控侧栏：给主控的导演指令（独立通道，不入对话流；主控只约束后续剧情） */}
+            {/* 主控公开对话：只影响未发生的后续编排，能力边界在首句明确说明。 */}
             <section>
-              <small>给主控的指令</small>
+              <small>与主控对话</small>
+              <p className="galg-story-next">主控会回应你的提问；它只能编排后续，不能替你行动或修改已发生事实。</p>
+              <div style={{ display: 'grid', gap: 6, maxHeight: 180, overflowY: 'auto', marginBottom: 8 }} aria-live="polite">
+                {directorChat.map((line, index) => <p key={`${index}:${line.text}`} style={{ margin: 0, padding: '6px 8px', borderRadius: 6,
+                  background: line.role === 'player' ? 'rgba(77,225,255,.12)' : 'rgba(255,209,102,.1)' }}>
+                  <strong>{line.role === 'player' ? '你' : '主控'}：</strong>{line.text}
+                </p>)}
+              </div>
               <div style={{ display: 'flex', gap: 8 }}>
                 <input
-                  value={directiveDraft}
-                  onChange={e => setDirectiveDraft(e.target.value)}
-                  onKeyDown={e => { if (e.key === 'Enter') void sendDirective(); }}
-                  placeholder="如：下一幕转入雨夜追逐…"
-                  disabled={directiveSending}
+                  value={directorDraft}
+                  onChange={e => setDirectorDraft(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter') void sendDirectorChat(); }}
+                  placeholder="问主控：我现在能做什么？"
+                  disabled={directorSending}
                   style={{ flex: 1, minWidth: 0 }}
                 />
-                <button onClick={() => void sendDirective()} disabled={directiveSending || !directiveDraft.trim()}>
-                  {directiveSending ? '发送中…' : '设为导演目标'}
+                <button onClick={() => void sendDirectorChat()} disabled={directorSending || !directorDraft.trim()}>
+                  {directorSending ? '主控思考中…' : '发送'}
                 </button>
               </div>
-              {directiveHint && <p className="galg-story-next">{directiveHint}</p>}
             </section>
           </aside>
         </div>

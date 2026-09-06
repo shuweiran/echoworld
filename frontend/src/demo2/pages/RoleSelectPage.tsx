@@ -68,7 +68,6 @@ export function RoleSelectPage() {
   const [largeMapOpen, setLargeMapOpen] = useState(false);
   const [newRole, setNewRole] = useState<RoleFormValues>(() => ({
     ...roleToForm({ id: '', name: '', avatar: AVATARS[0], intro: '', personality: '', talkStyle: '', hasSecret: false, source: 'free', homeScripts: [] }),
-    ttsEnabled: false,
   }));
   const closeModal = () => setAddModal(null);
 

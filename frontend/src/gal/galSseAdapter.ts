@@ -11,7 +11,7 @@
  *
  * 事件 → store 的纯映射在 GalStore.applySseEvent（本文件只做网络调用与增量源）。
  */
-import { useGalStore, type GalStoreApi, isNarratorAgent } from './GalStore';
+import { useGalStore, defaultGalStore, type GalStoreApi, isNarratorAgent } from './GalStore';
 import { api } from '../api/client';
 import { isSilenceText } from '../utils/silenceMarker';
 
@@ -70,6 +70,7 @@ export async function resolveSessionId(
  * 表现为「莫名其妙的对局聊天消息 + 输出语句错乱」。改为 WeakMap 按 store 实例隔离。
  */
 const transcriptCursors = new WeakMap<object, number>();
+const publicChatCursors = new WeakMap<object, number>();
 
 /**
  * 启动对局同步（进入 live 模式且有 session_id 时调用，返回停止函数）：
@@ -145,6 +146,28 @@ export function startLiveSync(sessionId: string, store?: GalStoreApi): () => voi
           }
         }
         transcriptCursors.set(stApi, Math.max(cursor, turns.length));
+
+        // 公共频道允许重连补看最近记录（至多 100 条）；与 script_chat SSE 共用 same-key 去重。
+        const publicTurns: any[] = Array.isArray(sc.public_chat) ? sc.public_chat : [];
+        let publicCursor = publicChatCursors.get(stApi);
+        if (publicCursor === undefined) publicCursor = Math.max(0, publicTurns.length - 100);
+        for (let i = publicCursor; i < publicTurns.length; i++) {
+          const turn = publicTurns[i] || {};
+          const sp = String(turn.speaker || '');
+          const msg = String(turn.message || '');
+          if (!sp || !msg) continue;
+          const narrator = turn.kind === 'narrator';
+          const playerChat = turn.kind === 'player';
+          const isPlayer = playerChat || (!narrator && !!pn && sp === pn);
+          const speakerId = narrator ? 'system' : sp === pn ? 'player' : sp;
+          const key = `${speakerId}\u0000${msg}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          if (narrator) st.liveEnqueue({ kind: 'system', speakerId: 'system', name: '📖 旁白', text: msg });
+          else if (isPlayer) st.liveEnqueue({ kind: 'player', speakerId, name: sp, text: msg });
+          else { st.liveEnsureSpeaker(sp); st.liveEnqueue({ kind: 'agent', speakerId: sp, name: sp, text: msg }); }
+        }
+        publicChatCursors.set(stApi, Math.max(publicCursor, publicTurns.length));
       }
     } catch { /* 忽略 */ }
 
@@ -261,8 +284,8 @@ export async function refreshSuggestions(sessionId: string): Promise<void> {
  * script/werewolf discussion_say 无 SSE 回显，本地回显即唯一展示）。
  * 失败 → 系统提示行 + liveSendError（输入区红字）。
  */
-export async function liveSay(text: string): Promise<void> {
-  const st = useGalStore.getState();
+export async function liveSay(text: string, store: GalStoreApi = defaultGalStore, scriptPublic = false): Promise<void> {
+  const st = store.getState();
   const body = text.trim();
   if (!body || !st.liveMode || !st.liveSessionId || st.liveSending || !!st.livePendingInputId) return;
   const player = st.livePlayerName || 'player';
@@ -271,7 +294,9 @@ export async function liveSay(text: string): Promise<void> {
   st.setLiveIdentity(player, key);
   try {
     let agentOutputs: any[] | undefined;
-    if (st.liveGameType === 'script' && (st.livePhase === 'SETUP' || st.livePhase === 'DISCUSSION')) {
+    if (st.liveGameType === 'script' && scriptPublic) {
+      await api.scriptChat(st.liveSessionId, player, body, key || undefined);
+    } else if (st.liveGameType === 'script' && (st.livePhase === 'SETUP' || st.livePhase === 'DISCUSSION')) {
       await api.scriptDiscussionSay(player, body, key || undefined);
     } else if (st.liveGameType === 'werewolf' && st.livePhase === 'DAY_DISCUSS') {
       if (!key) throw new Error('缺少狼人杀玩家令牌，请重新进入或恢复对局');
@@ -283,11 +308,11 @@ export async function liveSay(text: string): Promise<void> {
         // 请求前先占住 pending，避免后台极快完成时 processed SSE 早于 202 响应到达，
         // 随后又被迟到响应写回成永久 pending；同一个 id 同时作为后端幂等键。
         const inputId = globalThis.crypto?.randomUUID?.() ?? `input-${Date.now()}`;
-        useGalStore.setState({ livePendingInputId: inputId });
+        store.setState({ livePendingInputId: inputId });
         const queued: any = await api.worldInput(body, player, st.liveSessionId, inputId,
           st.liveFocusedRoleId || undefined, st.liveFocusedRoleIds, st.liveConversationMembers);
         const acceptedId = String(queued?.input_id || inputId);
-        if (acceptedId !== inputId) useGalStore.setState({ livePendingInputId: acceptedId });
+        if (acceptedId !== inputId) store.setState({ livePendingInputId: acceptedId });
       } else {
         const resp: any = await api.send(body, player, st.liveSessionId);
         agentOutputs = Array.isArray(resp?.agent_outputs) ? resp.agent_outputs : [];
@@ -301,7 +326,7 @@ export async function liveSay(text: string): Promise<void> {
         const content = String(out?.content || '');
         if (!agent || !content.trim()) continue;
         // 入队前去重：同一 (speaker, text) 已在队/log 则跳过（防与 SSE agent_output 双播）
-        const st2 = useGalStore.getState();
+        const st2 = store.getState();
         const dup = [...st2.liveQueue, ...st2.log].some(m =>
           (m as any).speakerId === agent && m.text === content);
         if (dup) continue;
@@ -314,10 +339,10 @@ export async function liveSay(text: string): Promise<void> {
         st2.liveEnqueue({ kind: 'agent', speakerId: agent, name: agent, text: content });
       }
     }
-    useGalStore.setState({ liveSending: false, liveSendError: '' });
+    store.setState({ liveSending: false, liveSendError: '' });
   } catch (e: any) {
     const msg = e?.message || '未知错误';
-    useGalStore.setState({ liveSending: false, livePendingInputId: '', liveSendError: msg });
+    store.setState({ liveSending: false, livePendingInputId: '', liveSendError: msg });
     st.liveEnqueue({ kind: 'system', speakerId: 'system', name: '⚠️ 系统', text: `发言失败：${msg}` });
   }
 }

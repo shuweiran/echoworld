@@ -30,6 +30,7 @@ export function ScriptDmPanel({ sessionId, onClose }: { sessionId: string; onClo
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState('');
   const [showSecrets, setShowSecrets] = useState(false);
+  const [narration, setNarration] = useState('');
   const aliveRef = useRef(true);
 
   const refresh = async () => {
@@ -97,6 +98,18 @@ export function ScriptDmPanel({ sessionId, onClose }: { sessionId: string; onClo
       setMsg('已驳回揭晓（回滚至投票阶段）');
       await refresh();
     } catch (e: any) { setErr(formatDmError(e.message || '驳回失败')); }
+    setBusy(false);
+  };
+
+  const doNarrate = async () => {
+    const text = narration.trim();
+    if (!text) return;
+    setBusy(true); setErr(''); setMsg('');
+    try {
+      const r = await api.scriptNarrate(sessionId, text, dmKey || undefined);
+      if (r.error) setErr(`⚠️ ${r.error}`);
+      else { setNarration(''); setMsg('✅ 公开旁白已发布到玩家 GAL'); }
+    } catch (e: any) { setErr(formatDmError(e.message || '发布旁白失败')); }
     setBusy(false);
   };
 
@@ -266,6 +279,25 @@ export function ScriptDmPanel({ sessionId, onClose }: { sessionId: string; onClo
               投票阶段推进 = 揭晓判定，将进入 D7 审批门（面板出现「✅ 批准揭晓 / 驳回重投」后由主持人裁决；超时自动驳回回滚）。
             </div>
           )}
+        </div>
+      )}
+
+      {dm && !dm.error && (
+        <div className="ww-panel-section" style={{ padding: '0 10px 10px' }}>
+          <div className="ww-panel-section-title">📖 公开剧情旁白</div>
+          <textarea
+            className="input"
+            value={narration}
+            onChange={e => setNarration(e.target.value)}
+            placeholder="只发布玩家应当知道的场景事件…"
+            maxLength={300}
+            rows={3}
+            style={{ width: '100%', resize: 'vertical', fontSize: 12, boxSizing: 'border-box' }}
+          />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 5, gap: 6 }}>
+            <span style={{ fontSize: 11, color: 'var(--text-3)' }}>主控推理、秘密和 NPC 指令不会进入玩家消息流。</span>
+            <button className="btn btn-small btn-primary" disabled={busy || !narration.trim()} onClick={doNarrate}>发布</button>
+          </div>
         </div>
       )}
 

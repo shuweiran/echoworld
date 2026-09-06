@@ -81,8 +81,7 @@ export function SettingsPage() {
         llm: { api_key: draft.llm.apiKey, base_url: draft.llm.apiBase, model: draft.llm.model, temperature: draft.llm.temperature, max_tokens: draft.llm.maxTokens },
         arbiter_llm: { api_key: draft.llm.arbiterApiKey, base_url: draft.llm.arbiterApiBase, model: draft.llm.arbiterModel },
         map_llm: { api_key: draft.llm.mapApiKey, base_url: draft.llm.mapApiBase, model: draft.llm.mapModel },
-        tts: { provider: draft.tts.provider, api_key: draft.tts.apiKey, base_url: draft.tts.apiBase, model: draft.tts.model, voice: draft.tts.voice,
-          ...(draft.tts.engine === 'MiMo TTS（外部 API）' ? { enabled: true } : {}) },
+        tts: { provider: 'xiaomimimo', api_key: draft.tts.apiKey, base_url: draft.tts.apiBase, model: draft.tts.model, voice: draft.tts.voice, enabled: true },
         image: { provider: draft.image.provider, base_url: draft.image.baseUrl, external_base_url: draft.image.externalBaseUrl, external_api_key: draft.image.externalApiKey, external_model: draft.image.externalModel, external_endpoint: draft.image.externalEndpoint, lora_name: draft.image.loraName, rmbg_enabled: draft.image.rmbgEnabled, img2img_denoise: draft.image.img2imgDenoise },
       });
       show('✅ 已同步外部 API，并保存本地设置');
@@ -158,29 +157,15 @@ export function SettingsPage() {
       {/* TTS */}
       {tab === 'tts' && (
         <div className="settings-grid">
-          <div className="field"><HintLabel text="🔊 语音来源" detail="选择角色声音从哪里生成。浏览器内置最省事；外部服务需要填写自己的连接信息。" />
-            <select value={draft.tts.engine} onChange={e => setTts({ engine: e.target.value })}>
-              <option>浏览器内置</option><option>MiMo TTS（外部 API）</option><option>Edge TTS</option><option>CosyVoice</option><option>离线</option>
-            </select>
-          </div>
-          <div className="field"><HintLabel text="语音服务类型" detail="只有使用外部语音服务时才需要选择。默认“当前 MiMo”会沿用已有设置。" /><select value={draft.tts.provider} onChange={e => setTts({ provider: e.target.value })}><option value="xiaomimimo">当前 MiMo</option><option value="openai-compatible">兼容 OpenAI 的外部服务</option></select></div>
-          <div className="field"><label>🎙️ 音色选择</label>
-            <select value={draft.tts.voice} onChange={e => setTts({ voice: e.target.value })}>
-              <option>默认女声</option><option>默认男声</option><option>沉稳大叔</option><option>元气少女</option><option>空灵少年</option>
-            </select>
-          </div>
-          <div className="field"><HintLabel text={`⚡ 说话速度（${draft.tts.speed}）`} detail="1 是正常速度。小于 1 更慢，大于 1 更快。" /><input type="range" min={0.5} max={2} step={0.1} value={draft.tts.speed} onChange={e => setTts({ speed: Number(e.target.value) })} /></div>
-          <div className="field"><HintLabel text={`🎚️ 声音高低（${draft.tts.pitch}）`} detail="1 是原始音调。小于 1 更低沉，大于 1 更明亮。" /><input type="range" min={0.5} max={2} step={0.1} value={draft.tts.pitch} onChange={e => setTts({ pitch: Number(e.target.value) })} /></div>
-          <div className="field"><HintLabel text={`💗 情感表现（${draft.tts.emotion}）`} detail="数值越高，朗读的情绪起伏越明显。默认值较自然。" /><input type="range" min={0} max={1} step={0.05} value={draft.tts.emotion} onChange={e => setTts({ emotion: Number(e.target.value) })} /></div>
-
           <div className="card2" style={{ gridColumn: '1 / -1' }}>
-            <div className="settings-sec-title" style={{ marginTop: 0 }}>🤖 语音生成模型 API</div>
+            <div className="settings-sec-title" style={{ marginTop: 0 }}>🎙️ MiMo TTS</div>
             <div className="settings-grid">
-              <div className="field"><label>语音生成模型</label><input value={draft.tts.model} onChange={e => setTts({ model: e.target.value })} placeholder="例如：edge-tts / cosyvoice-v2 / qwen-tts" /></div>
+              <div className="field"><label>语音生成模型</label><input value={draft.tts.model} onChange={e => setTts({ model: e.target.value })} placeholder="mimo-v2.5-tts" /></div>
               <div className="field"><label>API 地址</label><input value={draft.tts.apiBase} onChange={e => setTts({ apiBase: e.target.value })} /></div>
               <div className="field"><label>API Key</label><input type="password" value={draft.tts.apiKey} onChange={e => setTts({ apiKey: e.target.value })} placeholder="sk-..." /></div>
+              <div className="field"><label>默认音色</label><input value={draft.tts.voice} onChange={e => setTts({ voice: e.target.value })} placeholder="mimo_default" /></div>
             </div>
-            <div className="hint">MiMo 保持本地当前配置；切换 OpenAI-compatible 后，后端调用「API 地址 + /audio/speech」，可接入不同 TTS 模型。</div>
+            <div className="hint">所有角色语音和消息播放统一使用 MiMo TTS；角色可单独配置内置音色、声音克隆或音色描述。</div>
           </div>
         </div>
       )}

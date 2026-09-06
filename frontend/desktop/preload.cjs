@@ -2,6 +2,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('roleplayDesktop', {
   isDesktop: true,
+  unity: {
+    launch: (world) => ipcRenderer.invoke('unity:launch', world),
+  },
   updates: {
     state: () => ipcRenderer.invoke('update:state'),
     check: () => ipcRenderer.invoke('update:check'),

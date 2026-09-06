@@ -39,7 +39,7 @@ export function ScriptGenPage() {
   const [genMode, setGenMode] = useState<'manual' | 'ai'>('manual');
   const [sceneName, setSceneName] = useState('');
   const [descText, setDescText] = useState('');
-  const [syncMap, setSyncMap] = useState(true);
+  const [worldRenderer, setWorldRenderer] = useState<'general' | 'phaser-2d' | 'unity-3d'>('phaser-2d');
   const [syncRolesGen, setSyncRolesGen] = useState(true);
 
   const [importText, setImportText] = useState('');
@@ -92,18 +92,19 @@ export function ScriptGenPage() {
       const roleList = Array.isArray(r?.roles) ? r.roles : [];
       roleCount = roleList.length;
       const llmRoles = roleList.map((x: any, i: number) => v1RoleToRoleCard(x, i, []));
-      g = assembleGeneralScript(name, desc, llmRoles);
+      g = assembleGeneralScript(name, desc, llmRoles, worldRenderer);
     } catch (e: any) {
       fellBack = true;
       g = mockGenerateGeneral(prompt.trim() || '自定义世界', mockGenerateSceneDesc(prompt));
       setGenNotice(`LLM 生成失败，已用本地模板兜底。（原因：${String(e?.message || '未知错误')}）`);
     }
+    g = { ...g, ...(worldRenderer === 'unity-3d' ? { map: undefined } : {}), worldRenderer };
     setGeneratedGeneral(g);
     if (syncRolesGen) addGenRoles(g.roles.map(r => ({ ...r, source: 'ai' as const })));
     // 生成成功直接进入角色选择页
     enterRoles({ kind: 'general', scriptId: g.id });
     return {
-      text: `已生成「${g.title}」世界：世界背景、场景介绍、角色关系${roleCount > 0 ? `、${roleCount} 个配套角色` : ''}${syncMap ? '、2D 地图' : ''}${syncRolesGen ? '、角色已同步' : ''}。${fellBack ? '（LLM 生成失败，已用本地模板兜底）' : ''}`,
+      text: `已生成「${g.title}」世界：世界背景、场景介绍、角色关系${roleCount > 0 ? `、${roleCount} 个配套角色` : ''}、${worldRenderer === 'unity-3d' ? 'Unity 3D 世界' : worldRenderer === 'phaser-2d' ? 'Phaser 2D 地图' : '一般模式'}${syncRolesGen ? '、角色已同步' : ''}。${fellBack ? '（LLM 生成失败，已用本地模板兜底）' : ''}`,
       data: g,
     };
   };
@@ -122,7 +123,7 @@ export function ScriptGenPage() {
         setGenNotice(`LLM 生成失败，已用本地模板兜底。（原因：${String(e?.message || '未知错误')}）`);
       }
     }
-    const g = assembleGeneralScript(desc, text);
+    const g = assembleGeneralScript(desc, text, undefined, worldRenderer);
     setGeneratedGeneral(g);
     if (syncRolesGen) addGenRoles(g.roles.map(r => ({ ...r, source: 'ai' as const })));
     // 生成成功直接进入角色选择页
@@ -220,9 +221,14 @@ export function ScriptGenPage() {
                 </div>
               )}
 
-              <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 14 }}>
-                <input type="checkbox" checked={syncMap} onChange={e => setSyncMap(e.target.checked)} style={{ width: 'auto' }} />
-                <label style={{ margin: 0 }}>同步生成 2D 地图（自动创建地图区域/建筑/场景布局/NPC 位置并绑定该世界）</label>
+              <div className="field" style={{ marginTop: 14 }}>
+                <label>世界模式（创建后固定）</label>
+                <div className="chip-row" style={{ marginBottom: 0 }}>
+                  <button className={`chip2 ${worldRenderer === 'general' ? 'active' : ''}`} onClick={() => setWorldRenderer('general')}>🌄 一般模式（Gal）</button>
+                  <button className={`chip2 ${worldRenderer === 'phaser-2d' ? 'active' : ''}`} onClick={() => setWorldRenderer('phaser-2d')}>🗺️ 2D 地图（Phaser）</button>
+                  <button className={`chip2 ${worldRenderer === 'unity-3d' ? 'active' : ''}`} onClick={() => setWorldRenderer('unity-3d')}>🌐 3D 地图（Unity）</button>
+                </div>
+                <div className="hint" style={{ marginTop: 6 }}>{worldRenderer === 'unity-3d' ? '3D 场景只由 Unity 客户端生成和运行；网页不会加载 3D 渲染器。' : worldRenderer === 'phaser-2d' ? '2D 地图只由 Phaser 管线生成和运行。' : '一般模式以 Gal 自由对话运行；需要空间探索时可在角色选择页生成 2D 地图。'}</div>
               </div>
               <div className="field" style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                 <input type="checkbox" checked={syncRolesGen} onChange={e => setSyncRolesGen(e.target.checked)} style={{ width: 'auto' }} />

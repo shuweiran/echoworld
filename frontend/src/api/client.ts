@@ -363,6 +363,11 @@ export const api = {
     request<any>('/api/script/discussion_say', { method: 'POST', body: JSON.stringify({
       player, message, ...(playerKey ? { player_key: playerKey } : {}),
     }) }),
+  /** 永久在线公共频道：不写入讨论引擎上下文；正式讨论仍使用 scriptDiscussionSay。 */
+  scriptChat: (sessionId: string, player: string, message: string, playerKey?: string) =>
+    request<any>('/api/script/chat', { method: 'POST', body: JSON.stringify({
+      session_id: sessionId, player, message, ...(playerKey ? { player_key: playerKey } : {}),
+    }) }),
   /** P-0805-B（私聊闭环）：剧本杀私聊 —— 玩家与 AI 角色一对一密聊（body: player/target/message/player_key?） */
   scriptPrivateSay: (player: string, target: string, message: string, playerKey?: string) =>
     request<any>('/api/script/private', { method: 'POST', body: JSON.stringify({
@@ -468,6 +473,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ session_id: sessionId }),
       timeout: 100000,
+      ...(dmKey ? { headers: { 'Content-Type': 'application/json', 'X-DM-Key': dmKey } } : {}),
+    }),
+  /** 动态剧本主控对话：主控只编排后续，不直接执行世界命令。 */
+  directorChat: (sessionId: string, message: string) => request<{ reply: string; story?: any }>('/api/world/director/chat', {
+    method: 'POST', body: JSON.stringify({ session_id: sessionId, message }), timeout: 90000,
+  }),
+  /** DM 主动公开剧情旁白；私密控制信息不进入此接口或玩家消息流。 */
+  scriptNarrate: (sessionId: string, narration: string, dmKey?: string) =>
+    request<any>('/api/script/dm/narrate', {
+      method: 'POST',
+      body: JSON.stringify({ session_id: sessionId, narration }),
       ...(dmKey ? { headers: { 'Content-Type': 'application/json', 'X-DM-Key': dmKey } } : {}),
     }),
   /** C3: DM 分发 roleKey（全员令牌一览） */

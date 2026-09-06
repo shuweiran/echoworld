@@ -157,6 +157,7 @@ function ScriptGalChatInner({ sessionId, playerName, playerKey, scriptState }: S
 
   // P-0818-D：讨论「当前发言」质询/引用（反驳弹药本地收集；承接原 ScriptDiscussionPanel 逐条按钮语义）
   const [quotes, setQuotes] = useState<Array<{ key: string; speaker: string; text: string }>>([]);
+  const [formalDiscussion, setFormalDiscussion] = useState(false);
   const [pressing, setPressing] = useState(false);
   const [actionMsg, setActionMsg] = useState('');
   const lastNarrationPhaseRef = useRef('');
@@ -303,19 +304,30 @@ function ScriptGalChatInner({ sessionId, playerName, playerKey, scriptState }: S
                 ))}
               </div>
             )}
-            <GalInputArea />
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <button className="btn btn-smallall proto-p-btn" onClick={() => setFormalDiscussion(v => !v)}>
+                {formalDiscussion ? '🎭 正式讨论' : '💬 公共聊天'}
+              </button>
+              <span className="script-gal-action-msg" style={{ fontSize: 11, color: 'var(--gal-dim, #9ba6bf)' }}>
+                {formalDiscussion ? '会进入讨论机制并可触发 NPC 回应' : '不影响线索、NPC 指令或剧情状态'}
+              </span>
+            </div>
+            <GalInputArea scriptPublic={!formalDiscussion} />
           </div>
         ) : isSetup ? (
           <div className="script-gal-setup-input">
             <div className="script-gal-setup-hint">
               💬 后台正在准备完整剧本，你可以先和在场角色交流；消息会在剧本就绪后带入两轮收尾讨论。
             </div>
-            <GalInputArea />
+            <GalInputArea scriptPublic />
           </div>
         ) : (
-          <div style={{ padding: '8px 10px', borderRadius: 8, fontSize: 12, lineHeight: 1.5,
-            background: 'rgba(12,19,34,0.6)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--gal-text, #e8eef9)' }}>
-            🔒 当前阶段不可发言（{phase ? String(phase).toUpperCase() : '准备'}阶段）—— 搜证 / 投票请在主区对应面板操作
+          <div className="script-gal-public-slot" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ padding: '6px 10px', borderRadius: 8, fontSize: 12, lineHeight: 1.5,
+              background: 'rgba(12,19,34,0.6)', border: '1px solid rgba(255,255,255,0.12)', color: 'var(--gal-text, #e8eef9)' }}>
+              💬 公共聊天持续开放；{phase ? String(phase).toUpperCase() : '当前'}阶段的游戏行动仍请使用主区面板。
+            </div>
+            <GalInputArea scriptPublic />
           </div>
         )}
       />

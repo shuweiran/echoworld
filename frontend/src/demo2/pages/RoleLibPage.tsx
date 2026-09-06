@@ -53,7 +53,6 @@ export function RoleLibPage() {
   const [genMode, setGenMode] = useState<'manual' | 'ai'>('manual');
   const [form, setForm] = useState<RoleFormValues>(() => ({
     ...roleToForm({ id: '', name: '', avatar: '🧝', intro: '', personality: '', talkStyle: '', hasSecret: false, source: 'free', homeScripts: [] }),
-    ttsEnabled: false,
   }));
 
   // 当前选中剧本/自由角色的角色列表
@@ -102,7 +101,7 @@ export function RoleLibPage() {
       addNewRoleToScript(r, target.id);
     }
     setAddOpen(false);
-    setForm({ ...roleToForm({ id: '', name: '', avatar: '🧝', intro: '', personality: '', talkStyle: '', hasSecret: false, source: 'free', homeScripts: [] }), ttsEnabled: false });
+    setForm(roleToForm({ id: '', name: '', avatar: '🧝', intro: '', personality: '', talkStyle: '', hasSecret: false, source: 'free', homeScripts: [] }));
   };
 
   const aiGen = async (prompt: string): Promise<AiGenResult> => {

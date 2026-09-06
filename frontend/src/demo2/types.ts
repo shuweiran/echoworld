@@ -10,19 +10,6 @@ import type { ScriptMap } from '../phaser/mapData';
 
 export type RoleSource = 'preset' | 'free' | 'ai' | 'import' | 'backend';
 
-/** 单独 TTS 设置（角色级，覆盖全局 TTS） */
-export interface RoleTts {
-  engine: string;
-  /** 语音生成模型 API */
-  model: string;
-  apiBase: string;
-  apiKey: string;
-  voice: string;
-  speed: number;
-  pitch: number;
-  emotion: number;
-}
-
 export interface RoleCard {
   id: string;
   name: string;
@@ -40,8 +27,6 @@ export interface RoleCard {
   /** 剧本杀秘密（无则为空） */
   secret?: string;
   hasSecret: boolean;
-  /** 单独 TTS 设置（缺省继承全局） */
-  tts?: RoleTts;
   /** P-0817-A（MiMo TTS 声线）：basic=内置音色 / clone=参考音频 / design=音色描述 */
   voice_mode?: string;
   /** P-0817-A：voice_data（basic=内置音色名 / clone=参考音频路径或 data URL / design=音色描述） */
@@ -100,8 +85,10 @@ export interface GeneralScript {
   /** 角色关系 */
   relations: string[];
   roles: RoleCard[];
-  /** 同步生成 2D 地图（契约 v1） */
-  map: ScriptMap;
+  /** Phaser 2D 专用地图；Unity 3D 世界不产生或消费此契约。 */
+  map?: ScriptMap;
+  /** 世界创建时选定的唯一表现与生成管线；旧世界缺省为 Phaser 2D。 */
+  worldRenderer?: 'general' | 'phaser-2d' | 'unity-3d';
   /** 场景开场白（自由聊天用） */
   opening: string;
   source: RoleSource;

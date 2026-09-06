@@ -5,7 +5,7 @@
  * 角色库、角色选择页「添加角色」、玩家角色创建 统一复用。
  */
 import { useRef, useState, type ChangeEvent } from 'react';
-import type { RoleCard, RoleTts } from '../types';
+import type { RoleCard } from '../types';
 import { AvatarPicker } from './AvatarPicker';
 import { useMimoTts, warmAudio } from '../../services/mimoTts';
 
@@ -169,10 +169,6 @@ export function CloneAudioUpload({ value, onChange }: { value: string; onChange:
   );
 }
 
-export function emptyRoleTts(): RoleTts {
-  return { engine: '浏览器内置', model: 'edge-tts', apiBase: 'https://tts.example.com/v1', apiKey: '', voice: '默认女声', speed: 1, pitch: 1, emotion: 0.5 };
-}
-
 export interface RoleFormValues {
   name: string;
   avatar: string;
@@ -182,9 +178,6 @@ export interface RoleFormValues {
   background: string;
   secret: string;
   hasSecret: boolean;
-  tts: RoleTts;
-  /** 单独 TTS：是否覆盖全局 */
-  ttsEnabled: boolean;
   /** P-0817-A（MiMo TTS 声线）：是否启用（对话消息语音播放） */
   mimoTtsEnabled: boolean;
   /** voice_mode：basic=内置音色 / clone=参考音频 / design=音色描述 */
@@ -203,8 +196,6 @@ export function roleToForm(r: RoleCard): RoleFormValues {
     background: r.background ?? '',
     secret: r.secret ?? '',
     hasSecret: r.hasSecret,
-    tts: r.tts ?? emptyRoleTts(),
-    ttsEnabled: !!r.tts,
     mimoTtsEnabled: !!(r.voice_mode || r.voice_data),
     // P-0817-K：未配置声线的角色默认「未配置」（''），勾选后先选声线模式再展开具体设置
     voiceMode: r.voice_mode || '',
@@ -223,7 +214,6 @@ export function formToRole(v: RoleFormValues, base: Partial<RoleCard>): RoleCard
     background: v.background || '',
     secret: v.secret || '',
     hasSecret: v.hasSecret || !!v.secret,
-    tts: v.ttsEnabled ? { ...v.tts } : undefined,
     // P-0817-A：MiMo 声线透传（勾选才写；未勾选清除，避免旧配置残留）
     // P-0817-K：声线模式选「未配置」（''）同样清除——选择后才展开的语义与持久化一致
     voice_mode: v.mimoTtsEnabled && v.voiceMode ? v.voiceMode : undefined,
@@ -279,46 +269,6 @@ export function RoleForm({ values: v, onChange: set, showSecret = false }: RoleF
           {v.hasSecret && (
             <textarea rows={2} value={v.secret} onChange={e => set({ ...v, secret: e.target.value })} placeholder="秘密内容（仅该角色可见）" />
           )}
-        </div>
-      )}
-
-      {/* 单独 TTS 设置 */}
-      <div className="field" style={{ gridColumn: '1 / -1' }}>
-        <label style={{ flexDirection: 'row', gap: 8, display: 'flex', alignItems: 'center' }}>
-          <input type="checkbox" checked={v.ttsEnabled} onChange={e => set({ ...v, ttsEnabled: e.target.checked })} style={{ width: 'auto' }} />
-          🔊 单独 TTS 设置（不勾选则用全局设置）
-        </label>
-      </div>
-      {v.ttsEnabled && (
-        <div className="settings-grid" style={{ gridColumn: '1 / -1' }}>
-          <div className="field"><label>TTS 引擎</label>
-            <select value={v.tts.engine} onChange={e => set({ ...v, tts: { ...v.tts, engine: e.target.value } })}>
-              <option>浏览器内置</option><option>Edge TTS</option><option>CosyVoice</option><option>离线</option>
-            </select>
-          </div>
-          <div className="field"><label>语音生成模型</label>
-            <input value={v.tts.model} onChange={e => set({ ...v, tts: { ...v.tts, model: e.target.value } })} />
-          </div>
-          <div className="field"><label>模型 API 地址</label>
-            <input value={v.tts.apiBase} onChange={e => set({ ...v, tts: { ...v.tts, apiBase: e.target.value } })} />
-          </div>
-          <div className="field"><label>API Key</label>
-            <input type="password" value={v.tts.apiKey} onChange={e => set({ ...v, tts: { ...v.tts, apiKey: e.target.value } })} placeholder="sk-..." />
-          </div>
-          <div className="field"><label>🎙️ 音色</label>
-            <select value={v.tts.voice} onChange={e => set({ ...v, tts: { ...v.tts, voice: e.target.value } })}>
-              <option>默认女声</option><option>默认男声</option><option>沉稳大叔</option><option>元气少女</option>
-            </select>
-          </div>
-          <div className="field"><label>⚡ 语速（{v.tts.speed}）</label>
-            <input type="range" min={0.5} max={2} step={0.1} value={v.tts.speed} onChange={e => set({ ...v, tts: { ...v.tts, speed: Number(e.target.value) } })} />
-          </div>
-          <div className="field"><label>🎚️ 音调（{v.tts.pitch}）</label>
-            <input type="range" min={0.5} max={2} step={0.1} value={v.tts.pitch} onChange={e => set({ ...v, tts: { ...v.tts, pitch: Number(e.target.value) } })} />
-          </div>
-          <div className="field"><label>💗 情绪强度（{v.tts.emotion}）</label>
-            <input type="range" min={0} max={1} step={0.05} value={v.tts.emotion} onChange={e => set({ ...v, tts: { ...v.tts, emotion: Number(e.target.value) } })} />
-          </div>
         </div>
       )}
 

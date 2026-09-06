@@ -104,6 +104,7 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   const ambientByNameRef = useRef<Map<string, { roleId: string }>>(new Map());
   const focusedAmbientRef = useRef<{ roleId: string; name: string } | null>(null);
   const [status, setStatus] = useState('初始化中...');
+  const [fps, setFps] = useState<number | null>(null);
   const [currentScene, setCurrentScene] = useState(scene);
   const [running, setRunning] = useState(false);
   const [selectedFloor, setSelectedFloor] = useState('ground');
@@ -340,6 +341,7 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
         height: 600,
       },
       physics: { default: 'arcade', arcade: { gravity: { x: 0, y: 0 }, debug: false } },
+      fps: { target: 60, forceSetTimeOut: false },
       scene: [new SimulationScene({ onSetTarget, onMoveDir, onGroupAction: handleGroupAction, onAgentClick: handleAgentClick, onApproachChange: handleApproachChange, onGroupApproachChange: handleGroupApproachChange }, agentAnims, map, playerName, galChat)],
       banner: false,
     });
@@ -566,6 +568,12 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
       import.meta.hot.dispose(dispose);
     }
     return () => { /* 组件卸载由主 effect cleanup 处理 */ };
+  }, []);
+
+  // 2D 性能门槛：以 Phaser 实际循环采样，不用浏览器 rAF 估算；低于 30 FPS 会直接暴露给操作者。
+  useEffect(() => {
+    const timer = setInterval(() => setFps(Math.round(gameRef.current?.loop.actualFps || 0)), 1000);
+    return () => clearInterval(timer);
   }, []);
 
   // ── C-1：世界对话（recentConversations）拍平为统一消息列表（附播放状态） ──
@@ -797,13 +805,15 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
   }, [isObserverPlayback, joinedGroup?.id, activeMsgs]);
 
   /**
-   * 导演旁听也必须驱动 playback-driven 会话：经典面板此前只播放两句、不回传
+   * 仅经典列表的导演旁听可自动驱动 playback-driven 会话：Gal 面板必须等待点击。
+   * 经典面板此前只播放两句、不回传
    * playback_done，后端便一直 awaitPlayback，30 秒后解散。只在当前观察组全部
    * 展示完成后确认一次；旁听直接完整展示文本，短暂停留后确认，避免打字机
    * 定时器被浏览器节流或其它会话抢占而卡死。下一轮新消息会形成新 key，继续自然循环。
    */
   useEffect(() => {
     const groupId = joinedGroup?.id;
+    if (galChat && galView) return;
     if (!isObserverPlayback || !groupId || activeMsgs.length === 0 || pageHidden) return;
     if (activeMsgs.some(m => m.status !== 'done')) return;
     const last = activeMsgs[activeMsgs.length - 1];
@@ -823,7 +833,7 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
         observerAdvanceTimerRef.current = null;
       }
     };
-  }, [activeMsgs, isObserverPlayback, joinedGroup?.id, pageHidden]);
+  }, [activeMsgs, galChat, galView, isObserverPlayback, joinedGroup?.id, pageHidden]);
   /** 每个未旁听会话组只保留最早一句作为地图预览，点击旁听后该组预览收起，避免气泡刷屏。 */
   const conversationPreviews = useMemo(() => {
     const selectedId = joinedGroup?.id;
@@ -1145,6 +1155,7 @@ export function PhaserSimulationView({ characters, scene = 'park', map, height, 
           </button>
         )}
         <span style={{ fontSize: 12, color: 'var(--text-2, #93a1bd)' }}>{status}</span>
+        {fps != null && <span style={{ fontSize: 11, color: fps >= 30 ? '#86efac' : '#fca5a5' }} title="2D 地图最低性能门槛为 30 FPS">{fps} FPS{fps < 30 ? '（低于 30）' : ''}</span>}
         {/* P-0816-A：滚轮缩放 + 全屏（对齐预览地图能力；缩放后相机跟随玩家，点击坐标已转世界坐标） */}
         <span style={{ fontSize: 11, color: 'var(--text-3)' }} title="滚轮缩放（1~2×，>1 跟随玩家）；点击/方向键移动不受影响">🔍 滚轮缩放</span>
         <button className="btn btn-small" onClick={toggleFullscreen} title="全屏浏览 2D 世界（Esc 退出）">⛶ 全屏</button>

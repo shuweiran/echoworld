@@ -25,7 +25,16 @@ function namePlateStyle(name: string, color: string): CSSProperties {
   return { color, '--gal-name-size': `${fontSize.toFixed(1)}px` } as CSSProperties;
 }
 
-export function GalDialogBox() {
+export interface GalDialogBoxProps {
+  /** 2D Gal 等待态的外部推进动作；未传入时保持一般模式原有门控。 */
+  onLiveWaitClick?: () => void;
+  /** 外部动作是否已就绪（例如一轮消息已全部播放，等待玩家点击）。 */
+  liveWaitClickable?: boolean;
+  /** 外部动作请求中，阻止重复点击。 */
+  liveWaitBusy?: boolean;
+}
+
+export function GalDialogBox({ onLiveWaitClick, liveWaitClickable = false, liveWaitBusy = false }: GalDialogBoxProps) {
   const current = useGalStore(s => s.current);
   const typing = useGalStore(s => s.typing);
   const log = useGalStore(s => s.log);
@@ -78,21 +87,27 @@ export function GalDialogBox() {
       drained,
       busy,
     });
+    const externalWaitClick = liveWaitClickable && !!onLiveWaitClick;
     const waitHint = liveGameType === 'script'
       ? (String(livePhase).toLowerCase() === 'discussion' ? 'AI 发言 / 阶段变化将在这里播放' : '完整剧本生成中，搜证 / 讨论消息将在这里播放')
-      : busy
+      : liveWaitBusy
+        ? '✦ 正在生成下一句…'
+        : externalWaitClick
+          ? '▼ 点击对话框继续下一句'
+          : busy
         ? '✦ 生成中…'
         : canAdvance
           ? '▼ 点击继续下一轮'
           : (liveSessionId ? 'AI 发言 / 公告 / 阶段变化将在这里播放' : '顶部切换「🔌 真实对局」并输入 session_id / 房间码连接');
+    const waitClick = externalWaitClick ? onLiveWaitClick : canAdvance ? () => void requestNextRound() : undefined;
     return (
       <div className="gal-dialog-wrap">
         <div
           className="gal-dialog gal-dialog-wait"
-          style={canAdvance ? { cursor: 'pointer' } : undefined}
-          onClick={canAdvance ? () => void requestNextRound() : undefined}
-          role={canAdvance ? 'button' : undefined}
-          title={canAdvance ? '点击生成下一轮' : undefined}
+          style={waitClick ? { cursor: 'pointer' } : undefined}
+          onClick={waitClick}
+          role={waitClick ? 'button' : undefined}
+          title={externalWaitClick ? '点击继续下一句' : canAdvance ? '点击生成下一轮' : undefined}
         >
           <div className="gal-wait-label">{waitLabel}</div>
           <div className="gal-wait-hint">{waitHint}</div>

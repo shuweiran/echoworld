@@ -20,7 +20,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useGalStore } from '../gal/GalStore';
 import { GalDialogBox } from '../gal/GalDialogBox';
 import { GalChoicesArea, GalInputArea } from '../gal/GalChoiceBar';
-import { useAutoPlaybackDone } from '../gal/useAutoPlaybackDone';
 import { api } from '../api/client';
 import { shouldShowWorldMsg } from './simGroupFilter';
 import { simChatPlaybackTiming } from './simChatConfig';
@@ -65,13 +64,9 @@ export function SimGalChatPanel({ playerName, worldMsgs, sendText, pendingLines,
   /** sendText 镜像（liveSayOverride 闭包内读最新值） */
   const sendRef = useRef(sendText);
   sendRef.current = sendText;
-  /** P-0814-B：groupInfo 镜像（liveSayOverride 闭包内读最新群 id —— 输入后自动 playback_done 用） */
-  const groupInfoRef = useRef(groupInfo);
-  groupInfoRef.current = groupInfo;
-  /** P-0814-B：首次 worldMsgs 批（挂载回放旧历史）不武装推进——仅新到达的消息武装（收紧武装条件） */
-  const firstBatchRef = useRef(true);
-  /** P-0814-A/B：自动推进 —— 本轮「播出完毕待推进」（新消息入队置位；自动推进 hook 消费清除） */
-  const [playbackArmed, setPlaybackArmed] = useState(false);
+  const [playbackAdvancing, setPlaybackAdvancing] = useState(false);
+  /** 状态更新生效前也必须拒绝双击，后端每个播放信号都可能代表一轮。 */
+  const playbackAdvancingRef = useRef(false);
   const playbackTiming = simChatPlaybackTiming(!playerName?.trim());
 
   // ── 挂载：进入 GalStore live 模式（2D 世界对话流驱动；卸载退出） ──
@@ -85,17 +80,9 @@ export function SimGalChatPanel({ playerName, worldMsgs, sendText, pendingLines,
     // 玩家消息可见（玩家角色参与对话；GalGeneralView 的 hidePlayerBubbles=true 语义不适用）
     st.setHidePlayerBubbles(false);
     // 玩家发言路由 → /api/simulation/send（覆盖默认 liveSay 的 RouterService 路径）
-    // P-0814-B：2D 输入=点击 —— 发送成功后自动发 playback_done（group_id 路径）：
-    // 组在等待态时后端 sendUserMessage 已唤醒生成回复轮（输入即推进）；此信号再推进一轮
-    // （AI 续接）；后端信号计数幂等（每信号至多一轮），组不存在/不在等待则 no-op。
+    // 玩家输入本身会唤醒后端并生成回复；下一轮仍由 Gal 等待态的点击触发，避免额外自动续轮。
     st.setLiveSayOverride((t: string) => {
-      return sendRef.current(t).then(() => {
-        const gid = groupInfoRef.current?.id;
-        if (gid) {
-          api.simPlaybackDone({ group_id: gid }).catch((e) =>
-            console.warn('simSend 后自动推进失败（2D 组）', e));
-        }
-      });
+      return sendRef.current(t);
     });
     return () => {
       const s2 = useGalStore.getState();
@@ -136,7 +123,6 @@ export function SimGalChatPanel({ playerName, worldMsgs, sendText, pendingLines,
     if (!st.liveMode) return;
     // 群聊按群过滤：当前面板只阅读已加入的群。自由探索不能旁听全世界的完整台词。
     const currentGroupId = groupInfo?.id;
-    let enqueued = false;
     for (const m of worldMsgs) {
       if (!m || !m.text || !m.who) continue;
       if (!shouldShowWorldMsg(m.group, currentGroupId)) continue;
@@ -144,36 +130,29 @@ export function SimGalChatPanel({ playerName, worldMsgs, sendText, pendingLines,
       seenRef.current.add(m.id);
       st.liveEnsureSpeaker(m.who);
       st.liveEnqueue({ kind: 'agent', speakerId: m.who, name: m.who, text: m.text });
-      enqueued = true;
     }
-    // P-0814-A/B：新消息入队即武装「自动推进」（一轮播完即停；后端幂等防重复推进）。
-    // 收紧武装条件：首次批（挂载回放旧历史）不武装——仅新到达的世界消息武装（防重挂载误推进）。
-    if (enqueued && !firstBatchRef.current) setPlaybackArmed(true);
-    firstBatchRef.current = false;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [worldMsgs, groupInfo?.id]);
 
-  // P-0814-C：加入/离开群（groupInfo.id 变化）时清除武装——仅武装当前群新消息，
-  // 防「入组前残留的旧武装」在入组瞬间误触发一轮
-  useEffect(() => {
-    setPlaybackArmed(false);
-  }, [groupInfo?.id]);
-
-  // P-0814-C：自动推进（删「▶ 推进下一轮」按钮）——组内播放完毕（Gal 队列排空）自动
-  // POST /api/simulation/playback_done（group_id 路径）→ 后端生成下一轮。触发点是队列排空
-  // 事件，不是定时器；节奏由播放速度天然控制。仅玩家所在组（groupInfo）启用：未入组的
-  // 世界消息仅展示不推进（组无玩家时由后端等待超时解散兜底）。
-  useAutoPlaybackDone({
-    enabled: !!groupInfo,
-    armed: playbackArmed,
-    drained: !liveQueue.length && !typing && !current,
-    groupId: groupInfo?.id,
-    onAdvancing: () => setPlaybackArmed(false),
-    onAdvanceFailed: () => {
-      // 失败延迟重新武装（2s 后重试）——2D 组无轮询兜底，重试即恢复机制
-      setTimeout(() => setPlaybackArmed(true), 2000);
-    },
-  });
+  const playbackDrained = !liveQueue.length && !typing && !current;
+  // 等待态始终可点击：空轮/被过滤的轮次同样需要玩家显式放行；后端只接受真正 await 中的一次信号。
+  const canClickContinue = !!groupInfo && playbackDrained && !playbackAdvancing;
+  const continueConversation = () => {
+    if (!groupInfo?.id || !canClickContinue || playbackAdvancingRef.current) return;
+    playbackAdvancingRef.current = true;
+    setPlaybackAdvancing(true);
+    api.simPlaybackDone({ group_id: groupInfo.id })
+      .then((result: { advanced?: boolean }) => {
+        if (!result?.advanced) console.warn('点击推进未就绪，保留对话框供再次点击');
+      })
+      .catch((e) => {
+        console.warn('点击推进 playback_done 失败，请重试', e);
+      })
+      .finally(() => {
+        playbackAdvancingRef.current = false;
+        setPlaybackAdvancing(false);
+      });
+  };
 
   return (
     <div className="sim-gal-chat" style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
@@ -194,10 +173,14 @@ export function SimGalChatPanel({ playerName, worldMsgs, sendText, pendingLines,
         </div>
       )}
       <div className="sim-gal-chat-tip" style={{ fontSize: 11, color: 'var(--text-3)', padding: '2px 4px 4px' }}>
-        🎮 Gal 式对话 · 点击对话框继续（再次点击 NPC 可发起新对话 · 「🚪 退出对话」回到探索）
+        🎮 Gal 式对话 · 每句播放完后点击对话框继续（再次点击 NPC 可发起新对话 · 「🚪 退出对话」回到探索）
       </div>
       <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
-        <GalDialogBox />
+        <GalDialogBox
+          onLiveWaitClick={continueConversation}
+          liveWaitClickable={canClickContinue}
+          liveWaitBusy={playbackAdvancing}
+        />
       </div>
       <div style={{ flexShrink: 0, paddingTop: 6 }}>
         <GalChoicesArea />

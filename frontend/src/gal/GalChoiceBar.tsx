@@ -26,7 +26,7 @@
  * 自选输入框：常驻，随时可打字发言（Enter / 发送按钮）。
  */
 import { useState, useEffect, useMemo } from 'react';
-import { useGalStore } from './GalStore';
+import { useGalStore, useGalStoreApi } from './GalStore';
 import { liveSay } from './galSseAdapter';
 import { buildLiveChoices } from './galChoices';
 import { isPlayerTurnGate } from './playerTurnGate';
@@ -35,9 +35,10 @@ import { isPlayerTurnGate } from './playerTurnGate';
  * P-0813-D：实际发言发送器——2D 模拟视图注入 liveSayOverride（走 /api/simulation/send）时优先使用，
  * 否则默认 liveSay（一般模式原行为零变化）。
  */
-function useSend() {
+function useSend(scriptPublic = false) {
   const override = useGalStore(s => s.liveSayOverride);
-  return (t: string) => { if (override) return override(t); return liveSay(t); };
+  const store = useGalStoreApi();
+  return (t: string) => { if (override) return override(t); return liveSay(t, store, scriptPublic); };
 }
 
 /**
@@ -189,7 +190,7 @@ export function GalChoicesArea() {
  * P-0811-G：常驻自选输入框 + 提示行 + 「✅ 已发送」反馈（A-5 感知优化）。
  * 独立导出供 GalGeneralStage 放在对话框下方；与 GalChoicesArea 分离。
  */
-export function GalInputArea() {
+export function GalInputArea({ scriptPublic = false }: { scriptPublic?: boolean }) {
   const liveMode = useGalStore(s => s.liveMode);
   const liveSessionId = useGalStore(s => s.liveSessionId);
   const liveSending = useGalStore(s => s.liveSending);
@@ -202,7 +203,8 @@ export function GalInputArea() {
   const submitText = useGalStore(s => s.submitText);
   const choiceNode = useGalStore(s => s.choiceNode);
   // P-0813-D：发送器（override 优先：2D 模拟视图注入时走 simulation send）
-  const sendText = useSend();
+  const sendText = useSend(scriptPublic);
+  const store = useGalStoreApi();
   // P-0811-G：导演模式（无玩家）不渲染输入框（防御）
   const livePlayerName = useGalStore(s => s.livePlayerName);
   const hasPlayer = liveMode ? !!livePlayerName && String(livePlayerName).trim().length > 0 : true;
@@ -230,7 +232,7 @@ export function GalInputArea() {
       if (!liveSessionId) return;
       // P-0814-G：同候选点击——先弹队（AI 播完停驻时），发言后新回复直接入队播放，
       // 旧消息不再挡队头等第二次点击。
-      const current = useGalStore.getState();
+      const current = store.getState();
       if (current.typing?.done && !(current.current as any)?.streamed) current.advance();
       void sendText(t);
     } else {
@@ -251,7 +253,7 @@ export function GalInputArea() {
           onChange={e => setText(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') send(); }}
           placeholder={liveMode
-            ? (liveSessionId ? `向对局发言…（${liveGameType === 'script' ? '剧本杀讨论' : liveGameType === 'werewolf' ? '狼人杀讨论' : '一般对话'}${livePhase ? ' · ' + livePhase : ''}）` : '请先在上方连接对局')
+            ? (liveSessionId ? `向对局发言…（${liveGameType === 'script' ? (scriptPublic ? '公共聊天' : '正式讨论') : liveGameType === 'werewolf' ? '狼人杀讨论' : '一般对话'}${livePhase ? ' · ' + livePhase : ''}）` : '请先在上方连接对局')
             : (choiceNode ? '自由输入你的回答…（与选项并存）' : '随时可以插话…')}
           maxLength={120}
           disabled={liveMode && !liveSessionId}
@@ -270,7 +272,7 @@ export function GalInputArea() {
                   ? <span className="gal-live-sending">⏳ 已入世界邮箱，正在等待角色回应…</span>
                 : sentFlash
                   ? <span className="gal-live-sent">✅ 已发送（AI 正听见你说话…）</span>
-                  : (liveSessionId ? '发言按对局类型路由（讨论阶段入讨论流 / 其他走一般对话）' : '连接真实对局后可发言'))
+                  : (liveSessionId ? (liveGameType === 'script' && scriptPublic ? '公共聊天不会触发 NPC、线索或正式讨论机制' : '发言按对局类型路由') : '连接真实对局后可发言'))
           : '选项决定剧情走向 · 输入可自由发言'}
       </div>
         </>

@@ -95,7 +95,7 @@ export function v1ScriptToMurder(
  * P-0811-E（追加）：llmRoles 可选——后端场景生成附带的配套角色（已自动落库，表层映射为 RoleCard）
  * 作为新场景的角色列表（替代预置占位角色）；缺省/空时回退本地 3 个占位角色（角色/地图为本地结构非 AI mock）。
  */
-export function assembleGeneralScript(name: string, desc: string, llmRoles?: RoleCard[]): GeneralScript {
+export function assembleGeneralScript(name: string, desc: string, llmRoles?: RoleCard[], worldRenderer: 'general' | 'phaser-2d' | 'unity-3d' = 'phaser-2d'): GeneralScript {
   const t = name.trim() || '自定义世界';
   const text = (desc && desc.trim()) ? desc.trim() : `一段关于「${t}」的旅程从这里开始。`;
   const id = `gen_${uid('g')}`;
@@ -128,7 +128,8 @@ export function assembleGeneralScript(name: string, desc: string, llmRoles?: Rol
     background: text,
     relations: roles.map((r, i) => `${r.name}·${i === 0 ? '引领者' : i === 1 ? '同行者' : '守望者'}`),
     roles,
-    map: buildMap(t, Math.floor(Math.random() * 1e6)),
+    ...(worldRenderer === 'phaser-2d' ? { map: buildMap(t, Math.floor(Math.random() * 1e6)) } : {}),
+    worldRenderer,
     opening: `你睁开眼，发现自己正身处「${t}」的世界……`,
     source: 'ai',
   };

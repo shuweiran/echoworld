@@ -10,7 +10,7 @@
  *  - 一般·2D探索(general+explore)：LLM 生成地图（POST /api/scenes/map，theme=场景描述；复用角色选择页缓存）→ 注入 /api/simulation 动态模拟（角色自动移动/对话）
  *  - 狼人杀(werewolf)：POST /api/werewolf/init（玩家 + AI 补满 8 人）→ ChatPage(狼人杀面板)
  */
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useDemoStore } from '../store';
 import { useAppStore } from '../../store/appStore';
 import { api } from '../../api/client';
@@ -23,7 +23,6 @@ import type { ScriptMap } from '../../phaser/mapData';
 import type { GeneralScript, RoleCard } from '../types';
 import { WorldGameplayPanel } from '../../gameplay/WorldGameplayPanel';
 
-const BabylonSimulationView = lazy(() => import('../../babylon/BabylonSimulationView').then(m => ({ default: m.BabylonSimulationView })));
 const MOBILE_BUILD = import.meta.env.VITE_MOBILE_BUILD === 'true';
 
 const WW_AI_NAMES = ['AI·白', 'AI·青', 'AI·玄', 'AI·墨', 'AI·雪', 'AI·枫', 'AI·岚', 'AI·渊'];
@@ -57,7 +56,6 @@ export function GameBridge() {
   const [chatSessionId, setChatSessionId] = useState('');
   // P-0820-M：一般模式 2D 探索统一使用设置页的结构地图配置（复用角色选择页缓存；无缓存则生成）
   const [exploreMap, setExploreMap] = useState<ScriptMap | null>(null);
-  const [explore3d, setExplore3d] = useState(false);
   const generalSessionId = useAppStore(s => s.sessionId);
   const getGeneralMap = useDemoStore(s => s.getGeneralMap);
   const setGeneralMap = useDemoStore(s => s.setGeneralMap);
@@ -191,6 +189,16 @@ export function GameBridge() {
           useAppStore.setState({
             mode: 'werewolf',
           });
+        } else if (gameMode === 'general' && (script as GeneralScript | undefined)?.worldRenderer === 'unity-3d') {
+          const desktop = (window as any).roleplayDesktop;
+          if (!desktop?.unity?.launch) throw new Error('3D 世界仅可由已配置 Unity 客户端的桌面版启动。');
+          setStep('正在启动 Unity 3D 世界…');
+          const result = await desktop.unity.launch({
+            worldId: selectCtx.scriptId || 'world',
+            title: (script as GeneralScript | undefined)?.title || 'EchoWorld',
+            seed: String(selectCtx.scriptId || 'world'),
+          });
+          if (!result?.started) throw new Error(result?.error || 'Unity 客户端未启动。');
         } else if (gameMode === 'general' && !MOBILE_BUILD && (runMode === 'explore' || selectCtx.scriptId === 'g_dawn_social')) {
           // 桌面端 2D 探索：LLM 瓦片地图（移动端不包含此能力）
           setStep('正在加载 2D 世界（生成地图）…');
@@ -250,7 +258,7 @@ export function GameBridge() {
           if (agents.length === 0) throw new Error('至少需要一名角色（请点亮角色卡）。');
           const charDetails = agents.map(n => {
             const r = roleByName.get(n);
-            return r ? { name: r.name, persona: r.personality, voice: r.tts?.voice || '', background: r.background || '' } : { name: n };
+            return r ? { name: r.name, persona: r.personality, voice: '', background: r.background || '' } : { name: n };
           });
           const startResp = await api.startScene(script.title, agents, playerName, charDetails);
           // P-0810-16：startScene 响应 goals（enabled=true + player_goal 明文 + AI ??）→ 场景卡即时渲染
@@ -273,7 +281,9 @@ export function GameBridge() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameMode]);
 
-  const title = gameMode === 'murder' ? '剧本杀对局' : gameMode === 'werewolf' ? '狼人杀' : (runMode === 'explore' && !MOBILE_BUILD ? '一般模式 · 空间探索' : '一般模式 · 自由聊天');
+  const title = gameMode === 'murder' ? '剧本杀对局' : gameMode === 'werewolf' ? '狼人杀'
+    : (script as GeneralScript | undefined)?.worldRenderer === 'unity-3d' ? '一般模式 · Unity 3D 世界'
+      : (runMode === 'explore' && !MOBILE_BUILD ? '一般模式 · 空间探索' : '一般模式 · 自由聊天');
 
   return (
     <div>
@@ -308,37 +318,28 @@ export function GameBridge() {
 
       {phase === 'ready' && (
         <>
-          {gameMode === 'general' && !MOBILE_BUILD && (runMode === 'explore' || selectCtx.scriptId === 'g_dawn_social') ? (
+          {gameMode === 'general' && (script as GeneralScript | undefined)?.worldRenderer === 'unity-3d' ? (
+            <div className="card2" style={{ maxWidth: 560, margin: '40px auto', textAlign: 'center', padding: 32 }}>
+              <div style={{ fontSize: 34 }}>🌐</div>
+              <b style={{ display: 'block', marginTop: 12 }}>Unity 3D 世界已启动</b>
+              <p className="hint">3D 地图的生成、渲染与帧率控制均在 Unity 客户端中执行；网页端不再运行 3D 地图。</p>
+            </div>
+          ) : gameMode === 'general' && !MOBILE_BUILD && (runMode === 'explore' || selectCtx.scriptId === 'g_dawn_social') ? (
             /* P-0811-G：一般模式 2D 探索 = LLM 瓦片背景 + 双主控动态模拟（WorldDirector/TrackDirector 调控
                角色移动对话）；玩家角色点击地图可控制移动（SimulationScene.playerName 绑定）；LLM 地图瓦片
                渲染为背景 + 注入障碍。 */
             <div style={{ position: 'relative' }}>
-              <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
-                <button className="btn2 btn2-sm" onClick={() => setExplore3d(v => !v)}>
-                  {explore3d ? '🎮 切回 2D 调试视图' : '🌐 切换 3D 游戏视图'}
-                </button>
-              </div>
-              {explore3d ? (
-                <Suspense fallback={<div className="card2" style={{ padding: 32, textAlign: 'center' }}>正在加载 3D 世界…</div>}>
-                  <BabylonSimulationView
-                    map={exploreMap ?? undefined}
-                    playerName={withPlayer && playerRole ? playerRole.name : undefined}
-                    height="calc(100vh - 145px)"
-                  />
-                </Suspense>
-              ) : (
-                <PhaserSimulationView
+              <PhaserSimulationView
                   characters={gamePlayers.map(n => {
                     const r = roleByName.get(n);
-                    return { name: n, persona: r?.personality || '', voice: r?.tts?.voice || '', background: r?.background || '' };
+                    return { name: n, persona: r?.personality || '', voice: '', background: r?.background || '' };
                   })}
                   scene={exploreMap ? 'custom' : 'park'}
                   map={exploreMap ?? undefined}
                   // P-0816-D：不传固定 height → 自适应模式（地图填满视口剩余高度，Phaser FIT 随容器放大）
                   playerName={withPlayer && playerRole ? playerRole.name : undefined}
                   galChat
-                />
-              )}
+              />
               <WorldGameplayPanel actorName={withPlayer && playerRole ? playerRole.name : undefined} />
             </div>
           ) : gameMode === 'general' && runMode === 'chat' ? (

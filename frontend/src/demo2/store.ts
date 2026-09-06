@@ -100,7 +100,7 @@ function defaultSettings(): Settings {
       mapApiKey: '',
       multimodal: false,
     },
-    tts: { engine: '浏览器内置', provider: 'xiaomimimo', model: 'edge-tts', apiBase: 'https://tts.example.com/v1', apiKey: '', voice: '默认女声', speed: 1, pitch: 1, emotion: 0.5 },
+    tts: { engine: 'MiMo TTS', provider: 'xiaomimimo', model: 'mimo-v2.5-tts', apiBase: 'https://token-plan-cn.xiaomimimo.com/v1', apiKey: '', voice: 'mimo_default', speed: 1, pitch: 1, emotion: 0.5 },
     image: { provider: 'comfyui', baseUrl: 'http://127.0.0.1:8188', externalBaseUrl: '', externalApiKey: '', externalModel: 'gpt-image-1', externalEndpoint: '/images/generations', loraName: '', rmbgEnabled: true, img2imgDenoise: 0.5 },
     // P-0817-D：默认 32×20（与既有硬编码生成尺寸一致，接线设置后行为零变化；可调 10-256）
     mapGen: {

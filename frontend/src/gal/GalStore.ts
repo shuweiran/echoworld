@@ -835,6 +835,26 @@ export function createGalStore() {
           : { kind: 'agent', speakerId: sp, name: sp, text: msg });
         break;
       }
+      case 'script_chat': {
+        // 公共聊天与正式讨论、导演私有通道分离；只有玩家消息和明确发布的旁白能到 GAL。
+        const sp = String(data?.speaker || '');
+        const msg = String(data?.message || '');
+        if (!sp || !msg) break;
+        const narrator = data?.kind === 'narrator';
+        const playerChat = data?.kind === 'player';
+        const human = playerChat || (!narrator && sp === s.livePlayerName);
+        const speakerId = narrator ? 'system' : sp === s.livePlayerName ? 'player' : sp;
+        const duplicate = [...s.liveQueue, ...s.log].some(m =>
+          (m as any).speakerId === speakerId && m.text === msg);
+        if (duplicate) break;
+        if (!narrator && !playerChat && !human) s.liveEnsureSpeaker(sp);
+        s.liveEnqueue(narrator
+          ? { kind: 'system', speakerId: 'system', name: '📖 旁白', text: msg }
+          : human
+            ? { kind: 'player', speakerId, name: sp, text: msg }
+            : { kind: 'agent', speakerId: sp, name: sp, text: msg });
+        break;
+      }
       case 'script_ready': {
         // P-0815-B：剧本杀完整剧本/地图生成完成事件——GalStore 无独立展示，仅确保类型/标题刷新
         if (data?.session_id && data.session_id !== s.liveSessionId) break;

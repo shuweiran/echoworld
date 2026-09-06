@@ -8,6 +8,7 @@ const path = require('path');
 let backend = null;
 let gateway = null;
 let updater = null;
+let activeBackendPort = null;
 let updateState = { status: 'idle', version: null, percent: 0, message: '' };
 
 // 单实例保护：多个桌面进程共用同一个用户数据目录，重复启动会让 H2 roleplay.mv.db
@@ -55,6 +56,36 @@ ipcMain.handle('update:download', async () => {
 });
 ipcMain.handle('update:install', () => {
   if (updater && updateState.status === 'downloaded') updater.quitAndInstall();
+});
+
+// Unity 是 3D 世界的唯一运行时。可执行文件由部署者显式配置，避免网页层拥有任意进程启动能力。
+ipcMain.handle('unity:launch', (_event, world = {}) => {
+  const executable = process.env.ECHOWORLD_UNITY_EXE;
+  if (!executable || !fs.existsSync(executable)) {
+    return { started: false, error: '未配置 Unity 客户端：请设置 ECHOWORLD_UNITY_EXE。' };
+  }
+  if (!activeBackendPort) return { started: false, error: '本地世界服务尚未就绪。' };
+  const worldId = String(world.worldId || 'world').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'world';
+  const seed = String(world.seed || worldId).slice(0, 128);
+  const title = String(world.title || 'EchoWorld').slice(0, 128);
+  try {
+    childProcess.spawn(executable, [], {
+      detached: true,
+      windowsHide: false,
+      stdio: 'ignore',
+      env: {
+        ...process.env,
+        ECHOWORLD_WS_URL: `ws://127.0.0.1:${activeBackendPort}/ws/world`,
+        ECHOWORLD_WS_AUTO_CONNECT: '1',
+        ECHOWORLD_WORLD_ID: worldId,
+        ECHOWORLD_WORLD_SEED: seed,
+        ECHOWORLD_WORLD_TITLE: title,
+      },
+    }).unref();
+    return { started: true };
+  } catch (error) {
+    return { started: false, error: `Unity 客户端启动失败：${error.message}` };
+  }
 });
 
 function freePort() {
@@ -170,6 +201,7 @@ function startGateway(backendPort) {
 async function createWindow() {
   const backendPort = await freePort();
   await startBackend(backendPort);
+  activeBackendPort = backendPort;
   const gatewayPort = await startGateway(backendPort);
   const win = new BrowserWindow({
     width: 1280, height: 720, minWidth: 960, minHeight: 540,

@@ -35,7 +35,7 @@ export async function syncCharacterVoice(
   name: string,
   voiceMode: string,
   voiceData: string,
-  role?: Pick<RoleCard, 'intro' | 'personality' | 'talkStyle' | 'background' | 'tts'>,
+  role?: Pick<RoleCard, 'intro' | 'personality' | 'talkStyle' | 'background'>,
   opts?: VoiceSyncOptions,
 ): Promise<VoiceSyncResult> {
   // 空串=清除（PUT 端点 null 值不写入，nvl('') → null 落库清除；此处恒发字符串保证键存在）
@@ -57,7 +57,7 @@ export async function syncCharacterVoice(
         // 显式 null 覆盖 client 层「无绑定角色时自动携带 player_id」逻辑——声线同步不应改变玩家角色绑定
         player_id: null,
         persona,
-        voice: role?.tts?.voice || '',
+        voice: '',
         background: role?.background || '',
         ...payload,
       });
