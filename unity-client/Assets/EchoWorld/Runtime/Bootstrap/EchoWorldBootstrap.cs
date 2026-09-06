@@ -61,6 +61,12 @@ namespace EchoWorld.Client.Bootstrap
             var presentation = root.AddComponent<WorldPresentationController>();
             presentation.Initialize(replicaHost, resolver);
 
+            // 3D 世界只在 Unity 侧创建；网页端仅选择并启动该客户端。
+            root.AddComponent<WorldEnvironmentGenerator>().Configure(
+                Environment.GetEnvironmentVariable("ECHOWORLD_WORLD_ID") ?? "world",
+                Environment.GetEnvironmentVariable("ECHOWORLD_WORLD_SEED") ?? "world");
+            root.AddComponent<FrameRateGuard>();
+
             EnsureDefaultCameraAndLight();
         }
 

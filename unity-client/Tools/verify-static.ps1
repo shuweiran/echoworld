@@ -67,7 +67,10 @@ $sourceChecks = @(
     @{ Path = 'Assets/EchoWorld/Runtime/Commands/WorldReplicationCommandSender.cs'; Pattern = 'ProtocolConstants.Interest' },
     @{ Path = 'Assets/EchoWorld/Runtime/Commands/WorldReplicationCommandSender.cs'; Pattern = 'ProtocolConstants.Ack' },
     @{ Path = 'Assets/EchoWorld/Runtime/Commands/WorldReplicationCommandSender.cs'; Pattern = 'ProtocolConstants.Replay' },
-    @{ Path = 'Assets/EchoWorld/Runtime/Presentation/LocomotionPresenter.cs'; Pattern = 'applyRootMotion = false' }
+    @{ Path = 'Assets/EchoWorld/Runtime/Presentation/LocomotionPresenter.cs'; Pattern = 'applyRootMotion = false' },
+    @{ Path = 'Assets/EchoWorld/Runtime/Bootstrap/EchoWorldBootstrap.cs'; Pattern = 'WorldEnvironmentGenerator' },
+    @{ Path = 'Assets/EchoWorld/Runtime/Presentation/FrameRateGuard.cs'; Pattern = 'Application.targetFrameRate = 60' },
+    @{ Path = 'Assets/EchoWorld/Runtime/Presentation/WorldEnvironmentGenerator.cs'; Pattern = 'Fixed 48-object budget' }
 )
 foreach ($check in $sourceChecks) {
     $path = Join-Path $projectRoot $check.Path
