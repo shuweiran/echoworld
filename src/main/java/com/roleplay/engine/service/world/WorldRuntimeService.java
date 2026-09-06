@@ -178,9 +178,10 @@ public class WorldRuntimeService implements AutoCloseable {
         }
         String scene = sceneLabel(sessionId);
         DynamicStoryState before = stories.snapshot(sessionId, scene);
+        String directorContext = directorContext(sessionId, router, before, scene);
         WorldCommandPlanner.DirectorReply reply = planner == null
                 ? new WorldCommandPlanner.DirectorReply("主控暂不可用；你的选择不会被自动改写。", null)
-                : planner.chat(sessionId, message, before.directorContext());
+                : planner.chat(sessionId, message, directorContext);
         DynamicStoryState story = before;
         synchronized (worldLifecycleLock) {
             if (sessionTokens.get(sessionId) != sessionToken || sessionRouters.get(sessionId) != router
@@ -191,6 +192,7 @@ public class WorldRuntimeService implements AutoCloseable {
                 applyStoryUpdateLocked(sessionId, scene, message, reply.storyPatch());
                 story = stories.snapshot(sessionId, scene);
             }
+            router.setDirectorRoleGuidance(filterRoleGuidance(router, reply.roleGuidance()));
         }
         return Map.of("reply", reply.reply(), "story", story.publicMap());
     }
@@ -598,6 +600,26 @@ public class WorldRuntimeService implements AutoCloseable {
         recordResult(Map.of("kind", "story", "session_id", sessionId,
                 "revision", story.revision(), "status", "updated", "at", Instant.now().toString()));
         broadcast(sessionId, "world_story_updated", story.publicMap());
+    }
+
+    /** 主控可见的是服务器持有的场景、角色表与剧本事实，不是模型自行续写的场景想象。 */
+    private String directorContext(String sessionId, RouterService router, DynamicStoryState story, String scene) {
+        StringBuilder out = new StringBuilder("场景：").append(boundedText(scene, 600)).append("\n已登记角色：");
+        Map<String, String> roster = router.getDirectorRoster();
+        if (roster.isEmpty()) out.append("（无）");
+        roster.forEach((name, persona) -> out.append("\n- ").append(name).append("：")
+                .append(boundedText(persona, 180)));
+        out.append("\n动态剧本：").append(story.directorContext());
+        return out.toString();
+    }
+
+    private static Map<String, String> filterRoleGuidance(RouterService router, Map<String, String> guidance) {
+        if (guidance == null || guidance.isEmpty()) return Map.of();
+        Map<String, String> accepted = new LinkedHashMap<>();
+        guidance.forEach((name, text) -> {
+            if (router.hasAgent(name) && text != null && !text.isBlank()) accepted.put(name, text);
+        });
+        return accepted;
     }
 
     private String sceneLabel(String sessionId) {

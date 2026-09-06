@@ -1,6 +1,7 @@
 package com.roleplay.engine.service;
 
 import com.roleplay.engine.agent.AgentExecutor;
+import com.roleplay.engine.agent.Agent;
 import com.roleplay.engine.controller.SSEController;
 import com.roleplay.engine.core.Message;
 import com.roleplay.engine.core.Persona;
@@ -8,6 +9,7 @@ import com.roleplay.engine.interrupt.AgentTaskManager;
 import com.roleplay.engine.interrupt.InterruptManager;
 import com.roleplay.engine.interrupt.WorldEventBus;
 import com.roleplay.engine.llm.LLMClient;
+import com.roleplay.engine.model.Session;
 import com.roleplay.engine.service.ArbiterService.TrackConfigResult;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -245,6 +247,57 @@ class RouterServiceDirectorNarrationTest {
         assertTrue(memory.getSession().getMessages().stream()
                 .noneMatch(m -> String.valueOf(m.getContent()).contains("下一拍：古堡停电")),
                 "导演指令原文不应入史");
+    }
+
+    @Test
+    @DisplayName("⑤b 角色定向导演信息只进入对应角色上下文")
+    void directorRoleGuidance_isPrivateToTargetAgent() {
+        List<String> captured = new ArrayList<>();
+        LLMClient llm = mock(LLMClient.class);
+        when(llm.callSync(anyList(), any())).thenAnswer(inv -> {
+            @SuppressWarnings("unchecked") List<Message> msgs = inv.getArgument(0);
+            captured.add(msgs.stream().map(m -> String.valueOf(m.getContent()))
+                    .collect(java.util.stream.Collectors.joining("\n")));
+            return "测试发言";
+        });
+        RouterService router = newRouterWithLlm(llm, "free", "", List.of("A", "B"), List.of("A", "B"));
+        router.setDirectorRoleGuidance(Map.of("A", "你知道一封信藏在钟楼地下室。", "陌生人", "不应进入"));
+
+        router.runRound(null, null);
+
+        assertTrue(captured.stream().anyMatch(ctx -> ctx.contains("你是 A") && ctx.contains("钟楼地下室")));
+        assertTrue(captured.stream().anyMatch(ctx -> ctx.contains("你是 B") && !ctx.contains("钟楼地下室")));
+    }
+
+    @Test
+    @DisplayName("⑤c 加载新会话或移除重加角色，不得遗留旧角色私密信息")
+    void directorRoleGuidance_isClearedAcrossSessionLoadAndRoleReplacement() {
+        List<String> captured = new ArrayList<>();
+        LLMClient llm = mock(LLMClient.class);
+        when(llm.callSync(anyList(), any())).thenAnswer(inv -> {
+            @SuppressWarnings("unchecked") List<Message> msgs = inv.getArgument(0);
+            captured.add(msgs.stream().map(m -> String.valueOf(m.getContent()))
+                    .collect(java.util.stream.Collectors.joining("\n")));
+            return "测试发言";
+        });
+        RouterService router = newRouterWithLlm(llm, "free", "", List.of("A", "B"), List.of("A", "B"));
+        router.setDirectorRoleGuidance(Map.of("A", "旧会话机密：钟楼地下室。"));
+
+        Session loaded = new Session("loaded-director-session", List.of("A", "B"));
+        loaded.setCurrentScene("新场景");
+        loaded.getConfig().put("mode", "free");
+        router.loadSession(loaded, List.of(
+                new Agent(new Persona("A", "你是新角色 A。"), "agent", llm),
+                new Agent(new Persona("B", "你是新角色 B。"), "agent", llm)));
+        router.runRound(null, null);
+        assertTrue(captured.stream().noneMatch(ctx -> ctx.contains("旧会话机密")), "加载会话后不应串入旧私密信息");
+
+        captured.clear();
+        router.setDirectorRoleGuidance(Map.of("A", "已离场角色的私密信息。"));
+        router.removeAgent("A");
+        router.addAgent("A", new Persona("A", "你是重建后的角色 A。"));
+        router.runRound(null, null);
+        assertTrue(captured.stream().noneMatch(ctx -> ctx.contains("已离场角色的私密信息")), "同名重加角色不得继承已删除角色信息");
     }
 
     // ── ⑥ 用户导演指令一次消费（P0 主控即时生效） ──

@@ -38,6 +38,8 @@ test('top-down 2.5D depth cues are monotonic and never mutate world coordinates'
   const world = { x: 210, y: 360, floorId: 'ground' };
   const before = structuredClone(world);
   assert.ok(perspectiveScaleAtY(500, 600) > perspectiveScaleAtY(100, 600));
+  assert.ok(perspectiveScaleAtY(600, 600) / perspectiveScaleAtY(0, 600) > 1.5,
+    'the tilted view must make foreground actors visibly larger');
   assert.ok(standingDepth(500, 600) > standingDepth(100, 600));
   assert.deepEqual(world, before);
 });

@@ -90,7 +90,8 @@ class WorldCommandPlannerTest {
     void directorChatReturnsReplyAndOnlyParsesFutureStoryPatch() {
         LLMClient llm = mock(LLMClient.class);
         when(llm.callJson(anyString(), anyInt())).thenReturn(Map.of("reply", "你可以先向守夜人追问钟声来源。",
-                "story_update", Map.of("next_beat", "守夜人拿出一枚旧钥匙", "change", "玩家请求线索")));
+                "story_update", Map.of("next_beat", "守夜人拿出一枚旧钥匙", "change", "玩家请求线索"),
+                "role_guidance", List.of(Map.of("name", "守夜人", "instruction", "你知道钟声来自钟楼地下室，暂不主动说出。"))));
 
         WorldCommandPlanner.DirectorReply reply = new WorldCommandPlanner(llm, true, 0, 2)
                 .chat("s1", "给我一条线索", "当前阶段：调查钟楼");
@@ -98,7 +99,8 @@ class WorldCommandPlannerTest {
         assertEquals("你可以先向守夜人追问钟声来源。", reply.reply());
         assertNotNull(reply.storyPatch());
         assertEquals("守夜人拿出一枚旧钥匙", reply.storyPatch().nextBeat());
-        verify(llm).callJson(contains("不能：改写已发生事实"), anyInt());
+        assertTrue(reply.roleGuidance().get("守夜人").contains("钟楼地下室"));
+        verify(llm).callJson(contains("唯一"), anyInt());
     }
 
     @Test

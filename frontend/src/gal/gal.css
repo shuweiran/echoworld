@@ -864,6 +864,16 @@
 .gal-dialog-wait { text-align: center; padding: 28px 20px; cursor: default; }
 .gal-wait-label { color: var(--gal-accent2); font-size: 14px; text-shadow: 0 0 8px rgba(77, 225, 255, 0.4); }
 .gal-wait-hint { color: var(--gal-dim); font-size: 11px; margin-top: 8px; line-height: 1.6; }
+/* 双 Agent 续句入口：保留点击，不再渲染空的“已连接/等待消息”对话卡。 */
+.gal-autonomous-continue {
+  align-self: center;
+  padding: 8px 12px;
+  color: var(--gal-dim);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.gal-autonomous-continue:hover { color: var(--gal-accent2); }
 
 /* 系统公告（announcement → 旁白 + 系统名） */
 .gal-dialog-system { border-color: rgba(255, 209, 102, 0.55); }

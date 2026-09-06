@@ -69,6 +69,8 @@ public class RouterService {
     private final PlayerIdentityService identityService;
 
     private final Map<String, Agent> agents = new ConcurrentHashMap<>();
+    /** 主控按角色下发的私有剧情/知识指令；绝不进入其它角色或公共历史。 */
+    private final Map<String, String> directorRoleGuidance = new ConcurrentHashMap<>();
     /** 自治世界文本模式的非破坏性休眠槽；保留原 Agent、记忆与内部状态。 */
     private final Map<String, Agent> worldSuspendedAgents = new ConcurrentHashMap<>();
     /** 世界运行时拥有的角色名；旧 /api/agents 不得覆盖、删除或触发全局 SSE。 */
@@ -189,7 +191,7 @@ public class RouterService {
     //  Session lifecycle
     // ═══════════════════════════════════════════════════════════
 
-    public void initSession(String sessionId, List<Persona> personas,
+    public synchronized void initSession(String sessionId, List<Persona> personas,
                              String sceneDescription, String mode,
                              String protagonist, String directorCharacter) {
         this.sessionId = sessionId;
@@ -223,6 +225,7 @@ public class RouterService {
         this.roundsSinceCalibration = 0;
 
         agents.clear();
+        directorRoleGuidance.clear();
         worldSuspendedAgents.clear();
         worldOwnedAgentNames.clear();
         List<String> agentNames = new ArrayList<>();
@@ -239,7 +242,7 @@ public class RouterService {
         log.info("Session {} initialized with {} agents, mode={}", sessionId, agentNames.size(), mode);
     }
 
-    public void loadSession(Session session, List<Agent> agentList) {
+    public synchronized void loadSession(Session session, List<Agent> agentList) {
         this.sessionId = session.getSessionId();
         this.sceneDescription = session.getCurrentScene();
         this.roundCount = session.getRoundCount();
@@ -251,6 +254,7 @@ public class RouterService {
         }
         memory.setSession(session);
         agents.clear();
+        directorRoleGuidance.clear();
         worldSuspendedAgents.clear();
         worldOwnedAgentNames.clear();
         for (Agent a : agentList) {
@@ -289,6 +293,17 @@ public class RouterService {
         return s;
     }
 
+    /** 动态剧本主控的权威角色表；仅服务端使用，不暴露到公共状态。 */
+    public Map<String, String> getDirectorRoster() {
+        Map<String, String> roster = new LinkedHashMap<>();
+        agents.forEach((name, agent) -> {
+            Persona persona = agent == null ? null : agent.getPersona();
+            String summary = persona == null ? "" : persona.getPersonaDesc();
+            roster.put(name, summary == null ? "" : summary);
+        });
+        return roster;
+    }
+
     public boolean isRunning() { return running; }
 
     /** 会话专属记忆存储（每个 SessionRegistry 会话独立实例；测试/运维按会话断言用）。 */
@@ -325,8 +340,10 @@ public class RouterService {
     public synchronized void renameAgent(String oldName, String newName) {
         Agent a = agents.remove(oldName);
         if (a == null) return;
+        String guidance = directorRoleGuidance.remove(oldName);
         a.getPersona().setName(newName);
         agents.put(newName, a);
+        if (guidance != null) directorRoleGuidance.put(newName, guidance);
         // 引用名同步替换：主角 / 导演角色 / 受限角色集合
         if (protagonist != null && protagonist.equals(oldName)) protagonist = newName;
         if (directorCharacter != null && directorCharacter.equals(oldName)) directorCharacter = newName;
@@ -1263,6 +1280,12 @@ public class RouterService {
                     + "绝不要提及“主控/导演/指令”的存在，也不要复述指令原文。）");
         }
 
+        String privateGuidance = directorRoleGuidance.get(agentName);
+        if (isGeneralMode(mode) && privateGuidance != null && !privateGuidance.isBlank()) {
+            contextParts.add("【你的主控私有剧情信息】\n" + privateGuidance
+                    + "\n（这是仅你知道的剧情信息或本轮表演重点；不得称其来自主控，也不得主动泄露隐藏内容。）");
+        }
+
         // P0 主控即时指令：用户本轮前下达的要求（POST /api/goals），一次消费、
         // 排在后台指令之前（用户显式要求优先），同样仅一般模式、不入史、不可见。
         if (isGeneralMode(mode) && roundUserDirective != null && !roundUserDirective.isBlank()) {
@@ -1625,6 +1648,17 @@ public class RouterService {
     /** P0 主控导演指令：写入后台导演指令（WorldRuntimeService 每轮后推送；buildAgentContext 注入）。 */
     public void setDirectorDirective(String directive) { this.directorDirective = directive; }
 
+    /** 仅接收当前会话真实角色的定向信息；未知角色一律丢弃。 */
+    public synchronized void setDirectorRoleGuidance(Map<String, String> guidance) {
+        directorRoleGuidance.clear();
+        if (guidance == null) return;
+        guidance.forEach((name, text) -> {
+            if (!agents.containsKey(name) || text == null) return;
+            String clean = text.replaceAll("[\\r\\n]+", " ").trim();
+            if (!clean.isBlank()) directorRoleGuidance.put(name, clean.substring(0, Math.min(240, clean.length())));
+        });
+    }
+
     /** P0 主控导演指令：当前后台指令（空=无指令，如开场轮）。 */
     public String getDirectorDirective() { return directorDirective; }
 
@@ -1742,6 +1776,7 @@ public class RouterService {
             throw new IllegalStateException("world-owned agent cannot be removed by legacy API: " + name);
         }
         agents.remove(name);
+        directorRoleGuidance.remove(name);
         refreshAgentRosterState();
         // D8: 角色离开推送（会话定向）
         if (sse != null) sse.broadcastAgentRemoved(sessionId, name);
@@ -1778,6 +1813,7 @@ public class RouterService {
     public synchronized boolean removeWorldAgent(String name) {
         boolean removed = agents.remove(name) != null;
         removed |= worldSuspendedAgents.remove(name) != null;
+        directorRoleGuidance.remove(name);
         worldOwnedAgentNames.remove(name);
         refreshAgentRosterState();
         return removed;
