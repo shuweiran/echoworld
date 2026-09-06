@@ -63,6 +63,18 @@ public class WorldRuntimeController {
         return ResponseEntity.status(result.accepted() ? 202 : 409).body(response);
     }
 
+    /** 动态剧本中的主控公开对话；不会直接执行世界命令。 */
+    @PostMapping("/director/chat")
+    public ResponseEntity<?> chatWithDirector(@RequestBody(required = false) Map<String, Object> body) {
+        if (body == null) return bad("body required");
+        try {
+            return ResponseEntity.ok(runtime.chatWithDirector(
+                    string(body, "session_id", ""), string(body, "message", "")));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", safeError(e)));
+        }
+    }
+
     /** 主控提交结构化意图；只入有界总线，不在请求线程直接改世界。 */
     @PostMapping("/commands")
     public ResponseEntity<Map<String, Object>> propose(@RequestBody(required = false) Map<String, Object> body) {

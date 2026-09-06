@@ -383,6 +383,8 @@ public class ScriptGameService {
         // P-0810-17（B5，D-034 登记项）：ArrayList → CopyOnWriteArrayList —— 讨论线程逐轮 append 与
         // saveSnapshot 拷贝（地图生成/切图/轮询快照路径）并发存在极小概率 CME，改并发安全容器根治。
         final List<Map<String, String>> discussionTranscript = new java.util.concurrent.CopyOnWriteArrayList<>();
+        /** 玩家公共频道：与会改变讨论引擎上下文的正式讨论记录严格分开。 */
+        final List<Map<String, String>> publicChatTranscript = new java.util.concurrent.CopyOnWriteArrayList<>();
         final Map<String, String> discussionContexts = new LinkedHashMap<>();
         /** 讨论组已建且轮次进行中（A3-1/A3-3 验收）。 */
         volatile boolean discussionActive = false;
@@ -513,6 +515,9 @@ public class ScriptGameService {
             }
             if (!discussionTranscript.isEmpty()) {
                 m.put("discussion", new ArrayList<>(discussionTranscript));
+            }
+            if (!publicChatTranscript.isEmpty()) {
+                m.put("public_chat", new ArrayList<>(publicChatTranscript));
             }
             // C3: ENDED 终态附加判定结果（终态全员可见真相，终局展示用；附加键不破坏既有契约）
             if (phase == Phase.ENDED) {
@@ -3353,6 +3358,47 @@ public class ScriptGameService {
     }
 
     /**
+     * 玩家公共频道：任意阶段均可交流，但不会写入讨论引擎、NPC prompt 或正式讨论记录。
+     * 这使 GAL 始终是公开舞台；只有 {@link #discussionSay} 才会触发正式讨论机制。
+     */
+    public Map<String, Object> publicChat(String sessionId, String player, String message) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (player == null || player.isBlank()) return Map.of("error", "缺少玩家名");
+        if (!game.players.contains(player)) return Map.of("error", "玩家不在本局中");
+        if (message == null || message.isBlank()) return Map.of("error", "发言内容不能为空");
+
+        Map<String, String> turn = new LinkedHashMap<>();
+        turn.put("speaker", player);
+        turn.put("message", message.trim());
+        turn.put("phase", game.phase.name().toLowerCase());
+        turn.put("ts", String.valueOf(System.currentTimeMillis()));
+        turn.put("kind", "player");
+        game.publicChatTranscript.add(turn);
+        saveSnapshot(game);
+        if (sse != null) sse.broadcastScriptChat(game.sessionId, turn);
+        return new LinkedHashMap<>(Map.of("ok", true, "channel", "public", "message", message.trim(),
+                "phase", game.phase.name().toLowerCase()));
+    }
+
+    /** 主持人唯一可公开的导演输出：旁白只进入公共频道，不暴露主控指令或推理。 */
+    public Map<String, Object> publishNarration(String sessionId, String narration) {
+        ScriptGame game = games.get(sessionId);
+        if (game == null) return Map.of("error", "游戏不存在");
+        if (narration == null || narration.isBlank()) return Map.of("error", "旁白不能为空");
+        Map<String, String> turn = new LinkedHashMap<>();
+        turn.put("speaker", "旁白");
+        turn.put("message", narration.trim());
+        turn.put("phase", game.phase.name().toLowerCase());
+        turn.put("ts", String.valueOf(System.currentTimeMillis()));
+        turn.put("kind", "narrator");
+        game.publicChatTranscript.add(turn);
+        saveSnapshot(game);
+        if (sse != null) sse.broadcastScriptChat(game.sessionId, turn);
+        return new LinkedHashMap<>(Map.of("ok", true, "channel", "public_narration", "message", narration.trim()));
+    }
+
+    /**
      * P-0805-B（私聊闭环）：剧本杀私聊 —— 玩家与 AI 角色一对一密聊。
      *
      * <p>语义：请求方把消息发给另一名玩家的角色（AI 代管），目标角色以本人 persona + 秘密 +
@@ -4252,6 +4298,7 @@ public class ScriptGameService {
         content.put("murderer", game.murderer);
         content.put("correct_verdict", game.correctVerdict);
         content.put("discussion_transcript", new ArrayList<>(game.discussionTranscript));
+        content.put("public_chat_transcript", new ArrayList<>(game.publicChatTranscript));
         content.put("discussion_contexts", new LinkedHashMap<>(game.discussionContexts));
         // 阶段 2: 对局地图（LLM/BSP 生成，契约 v1；旧快照无此键 → 恢复时置 null）
         content.put("map_data", game.mapData);
@@ -4384,6 +4431,15 @@ public class ScriptGameService {
                     if (e.getKey() != null) turn.put(str(e.getKey()), str(e.getValue()));
                 }
                 game.discussionTranscript.add(turn);
+            }
+        }
+        for (Object o : mapList(c.get("public_chat_transcript"))) {
+            if (o instanceof Map<?, ?> mm) {
+                Map<String, String> turn = new LinkedHashMap<>();
+                for (Map.Entry<?, ?> e : mm.entrySet()) {
+                    if (e.getKey() != null) turn.put(str(e.getKey()), str(e.getValue()));
+                }
+                game.publicChatTranscript.add(turn);
             }
         }
         game.discussionContexts.putAll(strMap(c.get("discussion_contexts")));

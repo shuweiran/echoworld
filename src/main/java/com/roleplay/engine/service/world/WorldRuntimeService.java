@@ -163,6 +163,38 @@ public class WorldRuntimeService implements AutoCloseable {
         }
     }
 
+    /** 公开的动态剧本主控对话：主控只回答并可编排后续，不直接执行世界动作。 */
+    public Map<String, Object> chatWithDirector(String sessionId, String message) {
+        if (sessionId == null || sessionId.isBlank() || message == null || message.isBlank()) {
+            throw new IllegalArgumentException("session_id and message required");
+        }
+        RouterService router = bindLiveRouter(sessionId);
+        Object sessionToken;
+        long planRevision;
+        synchronized (worldLifecycleLock) {
+            requireBoundRouter(sessionId, router);
+            sessionToken = sessionTokens.computeIfAbsent(sessionId, ignored -> new Object());
+            planRevision = planRevisions.merge(sessionId, 1L, Long::sum);
+        }
+        String scene = sceneLabel(sessionId);
+        DynamicStoryState before = stories.snapshot(sessionId, scene);
+        WorldCommandPlanner.DirectorReply reply = planner == null
+                ? new WorldCommandPlanner.DirectorReply("主控暂不可用；你的选择不会被自动改写。", null)
+                : planner.chat(sessionId, message, before.directorContext());
+        DynamicStoryState story = before;
+        synchronized (worldLifecycleLock) {
+            if (sessionTokens.get(sessionId) != sessionToken || sessionRouters.get(sessionId) != router
+                    || !Long.valueOf(planRevision).equals(planRevisions.get(sessionId))) {
+                throw new IllegalStateException("session changed during director chat");
+            }
+            if (reply.storyPatch() != null) {
+                applyStoryUpdateLocked(sessionId, scene, message, reply.storyPatch());
+                story = stories.snapshot(sessionId, scene);
+            }
+        }
+        return Map.of("reply", reply.reply(), "story", story.publicMap());
+    }
+
     public boolean propose(WorldCommand command) {
         if (command == null) return false;
         if (mutatesSingletonWorld(command.type()) && !SIMULATION_SESSION.equals(command.sessionId())) return false;
@@ -566,6 +598,11 @@ public class WorldRuntimeService implements AutoCloseable {
         recordResult(Map.of("kind", "story", "session_id", sessionId,
                 "revision", story.revision(), "status", "updated", "at", Instant.now().toString()));
         broadcast(sessionId, "world_story_updated", story.publicMap());
+    }
+
+    private String sceneLabel(String sessionId) {
+        ScenePopulationProfile population = populationProfiles.get(sessionId);
+        return population == null || population.sceneLabel().isBlank() ? "当前场景" : population.sceneLabel();
     }
 
     private void promote(String sessionId, String roleId, RoleTier targetTier) {

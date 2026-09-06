@@ -73,8 +73,8 @@ class ConversationPacingTest {
         ConversationGroup g1 = createGroup(cm, world, "g1", "A", "B");   // NPC 组
         ConversationGroup g2 = createGroup(cm, world, "g2", "B", "C");   // NPC 组（P 不在任何组）
 
-        assertEquals(3_000, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD),
-                "未进入对话：DYAD 轮次间隔 = 2000×1.5 = 3000ms");
+        assertEquals(0, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD),
+                "双 Agent 不保留人为轮间空白");
         assertEquals(4_500, cm.computeRoundCooldownMs(g1, ConversationMode.GROUP_DISCUSSION),
                 "未进入对话：群聊轮次间隔 = 3000×1.5 = 4500ms");
         assertEquals(cm.computeRoundCooldownMs(g1, ConversationMode.DYAD),
@@ -93,12 +93,12 @@ class ConversationPacingTest {
         ConversationGroup current = createGroup(cm, world, "cur", "P", "A");  // 玩家轨道
         ConversationGroup other = createGroup(cm, world, "oth", "B", "C");    // 非当前轨道
 
-        assertEquals(2_000, cm.computeRoundCooldownMs(current, ConversationMode.DYAD),
-                "当前轨道全速：2000ms（与注入前原行为一致）");
+        assertEquals(0, cm.computeRoundCooldownMs(current, ConversationMode.DYAD),
+                "当前双 Agent 无固定延时");
         assertEquals(3_000, cm.computeRoundCooldownMs(current, ConversationMode.GROUP_DISCUSSION),
                 "当前轨道群聊全速：3000ms");
-        assertEquals(8_000, cm.computeRoundCooldownMs(other, ConversationMode.DYAD),
-                "非当前轨道降频：2000×4.0 = 8000ms（P-0813-H 默认 ×4 拉长）");
+        assertEquals(0, cm.computeRoundCooldownMs(other, ConversationMode.DYAD),
+                "非当前双 Agent 同样无固定延时");
         assertEquals(12_000, cm.computeRoundCooldownMs(other, ConversationMode.GROUP_DISCUSSION),
                 "非当前轨道群聊降频：3000×4.0 = 12000ms");
     }
@@ -117,8 +117,8 @@ class ConversationPacingTest {
         ConversationGroup current = createGroup(cm, world, "cur", "P", "C");
         assertEquals("cur", cm.getCurrentPlayerGroup().getGroupId(), "玩家所在组即当前对话轨道");
         // npc 组不受影响
-        assertEquals(8_000, cm.computeRoundCooldownMs(npc, ConversationMode.DYAD),
-                "进入对话后 NPC 组间隔拉长 ×4");
+        assertEquals(0, cm.computeRoundCooldownMs(npc, ConversationMode.DYAD),
+                "双 Agent 不受其他轨道降频影响");
     }
 
     // ── 模式守卫：剧本杀/狼人杀各局实例不注入 → 原行为零变化 ────
@@ -131,8 +131,8 @@ class ConversationPacingTest {
         ConversationGroup g1 = createGroup(cm, world, "g1", "P", "A");
 
         assertFalse(cm.isPacingEnabled(), "未注入 → pacing 禁用");
-        assertEquals(2_000, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD),
-                "原行为：DYAD 2000ms 不变");
+        assertEquals(0, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD),
+                "未注入 pacing 时双 Agent 也无固定延时");
         assertEquals(3_000, cm.computeRoundCooldownMs(g1, ConversationMode.GROUP_DISCUSSION),
                 "原行为：群聊 3000ms 不变");
     }
@@ -146,7 +146,7 @@ class ConversationPacingTest {
         ConversationGroup g1 = createGroup(cm, world, "g1", "A", "B");
 
         assertFalse(cm.isPacingEnabled());
-        assertEquals(2_000, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD));
+        assertEquals(0, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD));
         assertEquals(3_000, cm.computeRoundCooldownMs(g1, ConversationMode.GROUP_DISCUSSION));
     }
 
@@ -160,8 +160,8 @@ class ConversationPacingTest {
         cm.setPacing(true, 4_000, 5_000, 10_000, 2.0, 3.0);
         ConversationGroup g1 = createGroup(cm, world, "g1", "A", "B");
 
-        assertEquals(8_000, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD),
-                "未对话态：4000×2.0 = 8000ms");
+        assertEquals(0, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD),
+                "自定义 pacing 不会重新加入双 Agent 固定延时");
         assertEquals(10_000, cm.computeRoundCooldownMs(g1, ConversationMode.GROUP_DISCUSSION),
                 "未对话态：5000×2.0 = 10000ms");
     }

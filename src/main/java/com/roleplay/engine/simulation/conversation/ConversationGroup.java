@@ -212,6 +212,20 @@ public class ConversationGroup {
         }
     }
 
+    /**
+     * 玩家点击的单次播放确认：只在确实等待播放时接收，并在同一把锁内先撤销等待标记。
+     * 这样双击或网络重放不会把多个信号缓存在下一轮生成期间。
+     */
+    public boolean signalPlaybackDoneIfAwaiting() {
+        synchronized (playbackMonitor) {
+            if (!active || !awaitingPlayback) return false;
+            awaitingPlayback = false;
+            playbackSignalCount++;
+            playbackMonitor.notifyAll();
+            return true;
+        }
+    }
+
     /** 停止/解散时唤醒等待者（调用方应先 setActive(false) 保证等待循环退出）。 */
     public void wakePlaybackWaiters() {
         synchronized (playbackMonitor) {

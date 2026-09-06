@@ -163,4 +163,36 @@ class ScriptSpeechSseTest {
         assertInstanceOf(CopyOnWriteArrayList.class, svc.getGame(SESSION).discussionTranscript,
                 "讨论记录应为并发安全容器（防讨论线程 append 与快照拷贝 CME）");
     }
+
+    @Test
+    @DisplayName("S-5: 公共聊天任意阶段可发，且不污染正式讨论记录")
+    void publicChatWorksOutsideDiscussionWithoutPollutingDirectorContext() {
+        SSEController mockSse = mock(SSEController.class);
+        ScriptGameService svc = newService(mockSse);
+        svc.initGame(SESSION, "庄园", List.of("Alice", "Bob", "Carol"));
+
+        Map<String, Object> result = svc.publicChat(SESSION, "Alice", "搜证前先交换一下信息");
+
+        assertEquals(Boolean.TRUE, result.get("ok"));
+        assertEquals("public", result.get("channel"));
+        assertEquals(1, svc.getGame(SESSION).publicChatTranscript.size());
+        assertTrue(svc.getGame(SESSION).discussionTranscript.isEmpty(), "公共聊天不能成为正式讨论上下文");
+        verify(mockSse).broadcastScriptChat(eq(SESSION), anyMap());
+    }
+
+    @Test
+    @DisplayName("S-6: DM 旁白只写公开频道并通过 script_chat 发布")
+    void narratorPublishesPublicChannelWithoutCreatingPlayerSpeech() {
+        SSEController mockSse = mock(SSEController.class);
+        ScriptGameService svc = newService(mockSse);
+        svc.initGame(SESSION, "庄园", List.of("Alice", "Bob", "Carol"));
+
+        Map<String, Object> result = svc.publishNarration(SESSION, "走廊深处传来玻璃破碎声。");
+
+        assertEquals(Boolean.TRUE, result.get("ok"));
+        assertEquals("public_narration", result.get("channel"));
+        assertEquals("narrator", svc.getGame(SESSION).publicChatTranscript.get(0).get("kind"));
+        assertTrue(svc.getGame(SESSION).discussionTranscript.isEmpty());
+        verify(mockSse).broadcastScriptChat(eq(SESSION), anyMap());
+    }
 }

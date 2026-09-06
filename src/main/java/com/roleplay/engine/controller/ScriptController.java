@@ -332,6 +332,18 @@ public class ScriptController {
         return ResponseEntity.ok(scriptGameService.advancePhase(sessionId));
     }
 
+    /** DM 明确发布的公开旁白；主控的内部推理、指令和秘密不经过此端点。 */
+    @PostMapping("/dm/narrate")
+    public ResponseEntity<Map<String, Object>> narrate(@RequestBody Map<String, String> body,
+                                                       @RequestHeader(value = "X-DM-Key", defaultValue = "") String dmKeyHeader) {
+        if (!dmKeyOk(dmKeyHeader)) {
+            return ResponseEntity.status(403).body(Map.of("error", "DM 权限校验失败：缺少或错误的 X-DM-Key"));
+        }
+        String sessionId = body.getOrDefault("session_id", currentSessionId);
+        if (sessionId.isBlank()) return ResponseEntity.ok(Map.of("error", "缺少 session_id"));
+        return ResponseEntity.ok(scriptGameService.publishNarration(sessionId, body.getOrDefault("narration", "")));
+    }
+
     /** C4: DM key 校验 —— 安全默认拒绝；未配置口令时不得开放真相或全员令牌。 */
     private boolean dmKeyOk(String providedKey) {
         return dmKey != null && !dmKey.isBlank() && providedKey != null && dmKey.equals(providedKey);
@@ -390,6 +402,17 @@ public class ScriptController {
         Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
         if (denied != null) return ResponseEntity.status(403).body(denied);
         return ResponseEntity.ok(scriptGameService.discussionSay(sessionId, player, message, clue));
+    }
+
+    /** 永久在线的玩家公共频道；不触发 NPC 讨论引擎，正式讨论仍走 discussion_say。 */
+    @PostMapping("/chat")
+    public ResponseEntity<Map<String, Object>> chat(@RequestBody Map<String, String> body) {
+        String player = body.getOrDefault("player", "");
+        String playerKey = body.getOrDefault("player_key", "");
+        String sessionId = resolveSessionId(player, playerKey, body.getOrDefault("session_id", ""));
+        Map<String, Object> denied = scriptGameService.checkPlayerAccess(sessionId, player, playerKey);
+        if (denied != null) return ResponseEntity.status(403).body(denied);
+        return ResponseEntity.ok(scriptGameService.publicChat(sessionId, player, body.getOrDefault("message", "")));
     }
 
     /** C2: 线索转交（body: player, target_player, clue_id；C3: +player_key）—— 转交后 ownership 变更，接收方 status 可见。 */

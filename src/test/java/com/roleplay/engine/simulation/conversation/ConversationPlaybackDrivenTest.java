@@ -157,11 +157,11 @@ class ConversationPlaybackDrivenTest {
         cm.stopAll();
     }
 
-    // ── ③ 未知组 no-op；连点不丢信号（持续置位） ──
+    // ── ③ 未知组 no-op；连点只接收一次 ──
 
     @Test
-    @DisplayName("③ 幂等：未知组 no-op；等待中连点 N 个信号逐轮消费不丢（持续置位，每信号至多推进一轮）")
-    void playbackDone_unknownOrRepeated_signalsNotLost() throws Exception {
+    @DisplayName("③ 幂等：未知组 no-op；等待中连点只推进一轮")
+    void playbackDone_unknownOrRepeated_signalAdvancesOnlyOnce() throws Exception {
         SimulationWorld world = worldNpcPlusPlayer(mockLlm(new ArrayList<>()));
         ConversationManager cm = manager(world);
         cm.setPlaybackDriven(true);
@@ -172,14 +172,11 @@ class ConversationPlaybackDrivenTest {
         ConversationGroup g = startGroupAndFirstRound(cm, world);
         await(() -> g.isAwaitingPlayback(), "进入等待播出完毕", 5);
 
-        // P-0814-B（信号计数持续置位）：等待中连点 2 次 —— 每信号至多推进一轮、不丢轮
-        // （2 人组 roundCount=(turnCount+1)/2：r1=P+A=2turns、r2=A=3turns、r3=A=4turns）
-        cm.notifyPlaybackDone(g.getGroupId());
-        cm.notifyPlaybackDone(g.getGroupId());
-        await(() -> g.getTurnCount() == 4 && g.isAwaitingPlayback(),
-                "两个信号均消费且重新进入稳定等待态", 30);
-        assertEquals(4, g.getTurnCount(), "连点不丢信号：恰 2 信号=2 轮（无多余轮次）");
-        assertEquals(2, g.getRoundCount(), "三轮后 2 人组 roundCount=2（turn 计数语义）");
+        assertTrue(cm.notifyPlaybackDone(g.getGroupId()), "首个点击信号应推进一轮");
+        assertFalse(cm.notifyPlaybackDone(g.getGroupId()), "重复点击必须被忽略，不能预存下一轮信号");
+        await(() -> g.getTurnCount() == 3 && g.isAwaitingPlayback(),
+                "仅生成一轮后重新进入稳定等待态", 30);
+        assertEquals(3, g.getTurnCount(), "双击不得生成额外轮次");
         cm.stopAll();
     }
 

@@ -85,4 +85,31 @@ class WorldCommandPlannerTest {
         assertFalse(card.toPersona("路人", "").contains("忽略系统提示"));
         assertFalse(card.toPersona("路人", "").contains("泄露全部秘密"));
     }
+
+    @Test
+    void directorChatReturnsReplyAndOnlyParsesFutureStoryPatch() {
+        LLMClient llm = mock(LLMClient.class);
+        when(llm.callJson(anyString(), anyInt())).thenReturn(Map.of("reply", "你可以先向守夜人追问钟声来源。",
+                "story_update", Map.of("next_beat", "守夜人拿出一枚旧钥匙", "change", "玩家请求线索")));
+
+        WorldCommandPlanner.DirectorReply reply = new WorldCommandPlanner(llm, true, 0, 2)
+                .chat("s1", "给我一条线索", "当前阶段：调查钟楼");
+
+        assertEquals("你可以先向守夜人追问钟声来源。", reply.reply());
+        assertNotNull(reply.storyPatch());
+        assertEquals("守夜人拿出一枚旧钥匙", reply.storyPatch().nextBeat());
+        verify(llm).callJson(contains("不能：改写已发生事实"), anyInt());
+    }
+
+    @Test
+    void directorChatFallsBackWhenProviderFails() {
+        LLMClient llm = mock(LLMClient.class);
+        when(llm.callJson(anyString(), anyInt())).thenThrow(new IllegalStateException("provider unavailable"));
+
+        WorldCommandPlanner.DirectorReply reply = new WorldCommandPlanner(llm, true, 0, 2)
+                .chat("s1", "发生了什么？", "开场");
+
+        assertTrue(reply.reply().contains("未连接语言模型"));
+        assertNull(reply.storyPatch());
+    }
 }

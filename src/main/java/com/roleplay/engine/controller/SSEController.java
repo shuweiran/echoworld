@@ -633,6 +633,14 @@ public class SSEController implements SseBroadcaster {
         broadcastToSession(sessionId, "script_speech", payload);
     }
 
+    /** script_chat：公开玩家聊天或经 DM 明确发布的旁白；绝不承载私密主控数据。 */
+    public void broadcastScriptChat(String sessionId, Map<String, String> data) {
+        Map<String, Object> payload = new java.util.LinkedHashMap<>();
+        if (data != null) payload.putAll(data);
+        payload.put("session_id", sessionId == null ? "" : sessionId);
+        broadcastToSession(sessionId, "script_chat", payload);
+    }
+
     /**
      * P-0810-17（阶段 1）：script_ready → {session_id, ready, phase, name, map_ready, generated?}
      *  完整剧本（+地图）后台异步生成完成通知（决策点 6：新增结构化事件承载「剧本就绪」，

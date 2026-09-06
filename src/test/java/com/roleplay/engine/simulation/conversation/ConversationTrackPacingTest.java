@@ -84,7 +84,7 @@ class ConversationTrackPacingTest {
         assertTrue(g1.isActive() && g2.isActive() && g3.isActive(), "所有群均活跃（并行推进）");
         // 每群都可计算轮次间隔（并行推进的节奏输入），无任何群被挂起
         for (ConversationGroup g : List.of(g1, g2, g3)) {
-            assertTrue(cm.computeRoundCooldownMs(g, ConversationMode.DYAD) > 0, g.getGroupId() + " 可推进");
+            assertEquals(0, cm.computeRoundCooldownMs(g, ConversationMode.DYAD), g.getGroupId() + " 无固定冷却");
         }
         // 串行队列残留检查：状态暴露不含 queue / serial / 群调度状态
         Map<String, Object> status = cm.getStatus();
@@ -104,12 +104,10 @@ class ConversationTrackPacingTest {
         ConversationGroup current = createGroup(cm, world, "cur", "P", "A");
         ConversationGroup other = createGroup(cm, world, "oth", "B", "C");
 
-        assertEquals(2_000, cm.computeRoundCooldownMs(current, ConversationMode.DYAD),
-                "玩家轨道全速：2000ms（与 F 一致）");
+        assertEquals(0, cm.computeRoundCooldownMs(current, ConversationMode.DYAD), "玩家双 Agent 无固定冷却");
         assertEquals(3_000, cm.computeRoundCooldownMs(current, ConversationMode.GROUP_DISCUSSION),
                 "玩家轨道群聊全速：3000ms");
-        assertEquals(8_000, cm.computeRoundCooldownMs(other, ConversationMode.DYAD),
-                "其他轨道大幅拉长：2000×4.0 = 8000ms（F 的 ×2=4000 更强）");
+        assertEquals(0, cm.computeRoundCooldownMs(other, ConversationMode.DYAD), "其他双 Agent 也无固定冷却");
         assertEquals(12_000, cm.computeRoundCooldownMs(other, ConversationMode.GROUP_DISCUSSION),
                 "其他轨道群聊拉长：3000×4.0 = 12000ms");
         // 其他轨道仍并行推进（可计算间隔、未挂起）
@@ -125,9 +123,9 @@ class ConversationTrackPacingTest {
         ConversationGroup current = createGroup(cm, world, "cur", "P", "A");
         ConversationGroup other = createGroup(cm, world, "oth", "B", "C");
 
-        assertEquals(10_000, cm.computeRoundCooldownMs(other, ConversationMode.DYAD), "2000×5.0 = 10000ms");
+        assertEquals(0, cm.computeRoundCooldownMs(other, ConversationMode.DYAD), "自定义倍率不影响双 Agent");
         assertEquals(15_000, cm.computeRoundCooldownMs(other, ConversationMode.GROUP_DISCUSSION), "3000×5.0 = 15000ms");
-        assertEquals(2_000, cm.computeRoundCooldownMs(current, ConversationMode.DYAD), "玩家轨道仍全速");
+        assertEquals(0, cm.computeRoundCooldownMs(current, ConversationMode.DYAD), "玩家双 Agent 无固定冷却");
     }
 
     // ── ③ idle 全轨道 ×1.5 保持（F 行为不变）────────────────────
@@ -141,7 +139,7 @@ class ConversationTrackPacingTest {
         ConversationGroup g1 = createGroup(cm, world, "g1", "A", "B");
         ConversationGroup g2 = createGroup(cm, world, "g2", "C", "D");
 
-        assertEquals(3_000, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD), "2000×1.5 = 3000ms");
+        assertEquals(0, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD), "idle 时双 Agent 无固定冷却");
         assertEquals(4_500, cm.computeRoundCooldownMs(g1, ConversationMode.GROUP_DISCUSSION), "3000×1.5 = 4500ms");
         assertEquals(cm.computeRoundCooldownMs(g1, ConversationMode.DYAD),
                 cm.computeRoundCooldownMs(g2, ConversationMode.DYAD), "idle 时所有轨道一视同仁");
@@ -210,7 +208,7 @@ class ConversationTrackPacingTest {
         ConversationGroup g1 = createGroup(cm, world, "g1", "A", "B");
 
         assertFalse(cm.isPacingEnabled(), "未注入 → pacing 禁用");
-        assertEquals(2_000, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD), "原行为：DYAD 2000ms");
+        assertEquals(0, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD), "未注入 pacing 时双 Agent 无固定冷却");
         assertEquals(3_000, cm.computeRoundCooldownMs(g1, ConversationMode.GROUP_DISCUSSION), "原行为：群聊 3000ms");
         @SuppressWarnings("unchecked")
         Map<String, Object> pacing = (Map<String, Object>) cm.getStatus().get("pacing");
@@ -226,7 +224,7 @@ class ConversationTrackPacingTest {
         cm.setPacing(false, 2_000, 3_000, 8_000, 1.5, 4.0);
         ConversationGroup g1 = createGroup(cm, world, "g1", "A", "B");
 
-        assertEquals(2_000, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD));
+        assertEquals(0, cm.computeRoundCooldownMs(g1, ConversationMode.DYAD));
         assertEquals(3_000, cm.computeRoundCooldownMs(g1, ConversationMode.GROUP_DISCUSSION));
     }
 
@@ -242,14 +240,14 @@ class ConversationTrackPacingTest {
         ConversationGroup g2 = createGroup(cm, world, "g2", "C", "D");
 
         cm.joinGroup("g1", "P");
-        assertEquals(8_000, cm.computeRoundCooldownMs(g2, ConversationMode.DYAD),
-                "玩家进对话：g2 间隔拉长 ×4 但仍在并行推进");
+        assertEquals(0, cm.computeRoundCooldownMs(g2, ConversationMode.DYAD),
+                "玩家进对话不为其他双 Agent 加回固定冷却");
         assertTrue(g2.isActive(), "g2 未被挂起");
         assertEquals("g1", cm.getStatus().get("currentTrack"), "currentTrack=g1（玩家轨道）");
 
         cm.leaveGroup("g1", "P");
-        assertEquals(3_000, cm.computeRoundCooldownMs(g2, ConversationMode.DYAD),
-                "玩家退出：g2 恢复 idle ×1.5 节奏（并行不变）");
+        assertEquals(0, cm.computeRoundCooldownMs(g2, ConversationMode.DYAD),
+                "玩家退出后双 Agent 仍无固定冷却");
         assertEquals("", cm.getStatus().get("currentTrack"));
     }
 }

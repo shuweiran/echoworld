@@ -505,6 +505,47 @@ class WorldRuntimeServiceTest {
         assertEquals(0, runtime.state("closing").get("command_queue"));
     }
 
+    @Test
+    void directorChatRepliesAndOnlyAdvancesFutureStory() {
+        WorldCommandPlanner planner = mock(WorldCommandPlanner.class);
+        SessionRegistry sessions = mock(SessionRegistry.class);
+        RouterService router = mock(RouterService.class);
+        when(sessions.get("dynamic-chat")).thenReturn(router);
+        when(planner.chat(eq("dynamic-chat"), eq("给我一条线索"), anyString()))
+                .thenReturn(new WorldCommandPlanner.DirectorReply("钟楼守夜人或许知道答案。",
+                        new StoryPatch("追查钟声", "询问守夜人", "钟楼门缝透出微光。",
+                                "守夜人递出旧钥匙", "玩家请求线索", 36)));
+        runtime = runtime(mock(SimulationService.class), sessions, planner);
+
+        Map<String, Object> result = runtime.chatWithDirector("dynamic-chat", "给我一条线索");
+
+        assertEquals("钟楼守夜人或许知道答案。", result.get("reply"));
+        Map<?, ?> story = (Map<?, ?>) result.get("story");
+        assertEquals("守夜人递出旧钥匙", story.get("next_beat"));
+        verify(planner).chat(eq("dynamic-chat"), eq("给我一条线索"), contains("总目标"));
+    }
+
+    @Test
+    void directorChatRejectsLateReplyAfterSessionGenerationChanges() {
+        WorldCommandPlanner planner = mock(WorldCommandPlanner.class);
+        SessionRegistry sessions = mock(SessionRegistry.class);
+        RouterService oldRouter = mock(RouterService.class);
+        RouterService newRouter = mock(RouterService.class);
+        when(sessions.get("director-reused")).thenReturn(oldRouter);
+        when(planner.chat(eq("director-reused"), anyString(), anyString())).thenAnswer(ignored -> {
+            runtime.removeSessionGeneration("director-reused", oldRouter);
+            when(sessions.get("director-reused")).thenReturn(newRouter);
+            runtime.enqueueInput(new InputMailbox.MailboxInput("director-reused", "new-generation", "新会话",
+                    InputMailbox.Priority.NORMAL, Instant.now(), Map.of()));
+            return new WorldCommandPlanner.DirectorReply("迟到回复", new StoryPatch("旧阶段", "旧目标", "旧剧本", "旧下一拍", "旧变化", 99));
+        });
+        runtime = runtime(mock(SimulationService.class), sessions, planner);
+
+        assertThrows(IllegalStateException.class, () -> runtime.chatWithDirector("director-reused", "旧请求"));
+        assertEquals(0L, ((Number) ((Map<?, ?>) runtime.state("director-reused").get("story_script"))
+                .get("revision")).longValue());
+    }
+
     @SuppressWarnings("unchecked")
     private List<RoleLifecycleSnapshot> roles() {
         return (List<RoleLifecycleSnapshot>) runtime.state("simulation").get("roles");

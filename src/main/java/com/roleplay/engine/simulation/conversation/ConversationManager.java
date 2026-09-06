@@ -212,8 +212,7 @@ public class ConversationManager {
         if (groupId == null || groupId.isBlank()) return false;
         ConversationGroup g = activeGroups.get(groupId);
         if (g == null) return false;
-        g.signalPlaybackDone();
-        return true;
+        return g.signalPlaybackDoneIfAwaiting();
     }
 
     /** P-0813-F：节奏控制是否启用（2D 世界注入；剧本杀/狼人杀各局实例=false）。 */
@@ -244,7 +243,7 @@ public class ConversationManager {
      * 多对话群并行推进；本方法只负责节奏——玩家所在轨道全速、其他轨道间隔大幅拉长。
      *
      * <ul>
-     *   <li>pacing 未注入（剧本杀/狼人杀各局实例）→ 原硬编码行为（GROUP_DISCUSSION 3000 / 其余 2000）；</li>
+     *   <li>DYAD → 0ms（不保留人为轮间空白）；pacing 未注入时 GROUP_DISCUSSION 保持 3000ms；</li>
      *   <li>无玩家对话轨道（未进入对话）→ 所有轨道 ×{@link #pacingIdleMultiplier}（降低密度）；</li>
      *   <li>有玩家对话轨道 → 当前轨道全速（基础间隔），其余轨道
      *       ×{@link #pacingInactiveMultiplier}（P-0813-H 默认 ×4：大幅拉长对话时间/降低密度）。</li>
@@ -253,6 +252,8 @@ public class ConversationManager {
      * <p>包可见供单测直调（不依赖真实轮次循环时序）。
      */
     long computeRoundCooldownMs(ConversationGroup group, ConversationMode mode) {
+        // 双人对话无需人为停顿：上一句提交后立即给下一位 Agent 生成机会。
+        if (mode == ConversationMode.DYAD) return 0;
         long base = mode == ConversationMode.GROUP_DISCUSSION ? 3_000 : 2_000;
         if (!pacingEnabled) return base;
         long pacedBase = mode == ConversationMode.GROUP_DISCUSSION
@@ -753,7 +754,8 @@ public class ConversationManager {
                         // P-0813-F：轮次间隔由节奏控制计算（未注入=原 3000/2000；
                         // 未进入对话=全轨道×idle 倍率；对话中=当前轨道全速、其余×inactive 倍率——
                         // P-0813-H 需求更正：其余轨道不挂起，并行推进但间隔大幅拉长）。
-                        Thread.sleep(computeRoundCooldownMs(group, finalMode));
+                        long cooldownMs = computeRoundCooldownMs(group, finalMode);
+                        if (cooldownMs > 0) Thread.sleep(cooldownMs);
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
