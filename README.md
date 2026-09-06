@@ -15,6 +15,8 @@ EchoWorld 是一个 Java 21 / Spring Boot / React / Phaser / Babylon.js 项目�
 
 狼人杀、剧本杀和自由角色扮演仅是验证隐藏信息与社会互动边界的示例场景。
 
+一般模式的 Gal 动态剧本提供受限主控对话：主控可以解释公开剧情、安排尚未发生的线索与选择，但不能改写历史、替玩家决定、泄露私密信息或直接执行世界动作；所有动作仍由 Java Runtime 校验。
+
 ## Architecture
 
 ```text
