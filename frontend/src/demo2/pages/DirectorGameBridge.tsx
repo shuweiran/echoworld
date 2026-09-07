@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { directorApi, type DirectorState } from '../../api/director';
+import { directorApi, type DirectorState, type DirectorStoryPlan } from '../../api/director';
 import { useAppStore } from '../../store/appStore';
 import { GalGeneralView } from '../../gal/GalGeneralView';
 import { useGalStore } from '../../gal/GalStore';
@@ -8,8 +8,9 @@ import { useDemoStore } from '../store';
 import type { GeneralScript, RoleCard } from '../types';
 
 type Phase = 'preflight-loading' | 'preflight' | 'launching' | 'ready' | 'error';
-
 type ChatLine = { role: 'user' | 'assistant'; content: string };
+
+const AUTO_PLAN_PROMPT = '请根据当前场景和角色，先给我编排一套完整开局方案：确定故事前提与基调、开场局势、人物关系、每个人的场景身份与目标，需要的话安排角色秘密，再给出2到4个剧情拍点和开场触发事件。先完成导演台设定，不要直接开始正文剧情。';
 
 export function DirectorGameBridge() {
   const selectCtx = useDemoStore(s => s.selectCtx);
@@ -28,6 +29,7 @@ export function DirectorGameBridge() {
   const [preflightId, setPreflightId] = useState('');
   const [sessionId, setSessionId] = useState('');
   const [directorState, setDirectorState] = useState<DirectorState | null>(null);
+  const [storyPlan, setStoryPlan] = useState<DirectorStoryPlan | null>(null);
   const [lines, setLines] = useState<ChatLine[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
@@ -81,6 +83,12 @@ export function DirectorGameBridge() {
           display_name: playerDisplayName || playerRole.name,
         };
         const sceneDescription = [g.desc, g.background, g.opening].filter(Boolean).join('\n');
+        const goals = Object.fromEntries(names
+          .map(name => [name, roleByName.get(name)?.motive || ''] as const)
+          .filter(([, value]) => !!value));
+        const secrets = Object.fromEntries(names
+          .map(name => [name, roleByName.get(name)?.secret || ''] as const)
+          .filter(([, value]) => !!value));
         const response = await directorApi.createPreflight({
           scene_id: g.title,
           scene_description: sceneDescription,
@@ -89,11 +97,18 @@ export function DirectorGameBridge() {
           relationships: g.relations || [],
           entry_order: names,
           onstage: names,
+          story_premise: g.desc || '',
+          story_tone: [g.theme, ...(g.tags || [])].filter(Boolean).join(' / '),
+          opening_situation: g.opening || '',
+          world_facts: g.background ? [g.background] : [],
+          character_goals: goals,
+          character_secrets: secrets,
         });
         const state = response.state;
         if (!state?.preflight_id) throw new Error('主控开局响应缺少 preflight_id');
         setPreflightId(state.preflight_id);
         setDirectorState(state);
+        setStoryPlan(response.story_plan || null);
         if (response.reply) setLines([{ role: 'assistant', content: response.reply }]);
         setPhase('preflight');
       } catch (e: unknown) {
@@ -113,6 +128,7 @@ export function DirectorGameBridge() {
     try {
       const response = await directorApi.preflightChat(preflightId, text);
       if (response.state) setDirectorState(response.state);
+      if (response.story_plan) setStoryPlan(response.story_plan);
       if (response.reply) setLines(prev => [...prev, { role: 'assistant', content: response.reply! }]);
       return response;
     } catch (e: unknown) {
@@ -147,6 +163,7 @@ export function DirectorGameBridge() {
       });
       await useAppStore.getState().loadState(sid);
       if (start.director_state) setDirectorState(start.director_state);
+      if (start.story_plan) setStoryPlan(start.story_plan);
       setPhase('ready');
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : '正式开局失败');
@@ -165,7 +182,7 @@ export function DirectorGameBridge() {
           displayName={playerDisplayName || playerRole?.name}
           onBack={back}
         />
-        <RuntimeDirectorPanel sessionId={sessionId} initialState={directorState} />
+        <RuntimeDirectorPanel sessionId={sessionId} initialState={directorState} initialPlan={storyPlan} />
       </div>
     );
   }
@@ -174,14 +191,14 @@ export function DirectorGameBridge() {
     <div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
         <button className="btn2 btn2-ghost btn2-sm" onClick={back}>← 返回角色选择</button>
-        <b style={{ fontSize: 15 }}>🎬 开局主控 · {title}</b>
+        <b style={{ fontSize: 15 }}>🎬 开局导演台 · {title}</b>
         <button className="btn2 btn2-sm" style={{ marginLeft: 'auto' }} onClick={() => go('home')}>🏠 模式选择</button>
       </div>
 
       {(phase === 'preflight-loading' || phase === 'launching') && (
         <div className="card2" style={{ textAlign: 'center', padding: 40 }}>
           <div className="loading-dots" style={{ fontSize: 30 }}>🔄</div>
-          <div style={{ marginTop: 12 }}>{phase === 'launching' ? '正在按已确认配置进入场景…' : '正在建立主控会话…'}</div>
+          <div style={{ marginTop: 12 }}>{phase === 'launching' ? '正在按导演台方案进入场景…' : '正在建立开局导演台…'}</div>
         </div>
       )}
 
@@ -195,17 +212,33 @@ export function DirectorGameBridge() {
       )}
 
       {phase === 'preflight' && (
-        <div style={{ maxWidth: 900, margin: '0 auto', display: 'grid', gap: 12 }}>
+        <div style={{ maxWidth: 980, margin: '0 auto', display: 'grid', gap: 12 }}>
           <div className="card2" style={{ padding: 16 }}>
-            <b>开局权威状态</b>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <b>导演台 · 剧本编排</b>
+              <span className="hint">这里的设定会真正进入角色上下文，不是临时聊天备注</span>
+              <button
+                className="btn2 btn2-ghost btn2-sm"
+                style={{ marginLeft: 'auto' }}
+                disabled={sending}
+                onClick={() => void sendPreflight(AUTO_PLAN_PROMPT)}
+              >
+                ✨ 让主控先编一套开局
+              </button>
+            </div>
+            <DirectorStoryPlanStrip plan={storyPlan} revealPrivate />
+          </div>
+
+          <div className="card2" style={{ padding: 16 }}>
+            <b>角色与舞台状态</b>
             <DirectorStateStrip state={directorState} />
             <div className="hint" style={{ marginTop: 10 }}>
-              这里确认的是服务器会真正执行的状态，不是剧情旁白。你可以先说“鲸鱼先离场，之后我叫她再进来”。
+              出场顺序只是最后一步。你可以直接说： “故事改成雨夜失踪案；兔子是记者、鲸鱼是目击者；我和兔子表面合作但互不信任；鲸鱼知道一个不能主动说出的秘密；先让兔子和我在场。”
             </div>
           </div>
 
           <div className="card2" style={{ padding: 16 }}>
-            <div style={{ maxHeight: 360, overflowY: 'auto', display: 'grid', gap: 8 }}>
+            <div style={{ maxHeight: 380, overflowY: 'auto', display: 'grid', gap: 8 }}>
               {lines.map((line, index) => (
                 <div key={`${line.role}-${index}`} style={{
                   justifySelf: line.role === 'user' ? 'end' : 'start',
@@ -225,7 +258,7 @@ export function DirectorGameBridge() {
                 value={input}
                 onChange={e => setInput(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) void sendPreflight(input); }}
-                placeholder="例如：先让兔子和我在场，鲸鱼先离场；之后再让鲸鱼进来。"
+                placeholder="和主控编排剧本、关系、身份、目标、秘密、剧情拍点、触发事件或出场安排…"
                 disabled={sending}
                 style={{ flex: 1, minWidth: 0 }}
               />
@@ -233,7 +266,7 @@ export function DirectorGameBridge() {
                 {sending ? '处理中…' : '发送'}
               </button>
               <button className="btn2" disabled={sending} onClick={() => void confirmAndStart()}>
-                确认并进入
+                确认方案并开局
               </button>
             </div>
           </div>
@@ -252,20 +285,62 @@ function DirectorStateStrip({ state }: { state: DirectorState | null }) {
       <div><b>当前在场：</b>{state.onstage?.length ? state.onstage.join('、') : '无'}</div>
       <div><b>当前离场：</b>{state.offstage?.length ? state.offstage.join('、') : '无'}</div>
       <div><b>出场顺序：</b>{state.entry_order?.length ? state.entry_order.join(' → ') : '未设定'}</div>
-      {!!state.relationships?.length && <div><b>关系：</b>{state.relationships.join('；')}</div>}
-      {!!state.scene_notes?.length && <div><b>场景补充：</b>{state.scene_notes.join('；')}</div>}
+      {!!state.relationships?.length && <div><b>关系事实：</b>{state.relationships.join('；')}</div>}
+      {!!state.scene_notes?.length && <div><b>公开场景事实：</b>{state.scene_notes.join('；')}</div>}
     </div>
   );
 }
 
-function RuntimeDirectorPanel({ sessionId, initialState }: { sessionId: string; initialState: DirectorState | null }) {
+function DirectorStoryPlanStrip({ plan, revealPrivate = false }: { plan: DirectorStoryPlan | null; revealPrivate?: boolean }) {
+  if (!plan) return <div className="hint" style={{ marginTop: 8 }}>剧本编排尚未载入</div>;
+  const identities = Object.entries(plan.scene_identities || {});
+  const relations = plan.structured_relationships || [];
+  const goals = revealPrivate ? Object.entries(plan.character_goals || {}) : [];
+  const secrets = revealPrivate ? Object.entries(plan.character_secrets || {}) : [];
+  const beats = revealPrivate ? (plan.story_beats || []) : [];
+  const events = revealPrivate ? (plan.opening_events || []) : [];
+  const hasAny = !!plan.premise || !!plan.tone || !!plan.opening_situation || !!plan.stakes
+    || identities.length > 0 || relations.length > 0 || goals.length > 0 || secrets.length > 0
+    || beats.length > 0 || events.length > 0 || !!plan.your_goal || !!plan.your_secret;
+  if (!hasAny) return <div className="hint" style={{ marginTop: 8 }}>还没有额外编排。可以让主控先生成一套开局方案。</div>;
+  return (
+    <div style={{ marginTop: 10, display: 'grid', gap: 7, fontSize: 13, lineHeight: 1.6 }}>
+      {!!plan.premise && <div><b>剧本前提：</b>{plan.premise}</div>}
+      {!!plan.tone && <div><b>基调：</b>{plan.tone}</div>}
+      {!!plan.opening_situation && <div><b>开场局势：</b>{plan.opening_situation}</div>}
+      {!!plan.stakes && <div><b>核心冲突 / 代价：</b>{plan.stakes}</div>}
+      {!!plan.world_facts?.length && <div><b>世界事实：</b>{plan.world_facts.join('；')}</div>}
+      {identities.length > 0 && <div><b>场景身份：</b>{identities.map(([n, v]) => `${n}＝${v}`).join('；')}</div>}
+      {relations.length > 0 && <div><b>结构化关系：</b>{relations.map(r => `${r.from}→${r.to}：${r.relation}${r.detail ? `（${r.detail}）` : ''}`).join('；')}</div>}
+      {goals.length > 0 && <div><b>角色目标：</b>{goals.map(([n, v]) => `${n}＝${v}`).join('；')}</div>}
+      {secrets.length > 0 && <div><b>角色秘密：</b>{secrets.map(([n, v]) => `${n}＝${v}`).join('；')}</div>}
+      {beats.length > 0 && <div><b>剧情拍点：</b>{beats.map((v, i) => `${i + 1}. ${v}`).join('；')}</div>}
+      {events.length > 0 && <div><b>触发事件：</b>{events.join('；')}</div>}
+      {!revealPrivate && !!plan.your_goal && <div><b>你的目标：</b>{plan.your_goal}</div>}
+      {!revealPrivate && !!plan.your_secret && <div><b>你的秘密：</b>{plan.your_secret}</div>}
+      {!revealPrivate && plan.hidden_plan && <div className="hint">其余角色目标、秘密和未来剧情拍点由主控隐藏管理。</div>}
+    </div>
+  );
+}
+
+function RuntimeDirectorPanel({
+  sessionId,
+  initialState,
+  initialPlan,
+}: {
+  sessionId: string;
+  initialState: DirectorState | null;
+  initialPlan: DirectorStoryPlan | null;
+}) {
   const [open, setOpen] = useState(false);
   const [state, setState] = useState<DirectorState | null>(initialState);
+  const [plan, setPlan] = useState<DirectorStoryPlan | null>(initialPlan);
   const [lines, setLines] = useState<ChatLine[]>([]);
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
 
   useEffect(() => { setState(initialState); }, [initialState]);
+  useEffect(() => { setPlan(initialPlan); }, [initialPlan]);
 
   const send = async () => {
     const text = input.trim();
@@ -276,6 +351,7 @@ function RuntimeDirectorPanel({ sessionId, initialState }: { sessionId: string; 
     try {
       const response = await directorApi.runtimeChat(sessionId, text);
       if (response.state) setState(response.state);
+      if (response.story_plan) setPlan(response.story_plan);
       if (response.reply) setLines(prev => [...prev, { role: 'assistant', content: response.reply! }]);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : '主控请求失败';
@@ -296,15 +372,18 @@ function RuntimeDirectorPanel({ sessionId, initialState }: { sessionId: string; 
       </button>
       {open && (
         <div className="card2" style={{
-          position: 'fixed', right: 18, bottom: 66, width: 'min(430px, calc(100vw - 36px))', maxHeight: '70vh',
-          zIndex: 91, padding: 14, boxShadow: '0 18px 50px rgba(0,0,0,.38)', overflow: 'hidden',
+          position: 'fixed', right: 18, bottom: 66, width: 'min(460px, calc(100vw - 36px))', maxHeight: '76vh',
+          zIndex: 91, padding: 14, boxShadow: '0 18px 50px rgba(0,0,0,.38)', overflowY: 'auto',
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <b>🎬 主控通道</b>
-            <span className="hint">与角色聊天完全分离</span>
+            <span className="hint">舞台控制 + 剧本调整</span>
             <button className="btn2 btn2-ghost btn2-sm" style={{ marginLeft: 'auto' }} onClick={() => setOpen(false)}>✕</button>
           </div>
-          <DirectorStateStrip state={state} />
+          <DirectorStoryPlanStrip plan={plan} />
+          <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,255,255,.08)' }}>
+            <DirectorStateStrip state={state} />
+          </div>
           <div style={{ maxHeight: 220, overflowY: 'auto', display: 'grid', gap: 6, marginTop: 10 }}>
             {lines.map((line, index) => (
               <div key={`${line.role}-${index}`} style={{ fontSize: 13, whiteSpace: 'pre-wrap', lineHeight: 1.55 }}>
@@ -317,7 +396,7 @@ function RuntimeDirectorPanel({ sessionId, initialState }: { sessionId: string; 
               value={input}
               onChange={e => setInput(e.target.value)}
               onKeyDown={e => { if (e.key === 'Enter') void send(); }}
-              placeholder="例如：让鲸鱼离场 / 把鲸鱼拉进来 / 现在谁在场？"
+              placeholder="改关系/身份/目标/剧情拍点，或让角色进出场…"
               disabled={sending}
               style={{ flex: 1, minWidth: 0 }}
             />
