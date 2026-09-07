@@ -176,9 +176,10 @@ public final class DirectorSession {
     }
 
     public synchronized String stateSummary() {
+        List<String> off = offstage();
         return "你扮演「" + (playerName().isBlank() ? "未指定" : playerName()) + "」；当前在场："
                 + (onstage.isEmpty() ? "无" : String.join("、", onstage)) + "；离场："
-                + (offstage().isEmpty() ? "无" : String.join("、", offstage)) + "；出场顺序："
+                + (off.isEmpty() ? "无" : String.join("、", off)) + "；出场顺序："
                 + (entryOrder.isEmpty() ? "未设定" : String.join(" → ", entryOrder)) + "。";
     }
 
@@ -189,7 +190,7 @@ public final class DirectorSession {
         out.put("scene_id", sceneId);
         out.put("scene_description", sceneDescription);
         out.put("player", new LinkedHashMap<>(player));
-        out.put("cast", cast.values().stream().map(LinkedHashMap::new).toList());
+        out.put("cast", cast());
         out.put("relationships", List.copyOf(relationships));
         out.put("entry_order", List.copyOf(entryOrder));
         out.put("onstage", List.copyOf(onstage));
@@ -251,7 +252,11 @@ public final class DirectorSession {
     public synchronized String sceneDescription() { return sceneDescription; }
     public synchronized String playerName() { return clean(player.get("name"), 80); }
     public synchronized Map<String, Object> player() { return new LinkedHashMap<>(player); }
-    public synchronized List<Map<String, Object>> cast() { return cast.values().stream().map(LinkedHashMap::new).toList(); }
+    public synchronized List<Map<String, Object>> cast() {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map<String, Object> character : cast.values()) result.add(new LinkedHashMap<>(character));
+        return List.copyOf(result);
+    }
     public synchronized List<String> relationships() { return List.copyOf(relationships); }
     public synchronized List<String> entryOrder() { return List.copyOf(entryOrder); }
     public synchronized List<String> onstage() { return List.copyOf(onstage); }
