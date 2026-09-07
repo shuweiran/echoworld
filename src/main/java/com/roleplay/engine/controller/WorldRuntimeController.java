@@ -1,5 +1,6 @@
 package com.roleplay.engine.controller;
 
+import com.roleplay.engine.service.director.DirectorAgentService;
 import com.roleplay.engine.service.world.InputMailbox;
 import com.roleplay.engine.service.world.MapGenerationRequest;
 import com.roleplay.engine.service.world.MapJob;
@@ -31,9 +32,11 @@ import java.util.UUID;
 public class WorldRuntimeController {
 
     private final WorldRuntimeService runtime;
+    private final DirectorAgentService director;
 
-    public WorldRuntimeController(WorldRuntimeService runtime) {
+    public WorldRuntimeController(WorldRuntimeService runtime, DirectorAgentService director) {
         this.runtime = runtime;
+        this.director = director;
     }
 
     /** 接收后立即返回；同一 session 的主控在后台逐条消费，input_id 可安全重试。 */
@@ -68,15 +71,30 @@ public class WorldRuntimeController {
         return ResponseEntity.status(result.accepted() ? 202 : 409).body(response);
     }
 
-    /** 动态剧本中的主控公开对话；不会直接执行世界命令。 */
+    /**
+     * 兼容 Gal 旧入口：新会话优先进入权威 DirectorAgentService，真正执行 roster/onStage/NPC
+     * 等服务器操作；只有没有 DirectorSession 的旧会话才回退到旧动态剧本问答。
+     */
     @PostMapping("/director/chat")
     public ResponseEntity<?> chatWithDirector(@RequestBody(required = false) Map<String, Object> body) {
         if (body == null) return bad("body required");
+        String sessionId = string(body, "session_id", "");
+        String message = string(body, "message", "");
+        if (sessionId.isBlank() || message.isBlank()) return bad("session_id and message required");
         try {
-            return ResponseEntity.ok(runtime.chatWithDirector(
-                    string(body, "session_id", ""), string(body, "message", "")));
-        } catch (IllegalArgumentException | IllegalStateException e) {
-            return ResponseEntity.badRequest().body(Map.of("error", safeError(e)));
+            Map<String, Object> authoritative = director.chatRuntime(sessionId, message);
+            authoritative.put("director_mode", "authoritative");
+            return ResponseEntity.ok(authoritative);
+        } catch (IllegalArgumentException | IllegalStateException noAuthoritativeState) {
+            // Backward compatibility only: legacy sessions created before Director preflight have no
+            // authoritative state. They keep the old story-planner chat rather than becoming unusable.
+            try {
+                Map<String, Object> legacy = new LinkedHashMap<>(runtime.chatWithDirector(sessionId, message));
+                legacy.put("director_mode", "legacy_story_planner");
+                return ResponseEntity.ok(legacy);
+            } catch (IllegalArgumentException | IllegalStateException e) {
+                return ResponseEntity.badRequest().body(Map.of("error", safeError(e)));
+            }
         }
     }
 
