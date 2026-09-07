@@ -15,6 +15,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { ManualPage } from './pages/ManualPage';
 import { RoleDetailPage } from './pages/RoleDetailPage';
 import { GameBridge } from './pages/GameBridge';
+import { DirectorGameBridge } from './pages/DirectorGameBridge';
 import { Icon, type IconName } from '../components/ui/Icon';
 import { UpdateStatus } from '../components/UpdateStatus';
 import './styles.css';
@@ -37,6 +38,9 @@ export function App2() {
   const history = useDemoStore(s => s.history);
   const enterRoles = useDemoStore(s => s.enterRoles);
   const selectCtx = useDemoStore(s => s.selectCtx);
+  const gameMode = useDemoStore(s => s.gameMode);
+  const runMode = useDemoStore(s => s.runMode);
+  const withPlayer = useDemoStore(s => s.withPlayer);
   const [systemPrefersLight, setSystemPrefersLight] = useState(() =>
     typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches,
   );
@@ -65,6 +69,7 @@ export function App2() {
   const canBack = history.length > 0;
   const isActive = (n: typeof NAV[number]) =>
     n.view === 'werewolf' ? (view === 'roles' && selectCtx.kind === 'werewolf') : view === n.view;
+  const useDirectorPreflight = gameMode === 'general' && runMode === 'chat' && withPlayer;
 
   return (
     <div className={`app2${isGame ? ' app2-game' : ''}`}>
@@ -109,7 +114,7 @@ export function App2() {
         {view === 'roles-lib' && <RoleLibPage />}
         {view === 'free-chars' && <RoleLibPage />}
         {view === 'role-detail' && <RoleDetailPage />}
-        {view === 'game' && <GameBridge />}
+        {view === 'game' && (useDirectorPreflight ? <DirectorGameBridge /> : <GameBridge />)}
       </main>
     </div>
   );
