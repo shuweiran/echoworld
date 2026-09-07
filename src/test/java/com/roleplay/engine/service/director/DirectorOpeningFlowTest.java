@@ -13,21 +13,21 @@ class DirectorOpeningFlowTest {
     @SuppressWarnings("unchecked")
     void preflightStartsWithStoryDesignInsteadOfOnlyStageOrder() {
         DirectorAgentService service = new DirectorAgentService(null, null, null, null);
-        Map<String, Object> created = service.createPreflight(Map.of(
-                "scene_id", "雨夜旅店",
-                "scene_description", "暴雨封路的山间旅店",
-                "player", Map.of("name", "未然", "persona", "谨慎"),
-                "characters", List.of(
+        Map<String, Object> created = service.createPreflight(Map.ofEntries(
+                Map.entry("scene_id", "雨夜旅店"),
+                Map.entry("scene_description", "暴雨封路的山间旅店"),
+                Map.entry("player", Map.of("name", "未然", "persona", "谨慎")),
+                Map.entry("characters", List.of(
                         Map.of("name", "未然", "persona", "谨慎"),
-                        Map.of("name", "兔子", "persona", "敏锐")),
-                "relationships", List.of("未然和兔子刚认识"),
-                "entry_order", List.of("未然", "兔子"),
-                "onstage", List.of("未然", "兔子"),
-                "story_premise", "旅店中一名住客离奇失踪",
-                "story_tone", "悬疑群像",
-                "opening_situation", "停电刚恢复，所有人聚在大厅",
-                "character_goals", Map.of("兔子", "找到失踪者最后见过的人"),
-                "character_secrets", Map.of("兔子", "你收到过失踪者的求救短信")));
+                        Map.of("name", "兔子", "persona", "敏锐"))),
+                Map.entry("relationships", List.of("未然和兔子刚认识")),
+                Map.entry("entry_order", List.of("未然", "兔子")),
+                Map.entry("onstage", List.of("未然", "兔子")),
+                Map.entry("story_premise", "旅店中一名住客离奇失踪"),
+                Map.entry("story_tone", "悬疑群像"),
+                Map.entry("opening_situation", "停电刚恢复，所有人聚在大厅"),
+                Map.entry("character_goals", Map.of("兔子", "找到失踪者最后见过的人")),
+                Map.entry("character_secrets", Map.of("兔子", "你收到过失踪者的求救短信"))));
 
         Map<String, Object> plan = (Map<String, Object>) created.get("story_plan");
         assertEquals("旅店中一名住客离奇失踪", plan.get("premise"));
