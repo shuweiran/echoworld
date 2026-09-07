@@ -36,6 +36,8 @@ export function GameBridge() {
   const withPlayer = useDemoStore(s => s.withPlayer);
   const selectCtx = useDemoStore(s => s.selectCtx);
   const playerRole = useDemoStore(s => s.playerRole);
+  // D53：玩家显示名（仅前端展示；化身角色名仍走 playerName 契约）
+  const playerDisplayName = useDemoStore(s => s.playerDisplayName);
   const generatedMurder = useDemoStore(s => s.generatedMurder);
   const generatedGeneral = useDemoStore(s => s.generatedGeneral);
   // 后端场景剧本（source='backend'）——仅一般模式；剧本杀不再接 /api/scenes（列表隔离）
@@ -347,6 +349,7 @@ export function GameBridge() {
             <GalGeneralView
               sessionId={chatSessionId || generalSessionId}
               playerName={withPlayer && playerRole ? playerRole.name : undefined}
+              displayName={withPlayer && playerRole ? (playerDisplayName || playerRole.name) : undefined}
               onBack={back}
             />
           ) : (

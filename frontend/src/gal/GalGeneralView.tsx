@@ -101,11 +101,13 @@ interface GalGeneralViewProps {
   sessionId: string;
   /** 玩家名（发言用；缺省 localStorage playerId） */
   playerName?: string;
+  /** D53：玩家显示名（前端可改；仅用于「你扮演」展示，后端身份仍以 playerName/livePlayerName 为准） */
+  displayName?: string;
   /** 返回（回会话列表 / 上一页） */
   onBack?: () => void;
 }
 
-export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralViewProps) {
+export function GalGeneralView({ sessionId, playerName, displayName: customDisplayName, onBack }: GalGeneralViewProps) {
   const enterLiveMode = useGalStore(s => s.enterLiveMode);
   const exitLiveMode = useGalStore(s => s.exitLiveMode);
   const setHidePlayerBubbles = useGalStore(s => s.setHidePlayerBubbles);
@@ -335,6 +337,8 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
   // 2D（SimGalChatPanel）保持播完自动推进（组 hook，本文件只改一般模式）。
   const hasPlayer = !!String(livePlayerName || '').trim();
   const displayName = livePlayerName || '';
+  // D53：身份行展示名 = 自定义显示名（仅当后端身份已确认）；化身名（displayName）仍用于 roster/群聊/历史归属
+  const shownName = (hasPlayer && customDisplayName && customDisplayName.trim()) ? customDisplayName.trim() : displayName;
   const ambientNames = new Set(ambientRoles.map(role => role.name));
   const roleCards = [
     ...roster.filter(name => name !== displayName).map(name => ({
@@ -484,7 +488,7 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
       )}
 
       {displayName && (
-        <div className="galg-identity">🎭 你扮演：{displayName}（发言不显示气泡，输入后直接发送）</div>
+        <div className="galg-identity">🎭 你扮演：{shownName}{shownName && shownName !== displayName && <span style={{ opacity: 0.75 }}>（化身：{displayName}）</span>}（发言不显示气泡，输入后直接发送）</div>
       )}
 
       {/* ── 历史记录抽屉（右上） ── */}

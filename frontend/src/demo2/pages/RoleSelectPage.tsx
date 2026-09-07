@@ -43,6 +43,8 @@ export function RoleSelectPage() {
   const selectRole = useDemoStore(s => s.selectRole);
   const playerRole = useDemoStore(s => s.playerRole);
   const setPlayerRole = useDemoStore(s => s.setPlayerRole);
+  const playerDisplayName = useDemoStore(s => s.playerDisplayName);
+  const setPlayerDisplayName = useDemoStore(s => s.setPlayerDisplayName);
   const freeRoles = useDemoStore(s => s.freeRoles);
   const genRoles = useDemoStore(s => s.genRoles);
   const extraRoles = useDemoStore(s => s.extraRoles[ctx.scriptId ?? ''] || EMPTY_ROLES);
@@ -61,6 +63,9 @@ export function RoleSelectPage() {
   const enterRoles = useDemoStore(s => s.enterRoles);
 
   const [playerPicker, setPlayerPicker] = useState(false);
+  // D53：玩家改名内联编辑（editingName=是否展开输入框；nameDraft=草稿）
+  const [editingName, setEditingName] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
   const [addModal, setAddModal] = useState<'menu' | 'new' | 'import' | 'ai' | null>(null);
   // P-0811-G：一般模式 LLM 地图预览（null=未打开；map 由后端 /api/scenes/map 生成）
   const [mapPreview, setMapPreview] = useState<{ open: boolean; busy: boolean; map: ScriptMap | null; error: string }>({ open: false, busy: false, map: null, error: '' });
@@ -209,36 +214,74 @@ export function RoleSelectPage() {
         )}
 
         <div style={{ padding: '12px 14px' }}>
-          {/* 第一张：玩家角色（P-0810-24：加 ✕ 取消选择入口 + 不参与态显示，非删除角色） */}
+          {/* 第一张：玩家（D53：独立玩家按钮 + 显示名可改；化身角色名仍走后端 me 契约） */}
           <div style={{ marginBottom: 10 }}>
-            <div
-              className="role-chip"
-              style={{
-                borderColor: 'var(--phase-investigation)',
-                color: 'var(--phase-investigation)',
-                cursor: 'pointer',
-                opacity: playerRole && (ctx.kind !== 'general' || withPlayer) ? 1 : 0.65,
-              }}
-              title="点击选择玩家角色 · ✕ 取消选择（不参与本局，该局为导演模式）"
-              onClick={() => setPlayerPicker(true)}
-            >
-              {playerRole?.avatar ?? '🧑'} {playerRole?.name ?? '选择你的角色'}
-              <span style={{ fontSize: 10.5, opacity: 0.85 }}>
-                {ctx.kind === 'general' && (!playerRole || !withPlayer) ? '· 不参与本局（导演）' : '· 玩家角色'}
-              </span>
-              {playerRole && (
+            {!playerRole || (ctx.kind === 'general' && !withPlayer) ? (
+              <button
+                className="role-chip"
+                style={{
+                  borderColor: 'var(--phase-investigation)',
+                  color: 'var(--phase-investigation)',
+                  cursor: 'pointer',
+                }}
+                title="点击选择玩家化身角色（不选则本局为导演模式）"
+                onClick={() => setPlayerPicker(true)}
+              >
+                👤 添加玩家
+                <span style={{ fontSize: 10.5, opacity: 0.85 }}>· 不参与本局（导演）</span>
+              </button>
+            ) : (
+              <div
+                className="role-chip"
+                style={{
+                  borderColor: 'var(--phase-investigation)',
+                  color: 'var(--phase-investigation)',
+                }}
+              >
+                👤 {playerDisplayName || playerRole.name}
+                {playerDisplayName && playerDisplayName !== playerRole.name && (
+                  <span style={{ fontSize: 10.5, opacity: 0.85 }}>（化身：{playerRole.name}）</span>
+                )}
                 <span
                   className="rc-x"
-                  title="取消选择玩家角色（不参与本局，不是删除角色）"
+                  title="修改玩家显示名"
+                  onClick={e => {
+                    e.stopPropagation();
+                    setNameDraft(playerDisplayName || playerRole.name);
+                    setEditingName(v => !v);
+                  }}
+                >✏️</span>
+                <span
+                  className="rc-x"
+                  title="取消玩家角色（不参与本局 = 导演模式）"
                   onClick={e => {
                     e.stopPropagation();
                     setPlayerRole(null);
-                    // 一般模式：取消玩家角色 = 不带玩家 = 导演模式（与后端 mode=director 语义一致）
+                    setPlayerDisplayName('');
                     if (ctx.kind === 'general') setWithPlayer(false);
                   }}
                 >✕</span>
-              )}
-            </div>
+              </div>
+            )}
+            {editingName && playerRole && (
+              <input
+                value={nameDraft}
+                onChange={e => setNameDraft(e.target.value)}
+                onBlur={() => {
+                  const t = nameDraft.trim();
+                  setPlayerDisplayName(t || playerRole.name);
+                  setEditingName(false);
+                }}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                  if (e.key === 'Escape') { setNameDraft(playerDisplayName || playerRole.name); setEditingName(false); }
+                }}
+                placeholder={playerRole.name}
+                autoFocus
+                maxLength={20}
+                style={{ width: '100%', marginTop: 6, padding: '6px 10px', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 13, boxSizing: 'border-box' }}
+              />
+            )}
           </div>
 
           <div className="role-chips">
@@ -273,10 +316,11 @@ export function RoleSelectPage() {
                 </button>
               </>}
             </div>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8, fontSize: 13, color: 'var(--color-text-dim)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={withPlayer} onChange={e => setWithPlayer(e.target.checked)} style={{ width: 'auto' }} />
-              带玩家（你的化身进入场景，可直接对话/移动）—— 取消则纯 AI 观看模式
-            </label>
+            <div style={{ marginTop: 8, fontSize: 12.5, color: 'var(--color-text-dim)' }}>
+              {playerRole && withPlayer
+                ? `👤 玩家：${playerDisplayName || playerRole.name}${playerDisplayName && playerDisplayName !== playerRole.name ? `（化身：${playerRole.name}）` : ''} —— 已进场景`
+                : '👤 未添加玩家：本局为纯 AI 观看模式（导演）'}
+            </div>
           </div>
         )}
 
@@ -397,6 +441,7 @@ export function RoleSelectPage() {
                   style={{ width: '100%', marginBottom: 10 }}
                   onClick={() => {
                     setPlayerRole(null);
+                    setPlayerDisplayName('');
                     if (ctx.kind === 'general') setWithPlayer(false);
                     setPlayerPicker(false);
                   }}
@@ -406,7 +451,7 @@ export function RoleSelectPage() {
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-dim2)', padding: '2px 4px', marginBottom: 8 }}>📚 角色库（剧本杀 / 一般模式互通）</div>
                 <div className="role-chips">
                   {[...freeRoles, ...genRoles].map(r => (
-                    <button key={r.id} className="role-chip" onClick={() => { setPlayerRole(r); setPlayerPicker(false); }}>
+                    <button key={r.id} className="role-chip" onClick={() => { setPlayerRole(r); setPlayerDisplayName(playerDisplayName || r.name); if (ctx.kind === 'general') setWithPlayer(true); setPlayerPicker(false); }}>
                       {r.avatar} {r.name}<span style={{ fontSize: 10.5, opacity: 0.7 }}>·{r.source === 'ai' ? 'AI' : '自由'}</span>
                     </button>
                   ))}
@@ -414,7 +459,7 @@ export function RoleSelectPage() {
                 <div style={{ fontSize: 11.5, color: 'var(--color-text-dim2)', padding: '2px 4px', margin: '10px 0 8px' }}>📜 本剧本角色</div>
                 <div className="role-chips">
                   {defaultRoles.map(r => (
-                    <button key={r.id} className="role-chip" onClick={() => { setPlayerRole(r); setPlayerPicker(false); }}>
+                    <button key={r.id} className="role-chip" onClick={() => { setPlayerRole(r); setPlayerDisplayName(playerDisplayName || r.name); if (ctx.kind === 'general') setWithPlayer(true); setPlayerPicker(false); }}>
                       {r.avatar} {r.name}{r.hasSecret && <span className="rc-secret">🔒</span>}
                     </button>
                   ))}

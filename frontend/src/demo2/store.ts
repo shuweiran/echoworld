@@ -70,6 +70,8 @@ type ActiveGameSnapshot = {
   runMode: RunMode;
   withPlayer: boolean;
   playerRole: RoleCard | null;
+  /** D53：玩家显示名（仅前端展示，化身角色名仍走后端 me 契约） */
+  playerDisplayName: string;
 };
 
 function loadActiveGame(): Partial<ActiveGameSnapshot> {
@@ -251,8 +253,11 @@ interface DemoState {
   // 角色选择（B）
   selectedRoleId: string | null;
   playerRole: RoleCard | null;
+  /** D53：玩家显示名（可改，仅前端展示；空=未设置时回退化身角色名） */
+  playerDisplayName: string;
   selectRole: (id: string | null) => void;
   setPlayerRole: (r: RoleCard | null) => void;
+  setPlayerDisplayName: (name: string) => void;
 
   // 自由角色库
   freeRoles: RoleCard[];
@@ -348,6 +353,7 @@ export const useDemoStore = create<DemoState>((set, get) => ({
 
   selectedRoleId: null,
   playerRole: restoredGame.playerRole ?? null,
+  playerDisplayName: restoredGame.playerDisplayName ?? '',
 
   freeRoles: loadFreeRoles(),
   // P-0811-E：以下初值改为从 localStorage 恢复（见上方初始化块）
@@ -395,6 +401,7 @@ export const useDemoStore = create<DemoState>((set, get) => ({
 
   selectRole: (id) => set({ selectedRoleId: id }),
   setPlayerRole: (r) => set({ playerRole: r }),
+  setPlayerDisplayName: (name) => set({ playerDisplayName: name }),
 
   addFreeRole: (r) => {
     const next = [...get().freeRoles, r];
@@ -538,6 +545,7 @@ export const useDemoStore = create<DemoState>((set, get) => ({
       runMode: get().runMode,
       withPlayer: get().withPlayer,
       playerRole: get().playerRole,
+      playerDisplayName: get().playerDisplayName,
     };
     try {
       localStorage.setItem(ACTIVE_GAME_KEY, JSON.stringify(snapshot));
