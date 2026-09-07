@@ -9,7 +9,7 @@
  *  - 去掉：对局状态 chips（阶段/事件计数/session_id）、连接面板、快速起局区块、类型切换；
  *  - 保留：立绘切换 + 打字机 + 底部发言框 + mode 中文标签；
  *  - 立绘：≤2 分列、>2 居中切换（GalGeneralStage）；
- *  - 主控（玩家）发言不渲染气泡（hidePlayerBubbles：输入框保留，发送后清空即可）。
+ *  - 玩家发言实时显示，并插入当前正在播放的对话之后，而不是等待整轮结束。
  *
  * 数据接线：
  *  - SSE：useSSE(sessionId) → GalStore.applySseEvent（agent_output/agent_token/
@@ -150,12 +150,12 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
     setDirectorDraft('');
     setDirectorChat([{
       role: 'director',
-      text: '我是动态剧本主控。我能解释公开剧情、安排后续线索与选择；不能改写已发生的事、替你决定或直接执行世界动作。',
+      text: '我是权威主控。我负责玩家身份、角色登记与进退场、关系和场景状态；只有服务器真正执行成功后，我才会确认状态已改变。',
     }]);
     enterLiveMode(sessionId, { playerName: '' });
     sessionEpochRef.current = useGalStore.getState().liveSessionEpoch;
     void useGalStore.getState().refreshImageStatus();
-    setHidePlayerBubbles(true);
+    setHidePlayerBubbles(false);
     return () => {
       exitLiveMode();
       setHidePlayerBubbles(false);
@@ -436,7 +436,7 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
       )}
 
       {displayName && (
-        <div className="galg-identity">🎭 你扮演：{shownName}{shownName && shownName !== displayName && <span style={{ opacity: 0.75 }}>（化身：{displayName}）</span>}（发言不显示气泡，输入后直接发送）</div>
+        <div className="galg-identity">🎭 你扮演：{shownName}{shownName && shownName !== displayName && <span style={{ opacity: 0.75 }}>（化身：{displayName}）</span>}（发言会立即插入当前对话）</div>
       )}
 
       <GalHistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} sessionId={sessionId} />
@@ -459,7 +459,7 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
             {Array.isArray(storyScript.recent_changes) && storyScript.recent_changes.length > 0 && <section><small>已发生</small><ul>{storyScript.recent_changes.map((change: string, index: number) => <li key={`${index}:${change}`}>{change}</li>)}</ul></section>}
             <section>
               <small>与主控对话</small>
-              <p className="galg-story-next">主控会回应你的提问；它只能编排后续，不能替你行动或修改已发生事实。</p>
+              <p className="galg-story-next">主控可执行角色进退场、创建 NPC、关系与场景状态操作；只有服务器执行成功后才会确认。</p>
               <div style={{ display: 'grid', gap: 6, maxHeight: 180, overflowY: 'auto', marginBottom: 8 }} aria-live="polite">
                 {directorChat.map((line, index) => <p key={`${index}:${line.text}`} style={{ margin: 0, padding: '6px 8px', borderRadius: 6,
                   background: line.role === 'player' ? 'rgba(77,225,255,.12)' : 'rgba(255,209,102,.1)' }}>
@@ -471,7 +471,7 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
                   value={directorDraft}
                   onChange={e => setDirectorDraft(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') void sendDirectorChat(); }}
-                  placeholder="问主控：我现在能做什么？"
+                  placeholder="例如：添加一个叫林夏的新 NPC，性格有点怕生"
                   disabled={directorSending}
                   style={{ flex: 1, minWidth: 0 }}
                 />
