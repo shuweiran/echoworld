@@ -12,6 +12,7 @@ import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.SessionRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -23,6 +24,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Player-facing Director Agent.
@@ -37,6 +40,10 @@ public class DirectorAgentService {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final String STATE_NAME = "director_state";
     private static final String TRACK = "director";
+    private static final Pattern NPC_NAME_PATTERN = Pattern.compile(
+            "(?:叫|名叫|名字(?:叫|是)?|角色名(?:叫|是)?)[「『\\\"'“‘]?([^，。；;、\\s」』\\\"'”’]{1,24})");
+    private static final Pattern NPC_PERSONA_PATTERN = Pattern.compile(
+            "(?:性格|人设|设定)(?:是|为|：|:)?([^。；;]{1,180})");
 
     private static final String SYSTEM_PROMPT = """
             你是 EchoWorld 的玩家侧主控 Agent，不是剧中角色，也不是普通旁白生成器。
@@ -47,13 +54,16 @@ public class DirectorAgentService {
             3. 你不能重写已发生事实，也不能把“打算执行”说成“已经执行”。
             4. 世界状态只由服务器提供的【主控权威状态】决定。你只能提出结构化操作，服务器执行后才会确认结果。
             5. 不得因为一句“让某角色进入场景”而把整个开局流程标记为 confirmed；只有玩家明确确认开始/进入游戏才可 CONFIRM。
-            6. 回复简短、清楚，不写长篇剧情。
+            6. 创建新 NPC 时必须给出名字；persona/voice/background 可按玩家提供的信息填写，未提供就留空。不得声称创建成功，必须等服务器确认。
+            7. 回复简短、清楚，不写长篇剧情。
 
             必须只返回 JSON，不要 markdown：
             {"reply":"给玩家的简短说明","operations":[...]}
             operations 支持：
             {"type":"SET_STAGE","character":"角色名","present":true|false}
+            {"type":"CREATE_NPC","character":"角色名","persona":"人设","voice":"说话风格","background":"背景","present":true|false}
             {"type":"SET_ENTRY_ORDER","characters":["甲","乙"]}
+            {"type":"SET_RELATION","text":"关系事实"}
             {"type":"ADD_RELATION","text":"关系事实"}
             {"type":"ADD_SCENE_NOTE","text":"场景事实"}
             {"type":"CONFIRM"}
@@ -107,7 +117,11 @@ public class DirectorAgentService {
         List<String> applied = new ArrayList<>();
         List<String> rejected = new ArrayList<>();
         for (Operation op : plan.operations()) {
-            applyToState(state, op, input, applied, rejected);
+            if ("CREATE_NPC".equals(op.type())) {
+                applyCreateNpc(null, state, op, applied, rejected);
+            } else {
+                applyToState(state, op, input, applied, rejected);
+            }
         }
         // Defense in depth: character-entry language is not permission to open the game gate.
         if (state.confirmed() && !isExplicitEntryConfirmation(input)) {
@@ -139,10 +153,7 @@ public class DirectorAgentService {
         for (Map<String, Object> c : state.cast()) {
             String name = string(c, "name", "");
             if (name.isBlank()) continue;
-            Persona p = new Persona(name);
-            p.setPersonaDesc(string(c, "persona", string(c, "personality", string(c, "intro", ""))));
-            p.setVoice(string(c, "voice", string(c, "talk_style", string(c, "talkStyle", ""))));
-            p.setBackground(string(c, "background", ""));
+            Persona p = personaFrom(c);
             characters.attachPersonaCard(p);
             personas.add(p);
         }
@@ -189,7 +200,9 @@ public class DirectorAgentService {
         List<String> applied = new ArrayList<>();
         List<String> rejected = new ArrayList<>();
         for (Operation op : plan.operations()) {
-            if ("SET_STAGE".equals(op.type())) {
+            if ("CREATE_NPC".equals(op.type())) {
+                applyCreateNpc(router, state, op, applied, rejected);
+            } else if ("SET_STAGE".equals(op.type())) {
                 applyRuntimeStage(router, state, op, applied, rejected);
             } else {
                 applyToState(state, op, input, applied, rejected);
@@ -201,6 +214,81 @@ public class DirectorAgentService {
         persist(state, true);
         persist(state, false);
         return runtimeResponse(state, router, reply, applied, rejected);
+    }
+
+    /**
+     * CREATE_NPC is a transactional Director operation. Text is never treated as success:
+     * global character persistence, live Agent registration (when runtime), and Director
+     * roster/onstage state must all succeed before an applied result is returned.
+     */
+    private void applyCreateNpc(RouterService router, DirectorSession state, Operation op,
+                                List<String> applied, List<String> rejected) {
+        String name = safe(op.character());
+        if (name.isBlank()) {
+            rejected.add("创建 NPC 需要角色名");
+            return;
+        }
+        if (state.knowsCharacter(name)) {
+            rejected.add("角色已在当前剧本角色表中: " + name);
+            return;
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("name", name);
+        body.put("persona", safe(op.persona()));
+        body.put("voice", safe(op.voice()));
+        body.put("background", safe(op.background()));
+        boolean persisted = false;
+        boolean liveAdded = false;
+        try {
+            ResponseEntity<?> createdResponse = characters.create(body);
+            if (!createdResponse.getStatusCode().is2xxSuccessful()) {
+                rejected.add("NPC 创建失败: " + name + "（" + safe(String.valueOf(createdResponse.getBody())) + "）");
+                return;
+            }
+            persisted = true;
+            Map<String, Object> created = object(createdResponse.getBody());
+            if (created.isEmpty()) created.putAll(body);
+
+            if (router != null) {
+                Persona persona = personaFrom(created);
+                characters.attachPersonaCard(persona);
+                router.addWorldAgent(name, persona);
+                liveAdded = true;
+                if (!op.present() && !router.suspendWorldAgent(name)) {
+                    throw new IllegalStateException("新角色创建后无法进入离场保留槽");
+                }
+            }
+
+            DirectorSession.RegisterResult registered = state.registerCharacter(created, op.present());
+            if (!registered.accepted()) throw new IllegalStateException(registered.detail());
+            applied.add(registered.detail());
+        } catch (RuntimeException e) {
+            if (router != null && liveAdded) {
+                try { router.removeWorldAgent(name); }
+                catch (RuntimeException rollbackError) {
+                    log.warn("Rollback live NPC failed for {}: {}", name, rollbackError.getMessage());
+                }
+            }
+            if (persisted) {
+                try { characters.delete(name); }
+                catch (RuntimeException rollbackError) {
+                    log.warn("Rollback persisted NPC failed for {}: {}", name, rollbackError.getMessage());
+                }
+            }
+            rejected.add("NPC 创建失败: " + name + "（" + safe(e.getMessage()) + "）");
+        }
+    }
+
+    private static Persona personaFrom(Map<String, Object> character) {
+        String name = string(character, "name", "");
+        Persona p = new Persona(name);
+        p.setPersonaDesc(string(character, "persona",
+                string(character, "personality", string(character, "intro", ""))));
+        p.setVoice(string(character, "voice",
+                string(character, "talk_style", string(character, "talkStyle", ""))));
+        p.setBackground(string(character, "background", ""));
+        return p;
     }
 
     private void applyRuntimeStage(RouterService router, DirectorSession state, Operation op,
@@ -251,7 +339,7 @@ public class DirectorAgentService {
                 state.setEntryOrder(op.characters());
                 applied.add("出场顺序已更新");
             }
-            case "ADD_RELATION" -> {
+            case "ADD_RELATION", "SET_RELATION" -> {
                 if (op.text().isBlank()) rejected.add("关系内容为空");
                 else { state.addRelationship(op.text()); applied.add("关系事实已记录"); }
             }
@@ -308,8 +396,12 @@ public class DirectorAgentService {
                     if (type.isBlank()) continue;
                     List<String> order = new ArrayList<>();
                     if (op.path("characters").isArray()) op.path("characters").forEach(n -> order.add(n.asText()));
-                    operations.add(new Operation(type, op.path("character").asText(""),
-                            op.path("present").asBoolean(false), order, op.path("text").asText("")));
+                    boolean present = "CREATE_NPC".equals(type)
+                            ? (!op.has("present") || op.path("present").asBoolean(true))
+                            : op.path("present").asBoolean(false);
+                    operations.add(new Operation(type, op.path("character").asText(""), present,
+                            order, op.path("text").asText(""), op.path("persona").asText(""),
+                            op.path("voice").asText(""), op.path("background").asText("")));
                 }
             }
             return new Plan(reply, operations);
@@ -322,6 +414,10 @@ public class DirectorAgentService {
     Plan fallbackPlan(DirectorSession state, String input, boolean preflight) {
         List<Operation> ops = new ArrayList<>();
         String text = input == null ? "" : input.trim();
+
+        Operation createNpc = deterministicNpcOperation(text);
+        if (createNpc != null && !state.knowsCharacter(createNpc.character())) ops.add(createNpc);
+
         for (Map<String, Object> c : state.cast()) {
             String name = string(c, "name", "");
             if (name.isBlank() || !text.contains(name)) continue;
@@ -336,6 +432,23 @@ public class DirectorAgentService {
         }
         if (preflight && isExplicitEntryConfirmation(text)) ops.add(Operation.confirm());
         return new Plan(asksState(text) ? state.stateSummary() : "", ops);
+    }
+
+    /** Basic offline coverage for commands such as “添加一个叫林夏的新 NPC，性格有点怕生”. */
+    private static Operation deterministicNpcOperation(String text) {
+        if (text == null || text.isBlank()) return null;
+        String lower = text.toLowerCase(Locale.ROOT);
+        boolean createVerb = containsAny(text, "创建", "添加", "新增", "加一个", "加个", "生成", "安排一个");
+        boolean roleNoun = lower.contains("npc") || containsAny(text, "新角色", "新人物", "路人", "角色");
+        if (!createVerb || !roleNoun) return null;
+        Matcher nameMatcher = NPC_NAME_PATTERN.matcher(text);
+        if (!nameMatcher.find()) return null;
+        String name = safe(nameMatcher.group(1));
+        if (name.isBlank()) return null;
+        Matcher personaMatcher = NPC_PERSONA_PATTERN.matcher(text);
+        String persona = personaMatcher.find() ? safe(personaMatcher.group(1)) : "";
+        boolean present = !containsAny(text, "先不要进场", "暂不进场", "先不进场", "先离场", "暂时离场");
+        return Operation.createNpc(name, persona, "", "", present);
     }
 
     public static boolean isExplicitEntryConfirmation(String text) {
@@ -510,10 +623,16 @@ public class DirectorAgentService {
     private record Plan(String reply, List<Operation> operations) {}
 
     private record Operation(String type, String character, boolean present,
-                             List<String> characters, String text) {
+                             List<String> characters, String text,
+                             String persona, String voice, String background) {
         static Operation stage(String character, boolean present) {
-            return new Operation("SET_STAGE", character, present, List.of(), "");
+            return new Operation("SET_STAGE", character, present, List.of(), "", "", "", "");
         }
-        static Operation confirm() { return new Operation("CONFIRM", "", false, List.of(), ""); }
+        static Operation createNpc(String character, String persona, String voice, String background, boolean present) {
+            return new Operation("CREATE_NPC", character, present, List.of(), "", persona, voice, background);
+        }
+        static Operation confirm() {
+            return new Operation("CONFIRM", "", false, List.of(), "", "", "", "");
+        }
     }
 }
