@@ -325,10 +325,12 @@ public class DirectorAgentService {
         for (Map<String, Object> c : state.cast()) {
             String name = string(c, "name", "");
             if (name.isBlank() || !text.contains(name)) continue;
-            String tail = text.substring(text.indexOf(name));
-            if (containsAny(tail, "离场", "出去", "退场", "先走", "先等等", "暂时不在场")) {
+            // Only inspect the punctuation-delimited clause containing this character.
+            // This prevents “兔子在场，鲸鱼离场” from accidentally applying “离场” to 兔子.
+            String clause = clauseForCharacter(text, name);
+            if (containsAny(clause, "离场", "出去", "退场", "先走", "先等等", "暂时不在场")) {
                 ops.add(Operation.stage(name, false));
-            } else if (containsAny(tail, "进场", "进来", "回来", "拉进来", "加入场景", "在场")) {
+            } else if (containsAny(clause, "进场", "进入场景", "进来", "回来", "拉进来", "加入场景", "在场")) {
                 ops.add(Operation.stage(name, true));
             }
         }
@@ -340,6 +342,21 @@ public class DirectorAgentService {
         String s = text == null ? "" : text.replaceAll("\\s+", "");
         return containsAny(s, "确认进入场景", "确认开始", "确认开局", "正式开始", "开始吧",
                 "可以开始", "可以进场", "进入游戏", "就这样吧", "按这个来");
+    }
+
+    private static String clauseForCharacter(String text, String character) {
+        int index = text.indexOf(character);
+        if (index < 0) return "";
+        int start = index;
+        while (start > 0 && !isClauseSeparator(text.charAt(start - 1))) start--;
+        int end = index + character.length();
+        while (end < text.length() && !isClauseSeparator(text.charAt(end))) end++;
+        return text.substring(start, end);
+    }
+
+    private static boolean isClauseSeparator(char c) {
+        return c == '，' || c == ',' || c == '。' || c == '.' || c == '；' || c == ';'
+                || c == '！' || c == '!' || c == '？' || c == '?' || c == '\n' || c == '\r';
     }
 
     private static boolean asksState(String text) {
