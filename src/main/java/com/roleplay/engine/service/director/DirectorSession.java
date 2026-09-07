@@ -101,6 +101,24 @@ public final class DirectorSession {
                 : target + (present ? " 已经在场" : " 已经离场"));
     }
 
+    /**
+     * Register a new story-scoped character after the authoritative runtime has
+     * successfully created it. Registration never overwrites an existing cast member.
+     */
+    public synchronized RegisterResult registerCharacter(Map<String, Object> character, boolean present) {
+        if (character == null) return new RegisterResult(false, "角色数据为空");
+        Map<String, Object> copy = safeObject(character);
+        String name = clean(copy.get("name"), 80);
+        if (name.isBlank()) return new RegisterResult(false, "角色名为空");
+        if (cast.containsKey(name)) return new RegisterResult(false, "角色已在当前剧本角色表中: " + name);
+        copy.put("name", name);
+        cast.put(name, copy);
+        if (!entryOrder.contains(name)) entryOrder.add(name);
+        if (present) onstage.add(name); else onstage.remove(name);
+        touch();
+        return new RegisterResult(true, name + (present ? " 已创建并进场" : " 已创建，当前离场"));
+    }
+
     public synchronized void setEntryOrder(Collection<String> order) {
         entryOrder.clear();
         if (order != null) {
@@ -289,6 +307,7 @@ public final class DirectorSession {
     }
 
     public record StageResult(boolean accepted, String detail) {}
+    public record RegisterResult(boolean accepted, String detail) {}
 
     public record DirectorMessage(String role, String content, String at) {
         public DirectorMessage {
