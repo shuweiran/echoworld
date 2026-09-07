@@ -16,11 +16,36 @@ export interface DirectorState {
   messages: Array<{ role: string; content: string; at?: string }>;
 }
 
+export interface DirectorRelationship {
+  from: string;
+  to: string;
+  relation: string;
+  detail: string;
+}
+
+export interface DirectorStoryPlan {
+  premise?: string;
+  tone?: string;
+  opening_situation?: string;
+  stakes?: string;
+  scene_identities?: Record<string, string>;
+  structured_relationships?: DirectorRelationship[];
+  character_goals?: Record<string, string>;
+  character_secrets?: Record<string, string>;
+  story_beats?: string[];
+  opening_events?: string[];
+  world_facts?: string[];
+  your_goal?: string;
+  your_secret?: string;
+  hidden_plan?: boolean;
+}
+
 export interface DirectorResponse {
   reply?: string;
   applied?: string[];
   rejected?: string[];
   state?: DirectorState;
+  story_plan?: DirectorStoryPlan;
   active_agents?: string[];
   session_id?: string;
   goals?: unknown;
