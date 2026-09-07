@@ -109,6 +109,50 @@ class DirectorAgentServiceTest {
         assertTrue(restored.authoritativeDirective().contains("鲸鱼稍后从门外进入"));
     }
 
+    @Test
+    void dynamicNpcRegistrationAddsRosterAndStageWithoutReplacingExistingCharacters() {
+        DirectorSession state = sampleSession();
+        DirectorSession.RegisterResult result = state.registerCharacter(
+                role("林夏", "怕生、谨慎，但会观察周围人的情绪"), true);
+
+        assertTrue(result.accepted());
+        assertTrue(state.knowsCharacter("林夏"));
+        assertTrue(state.onstage().contains("林夏"));
+        assertTrue(state.entryOrder().contains("林夏"));
+        assertEquals("活泼敏锐", state.cast().stream()
+                .filter(c -> "兔子".equals(c.get("name")))
+                .findFirst().orElseThrow().get("persona"));
+        assertTrue(state.authoritativeDirective().contains("林夏"));
+    }
+
+    @Test
+    void dynamicNpcRegistrationCanStartOffstageAndRejectsDuplicateName() {
+        DirectorSession state = sampleSession();
+        DirectorSession.RegisterResult first = state.registerCharacter(
+                role("林夏", "安静的临时服务员"), false);
+        DirectorSession.RegisterResult duplicate = state.registerCharacter(
+                role("林夏", "恶意覆盖的人设"), true);
+
+        assertTrue(first.accepted());
+        assertFalse(duplicate.accepted());
+        assertFalse(state.onstage().contains("林夏"));
+        assertTrue(state.offstageNames().contains("林夏"));
+        assertEquals("安静的临时服务员", state.cast().stream()
+                .filter(c -> "林夏".equals(c.get("name")))
+                .findFirst().orElseThrow().get("persona"));
+    }
+
+    @Test
+    void dynamicNpcSurvivesDirectorStateRoundTrip() {
+        DirectorSession state = sampleSession();
+        assertTrue(state.registerCharacter(role("林夏", "怕生"), true).accepted());
+
+        DirectorSession restored = DirectorSession.fromMap(state.toMap());
+        assertTrue(restored.knowsCharacter("林夏"));
+        assertTrue(restored.onstage().contains("林夏"));
+        assertTrue(restored.entryOrder().contains("林夏"));
+    }
+
     private static DirectorSession sampleSession() {
         Map<String, Object> player = new LinkedHashMap<>();
         player.put("name", "未然");
