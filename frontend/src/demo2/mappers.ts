@@ -95,7 +95,7 @@ export function v1ScriptToMurder(
  * P-0811-E（追加）：llmRoles 可选——后端场景生成附带的配套角色（已自动落库，表层映射为 RoleCard）
  * 作为新场景的角色列表（替代预置占位角色）；缺省/空时回退本地 3 个占位角色（角色/地图为本地结构非 AI mock）。
  */
-export function assembleGeneralScript(name: string, desc: string, llmRoles?: RoleCard[], worldRenderer: 'general' | 'phaser-2d' | 'unity-3d' = 'phaser-2d'): GeneralScript {
+export function assembleGeneralScript(name: string, desc: string, llmRoles?: RoleCard[], worldRenderer: 'general' | 'phaser-2d' | 'unity-3d' = 'phaser-2d', noRoles = false): GeneralScript {
   const t = name.trim() || '自定义世界';
   const text = (desc && desc.trim()) ? desc.trim() : `一段关于「${t}」的旅程从这里开始。`;
   const id = `gen_${uid('g')}`;
@@ -111,7 +111,8 @@ export function assembleGeneralScript(name: string, desc: string, llmRoles?: Rol
     source: 'ai',
     homeScripts: [],
   });
-  const roles = (llmRoles && llmRoles.length > 0)
+  // P-0907-D：noRoles=true（未勾选「同步生成角色」）→ 场景不装配任何角色；否则 LLM 角色优先，缺省回退本地占位
+  const roles = noRoles ? [] : (llmRoles && llmRoles.length > 0)
     ? llmRoles.map((r, i) => ({ ...r, id: r.id || `gen_role_${id}_${i}`, homeScripts: [id] }))
     : [
         mk(0, `在这片「${t}」世界中生活的角色。`),

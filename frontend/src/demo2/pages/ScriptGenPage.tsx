@@ -90,9 +90,10 @@ export function ScriptGenPage() {
       const desc = String(r?.description || mockGenerateSceneDesc(prompt));
       // P-0811-E（追加）：场景配套角色（后端已自动落库）→ 映射 RoleCard → 作为新场景角色列表（替代预置占位角色）
       const roleList = Array.isArray(r?.roles) ? r.roles : [];
-      roleCount = roleList.length;
-      const llmRoles = roleList.map((x: any, i: number) => v1RoleToRoleCard(x, i, []));
-      g = assembleGeneralScript(name, desc, llmRoles, worldRenderer);
+      // P-0907-D：未勾选「同步生成角色」→ 不装配后端配套角色、不计入文案（占位角色也不再回退）
+      roleCount = syncRolesGen ? roleList.length : 0;
+      const llmRoles = syncRolesGen ? roleList.map((x: any, i: number) => v1RoleToRoleCard(x, i, [])) : undefined;
+      g = assembleGeneralScript(name, desc, llmRoles, worldRenderer, !syncRolesGen);
     } catch (e: any) {
       fellBack = true;
       g = mockGenerateGeneral(prompt.trim() || '自定义世界', mockGenerateSceneDesc(prompt));
@@ -123,7 +124,8 @@ export function ScriptGenPage() {
         setGenNotice(`LLM 生成失败，已用本地模板兜底。（原因：${String(e?.message || '未知错误')}）`);
       }
     }
-    const g = assembleGeneralScript(desc, text, undefined, worldRenderer);
+    // P-0907-D：手动路径同样受同步角色开关控制（未勾选 → 无占位角色）
+    const g = assembleGeneralScript(desc, text, undefined, worldRenderer, !syncRolesGen);
     setGeneratedGeneral(g);
     if (syncRolesGen) addGenRoles(g.roles.map(r => ({ ...r, source: 'ai' as const })));
     // 生成成功直接进入角色选择页

@@ -7,7 +7,7 @@
  * - 后端通用 scene 不再通过 scene_id 前缀强转成 MurderScript；狼人杀和旧 script_* 记录也不混入一般模式。
  * - 删除入口：预设不可删；生成/导入置空 localStorage 槽位；后端场景走 DELETE /api/scenes/{id}。
  */
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useDemoStore } from '../store';
 import { getGeneralScripts, getMurderScripts } from '../mockData';
 import type { GameMode } from '../store';
@@ -33,31 +33,11 @@ function sourceLabel(s: ScriptLike): string {
 }
 
 /**
- * 删除剧本入口（点击卡片 ✕ 触发）。
- * 预设 → 提示不可删（拦截）；生成/导入 → confirm 后置空 localStorage 槽位；
- * backend → confirm 后调 api.deleteScene(id)，成功则 removeBackendScript 从 store 移除。
+ * P-0907-D：删除交互重构 —— 预设场景卡不渲染 ✕（不可删则无入口）；
+ * 可删卡走内联二次确认（组件内 confirmingId 状态），不再依赖 window.confirm/alert
+ * （沙箱/内置浏览器环境原生弹窗不可见或行为不稳，曾导致「点 ✕ 没反应」）。
+ * 组件内实现 requestDelete（设置确认态）/ doDelete（执行删除 + 内联错误提示）。
  */
-async function handleDelete(e: React.MouseEvent, kind: 'murder' | 'general', s: ScriptLike): Promise<void> {
-  e.stopPropagation(); // 不触发卡片「进入角色选择」
-  if (isPreset(s)) {
-    window.alert('预设剧本不可删除（内置剧本为代码常量）');
-    return;
-  }
-  if ((s.source as string) === 'backend') {
-    if (!window.confirm(`确定删除后端场景「${s.title}」吗？删除后将同步从服务器移除。`)) return;
-    try {
-      await api.deleteScene(s.id);
-      useDemoStore.getState().removeBackendScript(s.id);
-    } catch (err: any) {
-      window.alert(`删除失败：${String(err?.message || '未知错误')}`);
-    }
-    return;
-  }
-  if (!window.confirm(`确定删除剧本「${s.title}」吗？删除后将从列表中移除。`)) return;
-  const store = useDemoStore.getState();
-  if (kind === 'murder') store.setGeneratedMurder(null);
-  else store.setGeneratedGeneral(null);
-}
 
 /**
  * 兼容 /api/scenes 的两种历史响应形态：
@@ -80,6 +60,32 @@ export function ScriptSelectPage() {
   const generatedMurder = useDemoStore(s => s.generatedMurder);
   const generatedGeneral = useDemoStore(s => s.generatedGeneral);
   const backendGeneral = useDemoStore(s => s.backendGeneral);
+
+  // P-0907-D：删除交互状态（内联二次确认，替代原生 confirm）
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
+  const [delError, setDelError] = useState('');
+  const requestDelete = (e: React.MouseEvent, s: ScriptLike) => {
+    e.stopPropagation(); // 不触发卡片「进入角色选择」
+    if (isPreset(s)) return; // 预设卡不渲染 ✕，此处防御
+    setDelError('');
+    setConfirmingId(s.id);
+  };
+  const doDelete = async (e: React.MouseEvent, kind: 'murder' | 'general', s: ScriptLike) => {
+    e.stopPropagation();
+    setConfirmingId(null);
+    if ((s.source as string) === 'backend') {
+      try {
+        await api.deleteScene(s.id);
+        useDemoStore.getState().removeBackendScript(s.id);
+      } catch (err: any) {
+        setDelError(`删除失败：${String(err?.message || '未知错误')}`);
+      }
+      return;
+    }
+    const store = useDemoStore.getState();
+    if (kind === 'murder') store.setGeneratedMurder(null);
+    else store.setGeneratedGeneral(null);
+  };
 
   // 剧本杀只接受真正的 MurderScript 数据源（生成 → 预设），不接 /api/scenes。
   const murders = useMemo(() => {
@@ -129,6 +135,7 @@ export function ScriptSelectPage() {
       <div className="page-head">
         <h2>📜 剧本选择</h2>
         <span className="page-sub">挑选一个剧本，进入角色选择。</span>
+        {delError && <span style={{ display: 'block', marginTop: 6, color: 'var(--color-danger)', fontSize: 12.5 }}>{delError}</span>}
         <div className="chip-row" style={{ marginLeft: 'auto', marginBottom: 0 }}>
           {!MOBILE_BUILD && <button
             className={`chip2 ${mode === 'murder' ? 'active' : ''}`}
@@ -162,12 +169,14 @@ export function ScriptSelectPage() {
                   <div className="si-top">
                     <span className="si-title">📜 {s.title}</span>
                     <span className="tag2 tag2-gold" style={{ marginLeft: 'auto' }}>{s.tags[0]}</span>
-                    <button
-                      type="button"
-                      className={`si-del${isPreset(s) ? ' si-del-disabled' : ''}`}
-                      title={isPreset(s) ? '预设剧本不可删除' : '删除剧本'}
-                      onClick={(e) => { void handleDelete(e, 'murder', s); }}
-                    >✕</button>
+                    {!isPreset(s) && (confirmingId === s.id ? (
+                      <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', marginLeft: 6 }}>
+                        <button type="button" className="si-del" title="确认删除" onClick={(e) => { void doDelete(e, 'murder', s); }}>确认</button>
+                        <button type="button" className="si-del" title="取消" onClick={(e) => { e.stopPropagation(); setConfirmingId(null); }}>✗</button>
+                      </span>
+                    ) : (
+                      <button type="button" className="si-del" title="删除剧本" onClick={(e) => { void requestDelete(e, s); }}>✕</button>
+                    ))}
                   </div>
                   <div className="si-meta">
                     <span>👥 {s.playerMin}-{s.playerMax} 人</span>
@@ -195,12 +204,14 @@ export function ScriptSelectPage() {
                   <div className="si-top">
                     <span className="si-title">{s.emoji} {s.title}</span>
                     <span className="tag2 tag2-cyan" style={{ marginLeft: 'auto' }}>{s.theme}</span>
-                    <button
-                      type="button"
-                      className={`si-del${isPreset(s) ? ' si-del-disabled' : ''}`}
-                      title={isPreset(s) ? '预设剧本不可删除' : '删除剧本'}
-                      onClick={(e) => { void handleDelete(e, 'general', s); }}
-                    >✕</button>
+                    {!isPreset(s) && (confirmingId === s.id ? (
+                      <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', marginLeft: 6 }}>
+                        <button type="button" className="si-del" title="确认删除" onClick={(e) => { void doDelete(e, 'general', s); }}>确认</button>
+                        <button type="button" className="si-del" title="取消" onClick={(e) => { e.stopPropagation(); setConfirmingId(null); }}>✗</button>
+                      </span>
+                    ) : (
+                      <button type="button" className="si-del" title="删除剧本" onClick={(e) => { void requestDelete(e, s); }}>✕</button>
+                    ))}
                   </div>
                   <div className="si-meta">
                     <span>👤 {s.roles.length} 角色</span>

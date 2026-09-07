@@ -53,6 +53,7 @@ export function RoleSelectPage() {
   const removeExtraRole = useDemoStore(s => s.removeExtraRole);
   const effectiveScriptRoles = useDemoStore(s => s.effectiveScriptRoles);
   const removedScriptRoles = useDemoStore(s => s.removedScriptRoles);
+  const removeScriptRole = useDemoStore(s => s.removeScriptRole);
   const runMode = useDemoStore(s => MOBILE_BUILD ? 'chat' : s.runMode);
   const setRunMode = useDemoStore(s => s.setRunMode);
   const withPlayer = useDemoStore(s => s.withPlayer);
@@ -71,9 +72,11 @@ export function RoleSelectPage() {
   const [mapPreview, setMapPreview] = useState<{ open: boolean; busy: boolean; map: ScriptMap | null; error: string }>({ open: false, busy: false, map: null, error: '' });
   // P-0818-H：大型地图（原独立「大型结构」页迁入一般模式 2D 探索选项）
   const [largeMapOpen, setLargeMapOpen] = useState(false);
-  const [newRole, setNewRole] = useState<RoleFormValues>(() => ({
+  // P-0907-D：空表单工厂——每次「新增自定义角色」打开/添加成功都重置，防止字段继承到下一个角色
+  const emptyRoleForm = (): RoleFormValues => ({
     ...roleToForm({ id: '', name: '', avatar: AVATARS[0], intro: '', personality: '', talkStyle: '', hasSecret: false, source: 'free', homeScripts: [] }),
-  }));
+  });
+  const [newRole, setNewRole] = useState<RoleFormValues>(() => emptyRoleForm());
   const closeModal = () => setAddModal(null);
 
   const generatedMurder = useDemoStore(s => s.generatedMurder);
@@ -178,11 +181,12 @@ export function RoleSelectPage() {
       {r.hasSecret && <span className="rc-secret">🔒</span>}
       <span
         className="rc-x"
-        title={isExtra ? '删除此角色' : '熄灭（不进游戏）'}
+        title="从本场景删除此角色（点亮/点暗请点卡片本体）"
         onClick={e => {
           e.stopPropagation();
+          // P-0907-D：✕ = 直接从场景删除角色卡（点卡片本体才是点亮/点暗）
           if (isExtra) removeExtraRole(scriptKey, r.id);
-          else toggleRole(r);
+          else removeScriptRole(scriptKey, r.id);
         }}
       >✕</span>
     </div>
@@ -486,6 +490,7 @@ export function RoleSelectPage() {
                 if (!newRole.name.trim()) return;
                 const r = formToRole(newRole, { id: uid('newrole'), source: 'free', homeScripts: ctx.scriptId ? [ctx.scriptId] : [] });
                 addRoleAndLight(r);
+                setNewRole(emptyRoleForm()); // 重置表单，避免字段继承到下一个角色
                 closeModal();
               }}>添加</button>
             </div>
@@ -558,7 +563,7 @@ export function RoleSelectPage() {
               <button className="modal-close" onClick={closeModal}>✕</button>
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <button className="role-add" onClick={() => setAddModal('new')}>✨ 新增自定义角色（手动）</button>
+              <button className="role-add" onClick={() => { setNewRole(emptyRoleForm()); setAddModal('new'); }}>✨ 新增自定义角色（手动）</button>
               <button className="role-add" onClick={() => setAddModal('ai')}>🤖 AI 生成角色</button>
               <button className="role-add" onClick={() => setAddModal('import')}>📥 从角色库或其他剧本导入角色</button>
             </div>
