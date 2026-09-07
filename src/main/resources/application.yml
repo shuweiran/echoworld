@@ -288,14 +288,14 @@ roleplay:
   ai-image:
     # provider=comfyui 保持当前本地默认；openai-compatible 改用外部 /images/generations
     provider: "comfyui"
-    # P-0810-01（本地 ComfyUI + Pony V6 XL 角色表情集预生成）：
+    # 本地 ComfyUI + NoobAI-XL 二次元半身像（角色表情集预生成）：
     #   comfyui-base-url=本地 ComfyUI API 地址（POST /prompt + GET /history/{id} + GET /view）
     #   output-dir=生成图片落盘目录（默认 src/main/resources/static/ai-images，URL 直接 /ai-images/...，
     #     AiImageConfig 另注册 file: 资源映射兜底，jar 运行亦可达；同目录族 ./data/ 可选）
     #   pool-size=生成线程池大小（同时并发提交给 ComfyUI 的任务数）
     #   timeout-seconds=单图生成总超时（提交+轮询，超时任务标记失败）
     #   poll-interval-ms=/history 轮询间隔
-    #   lora-name=Pony 像素风 LoRA 文件名（空=不使用 LoRA，工作流自动改接 UNETLoader/CLIPLoader）
+    #   lora-name=风格 LoRA 文件名（默认空=不使用 LoRA，正常二次元直出；工作流自动改接）
     #   rmbg-model=P-0810-04 RMBG-1.4 抠背景 ONNX 模型路径（不存在=跳过抠图降级保留原图）
     #   rmbg-enabled=P-0810-04 抠背景总开关（默认 true；false=只存原图不产透明版）
     #   img2img-denoise=P-0810-05 表情 img2img 强度（默认 0.5；0.45 实测脸型/发型/服装 100% 保持）
@@ -310,19 +310,19 @@ roleplay:
     pool-size: 2
     timeout-seconds: 300
     poll-interval-ms: 1000
-    lora-name: "pixel_art_sakuemonq_pony.safetensors"
-    rmbg-model: "${ROLEPLAY_RMBG_MODEL:}"
+    lora-name: ""
+    rmbg-model: 'D:/echoworld/models/rmbg/rmbg-1.4.onnx'
     rmbg-enabled: true
     img2img-denoise: 0.5
     characters:
       - id: "heroine"
         name: "小铃"
         appearance: "silver long hair, purple eyes, 16-year-old japanese girl, white kimono with red ribbons"
-        style: "retro game character art style, 16-bit pixel art, clean outlines, flat colors"
+        style: "modern anime illustration style, clean lineart, soft cel shading, vibrant colors"
       - id: "knight"
         name: "凯尔"
         appearance: "golden short hair, blue eyes, handsome young knight, silver and blue armor"
-        style: "retro game character art style, 16-bit pixel art, clean outlines, flat colors"
+        style: "modern anime illustration style, clean lineart, soft cel shading, vibrant colors"
   broadcast:
     # 演讲与广播合并地基：公告管线节流参数（AnnouncementService 读取）
     window-ms: 1000       # 滑动窗口长度

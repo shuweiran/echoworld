@@ -1171,7 +1171,7 @@
 /* 正文：舒适行距 + 温和字色 */
 .sim-gal-chat .gal-dialog-text {
   font-size: 14px;
-  line-height: 1.8;
+  line-height: 1.5;
   min-height: 44px;
   letter-spacing: 0.03em;
   color: #e8edff;

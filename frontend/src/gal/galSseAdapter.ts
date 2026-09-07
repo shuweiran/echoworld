@@ -82,11 +82,16 @@ export function startLiveSync(sessionId: string, store?: GalStoreApi): () => voi
   // P-0815-F 批3（方向5）：per-instance 支持——宿主面板（ScriptGalChatPanel 等）自建 store 实例传入；
   // 未传时回退默认单例（旧调用点零改动）。
   const stApi = store ?? useGalStore;
+  const sessionEpoch = stApi.getState().liveSessionEpoch;
+  const isCurrent = () => {
+    const current = stApi.getState();
+    return current.liveMode && current.liveSessionId === sessionId && current.liveSessionEpoch === sessionEpoch;
+  };
   // 每实例独立定时器（旧实现模块级单 timer，多面板并存时相互覆盖）
   let syncTimer: ReturnType<typeof setInterval> | null = null;
   const syncOnce = async () => {
     const st = stApi.getState();
-    if (!st.liveMode) return;
+    if (!isCurrent()) return;
     const player = st.livePlayerName || '';
 
     // 狼人杀探测（显式 session_id，可靠）
@@ -94,6 +99,7 @@ export function startLiveSync(sessionId: string, store?: GalStoreApi): () => voi
       const playerKey = st.livePlayerKey || '';
       if (!player || !playerKey) throw new Error('狼人杀身份凭据尚未就绪');
       const ww: any = await api.werewolfStatus(sessionId, player, playerKey);
+      if (!isCurrent()) return;
       if (ww && ww.phase && ww.phase !== 'idle' && !ww.game_over) {
         st.setLiveGameType('werewolf', ww.phase);
       }
@@ -104,6 +110,7 @@ export function startLiveSync(sessionId: string, store?: GalStoreApi): () => voi
     if (stApi.getState().liveGameType === 'werewolf') return;
     try {
       const sc: any = await api.scriptStatus(player);
+      if (!isCurrent()) return;
       // 精确匹配：script status 无匹配玩家时后端兜底 currentSessionId（可能是别的对局），
       // 误判会把主控/一般会话的 agent_output 过滤掉（applySseEvent 对 script/werewolf 跳过 agent_output）。
       if (sc && sc.phase && sc.phase !== 'idle' && sc.session_id === sessionId) {
@@ -178,6 +185,7 @@ export function startLiveSync(sessionId: string, store?: GalStoreApi): () => voi
     if (stApi.getState().liveGameType !== 'unknown') return;
     try {
       const gm: any = await api.getMode(sessionId);
+      if (!isCurrent()) return;
       const mode = String(gm?.mode || '');
       if (GENERAL_MODES.has(mode)) {
         st.setLiveGameType('general');
@@ -211,12 +219,13 @@ export function startLiveSync(sessionId: string, store?: GalStoreApi): () => voi
 export async function pullGeneralHistory(sessionId: string): Promise<void> {
   const st = useGalStore.getState();
   if (!st.liveMode || !sessionId) return;
+  const sessionEpoch = st.liveSessionEpoch;
   try {
     const data: any = await api.getHistory({ limit: '100', session_id: sessionId });
     const list: any[] = Array.isArray(data) ? data : (data?.messages || []);
     if (!list.length) return;
     const s = useGalStore.getState();
-    if (!s.liveMode) return;
+    if (!s.liveMode || s.liveSessionId !== sessionId || s.liveSessionEpoch !== sessionEpoch) return;
     const playerName = s.livePlayerName || '';
     const seen = new Set<string>();
     for (const m of s.liveQueue) seen.add(`${m.speakerId}\u0000${m.text}`);
@@ -263,14 +272,21 @@ export async function pullGeneralHistory(sessionId: string): Promise<void> {
 export async function refreshSuggestions(sessionId: string): Promise<void> {
   const st = useGalStore.getState();
   if (!st.liveMode || !sessionId) return;
+  const sessionEpoch = st.liveSessionEpoch;
   try {
     const res: any = await api.suggest(sessionId, 3);
     const list: string[] = Array.isArray(res?.suggestions)
       ? res.suggestions.map(String).filter(Boolean).slice(0, 4)
       : [];
-    useGalStore.getState().setLiveSuggestions(list);
+    const current = useGalStore.getState();
+    if (current.liveMode && current.liveSessionId === sessionId && current.liveSessionEpoch === sessionEpoch) {
+      current.setLiveSuggestions(list);
+    }
   } catch {
-    useGalStore.getState().setLiveSuggestions([]);
+    const current = useGalStore.getState();
+    if (current.liveMode && current.liveSessionId === sessionId && current.liveSessionEpoch === sessionEpoch) {
+      current.setLiveSuggestions([]);
+    }
   }
 }
 

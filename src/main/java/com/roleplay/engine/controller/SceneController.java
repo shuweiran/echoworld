@@ -260,6 +260,9 @@ public class SceneController {
         }
         String mode = playerName.isEmpty() ? "director" : "protagonist";
         String protagonist = mode.equals("protagonist") ? playerName : "";
+        if (!protagonist.isEmpty() && agentNames.stream().noneMatch(protagonist::equals)) {
+            return ResponseEntity.badRequest().body(Map.of("error", "protagonist must belong to session roles"));
+        }
         // P-0810-16：startScene 会话走 SessionRegistry 独立实例（createRouter 已注入 sceneGoalService）——
         // 修复 P-0810-12 走查 FAIL「goals.enabled=false」根因（原走默认单例 router，sceneGoalService 恒 null
         // → ensureSceneGoals 直接 return）；与 /api/init（P-0810-09）同构：独立实例出目标 + 默认单例镜像

@@ -1,14 +1,14 @@
 package com.roleplay.engine.aiimage;
 
 /**
- * P-0810-01（本地 ComfyUI + Pony V6 XL）：单次出图参数（工作流占位符替换输入）。
+ * 本地 ComfyUI + NoobAI-XL：单次出图参数（工作流占位符替换输入）。
  *
- * @param positivePrompt 正向提示词（调用方已拼好 score tag + 风格 + 外貌 + 表情 + 构图）
+ * @param positivePrompt 正向提示词（调用方已拼好质量 tag + 风格 + 外貌 + 表情 + 构图）
  * @param negativePrompt 负向提示词（非 NSFW 防线：nsfw/nude/暴力/劣质等）
  * @param seed           随机种子（角色级固定：由角色 ID hash 派生，同角色跨图一致）
- * @param width          出图宽（头像/半身 1024×1024，全身 832×1216）
+ * @param width          出图宽（半身像 832×1216，表情 1024×1024，全身 832×1216）
  * @param height         出图高
- * @param loraName       Pony 像素风 LoRA 文件名；null/空白=不使用 LoRA（工作流自动改接）
+ * @param loraName       风格 LoRA 文件名；null/空白=不使用 LoRA（工作流自动改接）
  * @param prefix         SaveImage filename_prefix（调试定位用）
  */
 public record WorkflowSpec(

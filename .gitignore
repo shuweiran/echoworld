@@ -79,3 +79,9 @@ site/
 
 # Unity batchmode ��ʱ���Temp/UnityLockfile���������
 Temp/
+
+# AI 协作工具本地产物（Codex 附件暂存等）
+.codex-remote-attachments/
+
+# 移动端本地环境变量（含个人可达后端地址）
+frontend/.env.mobile

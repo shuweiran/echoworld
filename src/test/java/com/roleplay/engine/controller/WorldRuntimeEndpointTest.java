@@ -1,6 +1,8 @@
 package com.roleplay.engine.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.roleplay.engine.core.Persona;
+import com.roleplay.engine.service.RouterService;
 import com.roleplay.engine.service.SessionRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -10,6 +12,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
+import java.util.List;
 import java.util.Map;
 
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -52,9 +55,13 @@ class WorldRuntimeEndpointTest {
     @Test
     void inputMailboxAcceptsRetryableIdAndRejectsDuplicate() throws Exception {
         String sessionId = "mailbox-endpoint-session";
-        sessions.getOrCreate(sessionId);
+        // P-0907-A：世界输入必须由当前主角发出——夹具需带主角会话 + speaker 属性
+        RouterService router = sessions.getOrCreate(sessionId);
+        router.initSession(sessionId, List.of(new Persona("凯尔"), new Persona("小铃")),
+                "默认场景", "protagonist", "凯尔", "");
         Map<String, Object> body = Map.of("session_id", sessionId,
-                "input_id", "same-input", "content", "先排队", "priority", "HIGH");
+                "input_id", "same-input", "content", "先排队", "priority", "HIGH",
+                "speaker", "凯尔");
         String json = mapper.writeValueAsString(body);
         mockMvc.perform(post("/api/world/input").contentType(MediaType.APPLICATION_JSON).content(json))
                 .andExpect(status().isAccepted())

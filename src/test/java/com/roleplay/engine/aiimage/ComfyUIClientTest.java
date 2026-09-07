@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * P-0810-01（本地 ComfyUI + Pony V6 XL）：ComfyUIClient 验收。
+ * 本地 ComfyUI + NoobAI-XL：ComfyUIClient 验收。
  *
  * <p>① 工作流占位符替换（__POSITIVE__/__SEED__/__WIDTH__/__HEIGHT__/__LORA_NAME__/__PREFIX__）
  * ② Lora 名为空自动改接（引用回 CheckpointLoaderSimple 的 model/clip + 移除 LoraLoader 节点）
@@ -41,24 +41,24 @@ class ComfyUIClientTest {
     }
 
     @Test
-    @DisplayName("C-1 工作流模板结构：Pony V6 XL 全链路节点齐备")
+    @DisplayName("C-1 工作流模板结构：NoobAI-XL 全链路节点齐备")
     void templateStructure() {
         Map<String, Object> wf = ComfyUIClient.loadWorkflowTemplate();
-        // P-0810-01 修复（CheckpointLoaderSimple 直接加载完整 Pony，clip skip 2）
+        // CheckpointLoaderSimple 直接加载完整 NoobAI-XL，clip skip 2
         assertEquals("CheckpointLoaderSimple", at(wf, "1", "class_type"));
-        assertEquals("PonyDiffusionV6XL.safetensors", at(wf, "1", "inputs", "ckpt_name"));
+        assertEquals("NoobAI-XL-v1.1.safetensors", at(wf, "1", "inputs", "ckpt_name"));
         assertEquals("LoraLoader", at(wf, "5", "class_type"));
         assertEquals(List.of("1", 0), at(wf, "5", "inputs", "model"));
         assertEquals(List.of("1", 1), at(wf, "5", "inputs", "clip"));
-        // 新版 ComfyUI（0.31）Pony 必须 clip skip 2：CLIPSetLastLayer(stop_at_clip_layer=-2)
+        // 新版 ComfyUI（0.31）SDXL 系 clip skip 2：CLIPSetLastLayer(stop_at_clip_layer=-2)
         assertEquals("CLIPSetLastLayer", at(wf, "13", "class_type"));
         assertEquals(-2, ((Number) at(wf, "13", "inputs", "stop_at_clip_layer")).intValue());
         assertEquals(List.of("5", 1), at(wf, "13", "inputs", "clip"));
         assertEquals("KSampler", at(wf, "10", "class_type"));
-        assertEquals(30, at(wf, "10", "inputs", "steps"));
-        assertEquals(7.0, ((Number) at(wf, "10", "inputs", "cfg")).doubleValue());
-        assertEquals("dpmpp_2m", at(wf, "10", "inputs", "sampler_name"));
-        assertEquals("karras", at(wf, "10", "inputs", "scheduler"));
+        assertEquals(28, at(wf, "10", "inputs", "steps"));
+        assertEquals(5.5, ((Number) at(wf, "10", "inputs", "cfg")).doubleValue());
+        assertEquals("euler_ancestral", at(wf, "10", "inputs", "sampler_name"));
+        assertEquals("normal", at(wf, "10", "inputs", "scheduler"));
         assertEquals("VAEDecode", at(wf, "11", "class_type"));
         assertEquals(List.of("1", 2), at(wf, "11", "inputs", "vae"));
         assertEquals("SaveImage", at(wf, "12", "class_type"));
@@ -73,15 +73,15 @@ class ComfyUIClientTest {
     @DisplayName("C-2 占位符替换：prompt/seed/宽高/lora/prefix 全部替换且类型正确")
     void placeholderReplacement() {
         Map<String, Object> wf = ComfyUIClient.buildWorkflow(new WorkflowSpec(
-                "score_9, anime style, 银发少女, happy expression",
+                "masterpiece, anime style, 银发少女, happy expression",
                 "nsfw, worst quality", 123456789L, 1024, 1024,
-                "pixel_art_sakuemonq_pony.safetensors", "rp_heroine"));
-        assertEquals("score_9, anime style, 银发少女, happy expression", at(wf, "7", "inputs", "text"));
+                "anime_detail.safetensors", "rp_heroine"));
+        assertEquals("masterpiece, anime style, 银发少女, happy expression", at(wf, "7", "inputs", "text"));
         assertEquals("nsfw, worst quality", at(wf, "8", "inputs", "text"));
         assertEquals(123456789L, ((Number) at(wf, "10", "inputs", "seed")).longValue());
         assertEquals(1024L, ((Number) at(wf, "9", "inputs", "width")).longValue());
         assertEquals(1024L, ((Number) at(wf, "9", "inputs", "height")).longValue());
-        assertEquals("pixel_art_sakuemonq_pony.safetensors", at(wf, "5", "inputs", "lora_name"));
+        assertEquals("anime_detail.safetensors", at(wf, "5", "inputs", "lora_name"));
         assertEquals("rp_heroine", at(wf, "12", "inputs", "filename_prefix"));
         assertTrue(ComfyUIClient.loadWorkflowTemplate().get("7") != wf.get("7"),
                 "每次构建应返回独立副本（防并发替换互扰）");
@@ -129,14 +129,14 @@ class ComfyUIClientTest {
                     "http://127.0.0.1:" + server.getAddress().getPort(), 10, 50);
             Path dir = Files.createTempDirectory("comfy-e2e");
             List<String> saved = client.generateOnce(new WorkflowSpec(
-                    "score_9, pos", "neg", 42L, 1024, 1024, "lora.safetensors", "rp_t"), dir, "avatar.png");
+                    "masterpiece, pos", "neg", 42L, 1024, 1024, "lora.safetensors", "rp_t"), dir, "avatar.png");
 
             assertEquals(List.of("avatar.png"), saved);
             assertArrayEquals(png, Files.readAllBytes(dir.resolve("avatar.png")));
             // 提交 body：prompt + client_id + 占位符已替换
             JsonNode posted = mapper.readTree(postedBody.get());
             assertTrue(posted.has("client_id"));
-            assertEquals("score_9, pos", posted.at("/prompt/7/inputs/text").asText());
+            assertEquals("masterpiece, pos", posted.at("/prompt/7/inputs/text").asText());
             assertEquals(42L, posted.at("/prompt/10/inputs/seed").asLong());
             assertEquals(1024, posted.at("/prompt/9/inputs/width").asInt());
             // /view 查询参数正确
@@ -239,11 +239,11 @@ class ComfyUIClientTest {
     @DisplayName("I-2 img2img 占位符替换：__REF_IMAGE__/__DENOISE__/lora rewiring")
     void img2imgPlaceholderReplacement() {
         Map<String, Object> wf = ComfyUIClient.buildImg2ImgWorkflow(new WorkflowSpec(
-                "score_9, pos img2img", "nsfw, neg", 777L, 1024, 1024,
-                "pixel_art_sakuemonq_pony.safetensors", "rp_heroine"), "heroine_avatar_1234.png", 0.45);
+                "masterpiece, pos img2img", "nsfw, neg", 777L, 1024, 1024,
+                "anime_detail.safetensors", "rp_heroine"), "heroine_avatar_1234.png", 0.45);
         assertEquals("heroine_avatar_1234.png", at(wf, "D", "inputs", "image"));
         assertEquals(0.45, ((Number) at(wf, "10", "inputs", "denoise")).doubleValue());
-        assertEquals("score_9, pos img2img", at(wf, "7", "inputs", "text"));
+        assertEquals("masterpiece, pos img2img", at(wf, "7", "inputs", "text"));
         assertEquals("nsfw, neg", at(wf, "8", "inputs", "text"));
         assertEquals(777L, ((Number) at(wf, "10", "inputs", "seed")).longValue());
         assertEquals("rp_heroine", at(wf, "12", "inputs", "filename_prefix"));
@@ -299,7 +299,7 @@ class ComfyUIClientTest {
             Files.write(ref, refBytes);
 
             List<String> saved = client.generateImg2Img(new WorkflowSpec(
-                    "score_9, happy expression, bust shot", "neg", 99L, 1024, 1024,
+                    "masterpiece, happy expression, bust shot", "neg", 99L, 1024, 1024,
                     "lora.safetensors", "rp_heroine"), ref, 0.45, dir, "happy.png");
 
             assertEquals(List.of("happy.png"), saved);
@@ -316,7 +316,7 @@ class ComfyUIClientTest {
             assertEquals(0.45, posted.at("/prompt/10/inputs/denoise").asDouble(), 1e-9);
             assertEquals("F", posted.at("/prompt/10/inputs/latent_image/0").asText());
             assertEquals(0, posted.at("/prompt/10/inputs/latent_image/1").asInt());
-            assertEquals("score_9, happy expression, bust shot", posted.at("/prompt/7/inputs/text").asText());
+            assertEquals("masterpiece, happy expression, bust shot", posted.at("/prompt/7/inputs/text").asText());
             assertEquals(99L, posted.at("/prompt/10/inputs/seed").asLong());
         } finally {
             server.stop(0);

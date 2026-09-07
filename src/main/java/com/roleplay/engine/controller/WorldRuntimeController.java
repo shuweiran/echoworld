@@ -53,8 +53,13 @@ public class WorldRuntimeController {
         copyIfPresent(body, attributes, "focused_role_id");
         copyIfPresent(body, attributes, "focused_role_ids");
         copyIfPresent(body, attributes, "conversation_members");
-        InputMailbox.OfferResult result = runtime.enqueueInput(new InputMailbox.MailboxInput(
-                sessionId, inputId, content, priority, Instant.now(), attributes));
+        InputMailbox.OfferResult result;
+        try {
+            result = runtime.enqueueInput(new InputMailbox.MailboxInput(
+                    sessionId, inputId, content, priority, Instant.now(), attributes));
+        } catch (IllegalArgumentException | IllegalStateException e) {
+            return bad(safeError(e));
+        }
         Map<String, Object> response = new LinkedHashMap<>();
         response.put("accepted", result.accepted());
         response.put("status", result.status().name());

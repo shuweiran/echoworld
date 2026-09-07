@@ -19,6 +19,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -170,5 +171,21 @@ class SceneStartSceneModeTest {
                 eq("director"), eq(""), eq(""));
         assertNotNull(resp.getBody());
         assertEquals("director", resp.getBody().get("mode"));
+    }
+
+    @Test
+    @DisplayName("⑦ me 不在角色表 → 拒绝幽灵主角")
+    void unknownMe_isRejected() {
+        RouterService router = mock(RouterService.class);
+        SceneController ctrl = build(router);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("agents", List.of("小铃", "凯尔"));
+        body.put("me", "不存在的角色");
+
+        ResponseEntity<Map<String, Object>> resp = ctrl.startScene("scene-1", "", "", body);
+
+        assertEquals(400, resp.getStatusCode().value());
+        assertEquals("protagonist must belong to session roles", resp.getBody().get("error"));
+        verify(router, never()).initSession(anyString(), anyList(), anyString(), anyString(), anyString(), anyString());
     }
 }

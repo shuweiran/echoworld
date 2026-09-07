@@ -2,7 +2,7 @@
   "1": {
     "class_type": "CheckpointLoaderSimple",
     "inputs": {
-      "ckpt_name": "PonyDiffusionV6XL.safetensors"
+      "ckpt_name": "NoobAI-XL-v1.1.safetensors"
     }
   },
   "5": {
@@ -52,10 +52,10 @@
       "negative": ["8", 0],
       "latent_image": ["9", 0],
       "seed": "__SEED__",
-      "steps": 30,
-      "cfg": 7.0,
-      "sampler_name": "dpmpp_2m",
-      "scheduler": "karras",
+      "steps": 28,
+      "cfg": 5.5,
+      "sampler_name": "euler_ancestral",
+      "scheduler": "normal",
       "denoise": 1.0
     }
   },

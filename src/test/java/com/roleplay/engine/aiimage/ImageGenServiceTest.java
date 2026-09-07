@@ -14,12 +14,12 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * P-0810-01（本地 ComfyUI + Pony V6 XL）：ImageGenService 验收（mock ComfyUI 客户端）。
+ * 本地 ComfyUI + NoobAI-XL：ImageGenService 验收（mock ComfyUI 客户端）。
  *
  * <p>① 角色注册表：注册/更新/查询/初始角色装载
- * ② 生成任务：头像 1 + 表情 6 + 全身立绘 1（8 张），异步线程池执行，任务状态 IDLE→RUNNING→DONE
- * ③ 参数替换：正向含 score tag + rating_safe + 外貌 + 风格 + 表情 + 构图；
- *    负向含 nsfw 拦截；头像=portrait 构图、表情=bust 构图、全身立绘=fullbody 构图；seed 同角色一致
+ * ② 生成任务：半身像 1 + 表情 6 + 全身立绘 1（8 张），异步线程池执行，任务状态 IDLE→RUNNING→DONE
+ * ③ 参数替换：正向含质量 tag + rating_safe + 外貌 + 风格 + 表情 + 构图；
+ *    负向含 nsfw 拦截；半身像=PORTRAIT 半身构图、表情=bust 构图、全身立绘=fullbody 构图；seed 同角色一致
  * ④ URL 生成：/ai-images/{id}/{frame}.png；重启后磁盘扫描仍可见
  * ⑤ 未知角色 / 重复提交（RUNNING 中）防护
  */
@@ -75,7 +75,7 @@ class ImageGenServiceTest {
     private ImageGenService newService(FakeComfyClient client, Path outputDir) {
         AiImageProperties props = new AiImageProperties();
         props.setOutputDir(outputDir.toString());
-        props.setLoraName("pixel_art_sakuemonq_pony.safetensors");
+        props.setLoraName("");
         props.setRmbgEnabled(false); // 既有用例走纯生成基线；RMBG 接线由 S-5/S-6 专门覆盖
         return new ImageGenService(client, props);
     }
@@ -149,24 +149,24 @@ class ImageGenServiceTest {
         assertEquals("/ai-images/heroine/fullbody.png", images.get("fullbody"));
         assertEquals(ImageGenService.EXPRESSIONS.size(), 6);
 
-        // 参数替换：所有正向都含 score tag + rating_safe + 外貌 + 风格；负向含 nsfw
+        // 参数替换：所有正向都含质量 tag + rating_safe + 外貌 + 风格；负向含 nsfw
         for (WorkflowSpec s : client.specs) {
-            assertTrue(s.positivePrompt().contains("score_9"), s.positivePrompt());
-            assertTrue(s.positivePrompt().contains("score_8_up"), s.positivePrompt());
-            assertTrue(s.positivePrompt().contains("score_7_up"), s.positivePrompt());
+            assertTrue(s.positivePrompt().contains("masterpiece"), s.positivePrompt());
+            assertTrue(s.positivePrompt().contains("best quality"), s.positivePrompt());
+            assertTrue(s.positivePrompt().contains("amazing quality"), s.positivePrompt());
             assertTrue(s.positivePrompt().contains("rating_safe"), s.positivePrompt());
             assertTrue(s.positivePrompt().contains("银色长发，紫色眼眸，白色和服"), s.positivePrompt());
             assertTrue(s.positivePrompt().contains("anime style, cel shading"), s.positivePrompt());
             assertTrue(s.negativePrompt().contains("nsfw"), "非 NSFW 防线");
             assertTrue(s.negativePrompt().contains("nude"));
             assertTrue(s.negativePrompt().contains("worst quality"));
-            assertEquals("pixel_art_sakuemonq_pony.safetensors", s.loraName());
+            assertEquals("", s.loraName());
         }
-        // 头像 = portrait 构图（1024x1024 + 构图词）；表情 = bust 构图；全身立绘 = fullbody 构图（832x1216）
+        // 半身像 = PORTRAIT 半身构图（832x1216 + 构图词）；表情 = bust 构图；全身立绘 = fullbody 构图（832x1216）
         WorkflowSpec avatar = client.specs.get(0);
-        assertTrue(avatar.positivePrompt().contains("head and shoulders portrait"), avatar.positivePrompt());
-        assertEquals(1024, avatar.width());
-        assertEquals(1024, avatar.height());
+        assertTrue(avatar.positivePrompt().contains("half body portrait"), avatar.positivePrompt());
+        assertEquals(832, avatar.width());
+        assertEquals(1216, avatar.height());
         for (int i = 1; i <= 6; i++) {
             WorkflowSpec s = client.specs.get(i);
             assertTrue(s.positivePrompt().contains("bust shot"), s.positivePrompt());
@@ -351,7 +351,7 @@ class ImageGenServiceTest {
         FakeComfyClient client = new FakeComfyClient();
         AiImageProperties props = new AiImageProperties();
         props.setOutputDir(dir.toString());
-        props.setLoraName("pixel_art_sakuemonq_pony.safetensors");
+        props.setLoraName("");
         props.setRmbgEnabled(false);
         props.setImg2imgDenoise(0.45); // 可配置：非默认值验证透传
         ImageGenService svc = new ImageGenService(client, props);

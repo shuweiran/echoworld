@@ -111,6 +111,7 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
   const setHidePlayerBubbles = useGalStore(s => s.setHidePlayerBubbles);
   const setLiveGameType = useGalStore(s => s.setLiveGameType);
   const setLiveGeneralMode = useGalStore(s => s.setLiveGeneralMode);
+  const setLiveIdentity = useGalStore(s => s.setLiveIdentity);
   const setSpeakers = useGalStore(s => s.setSpeakers);
   const started = useGalStore(s => s.started);
   const finished = useGalStore(s => s.finished);
@@ -124,6 +125,7 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
   const focusedRoleId = useGalStore(s => s.liveFocusedRoleId);
   const conversationMembers = useGalStore(s => s.liveConversationMembers);
   const setLiveConversation = useGalStore(s => s.setLiveConversation);
+  const sessionEpochRef = useRef(0);
 
   // ── 元信息（场景名 / agents / mode 中文标签） ──
   const [scene, setScene] = useState<string>('');
@@ -168,8 +170,9 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
     }]);
     // P-0811-G：玩家名只取显式传入的 playerName —— 不再回退 localStorage.playerId
     // （用户反馈：未选定玩家角色时仍判定自己在说话；导演模式应无玩家身份）
-    const name = playerName || '';
-    enterLiveMode(sessionId, { playerName: name });
+    // 先不把网页操作者当作场景角色；拿到后端 protagonist 后再确认身份。
+    enterLiveMode(sessionId, { playerName: '' });
+    sessionEpochRef.current = useGalStore.getState().liveSessionEpoch;
     // P-0818-F：进入对局后立即拉取 AI 形象状态（注册后端角色名 → ID 映射，保证局内立绘可查）
     void useGalStore.getState().refreshImageStatus();
     setHidePlayerBubbles(true);
@@ -192,10 +195,15 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
   useEffect(() => {
     if (!sessionId) return;
     let alive = true;
+    const sessionEpoch = useGalStore.getState().liveSessionEpoch;
+    const isCurrent = () => {
+      const current = useGalStore.getState();
+      return alive && current.liveMode && current.liveSessionId === sessionId && current.liveSessionEpoch === sessionEpoch;
+    };
     const refreshMeta = async () => {
       try {
         const st: any = await api.getState(sessionId);
-        if (!alive) return;
+        if (!isCurrent()) return;
         const sc = st?.scene || st?.scene_description || '';
         if (sc) setScene(String(sc));
         // P-0810-16：场景卡目标随 /api/state 下发（scene_goals 键）——进入/刷新/重连兜底拉取
@@ -207,6 +215,11 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
         if (Array.isArray(st?.agents)) {
           const names = st.agents.map(String).filter(Boolean);
           setRoster(names);
+          // 只有后端当前角色表里确有该名字，才把网页操作者视为场景中的玩家角色。
+          const declaredPlayer = String(playerName || '').trim();
+          const protagonist = String(st?.protagonist || '').trim();
+          setLiveIdentity(declaredPlayer && declaredPlayer === protagonist && names.includes(protagonist)
+            ? protagonist : '', undefined, true);
           // P-0810-08：舞台角色表 = 会话 roster（替换 demo 角色）——保持玩家位，NPC 用占位立绘
           const key = names.join(',');
           if (names.length > 0 && key !== seededRosterRef.current) {
@@ -220,7 +233,7 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
       } catch { /* 后端不可达：保持现状 */ }
       try {
         const world: any = await api.worldState(sessionId);
-        if (alive) {
+        if (isCurrent()) {
           if (world?.story_script && typeof world.story_script === 'object') setStoryScript(world.story_script);
           const pendingId = useGalStore.getState().livePendingInputId;
           if (pendingId) {
@@ -251,14 +264,15 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
       } catch { /* 世界运行时尚未就绪时保持空列表 */ }
       try {
         const gm: any = await api.getMode(sessionId);
+        if (!isCurrent()) return;
         const mode = String(gm?.mode || '');
         if (mode && GENERAL_MODE_LABEL[mode]) {
           setLiveGameType('general');
           setLiveGeneralMode(mode);
-          if (alive) setModeLabel(`一般·${GENERAL_MODE_LABEL[mode]}`);
+          setModeLabel(`一般·${GENERAL_MODE_LABEL[mode]}`);
         } else if (mode) {
-          if (alive) setModeLabel(`一般模式（${mode}）`);
-        } else if (alive && !modeLabel) {
+          setModeLabel(`一般模式（${mode}）`);
+        } else if (!modeLabel) {
           setModeLabel('一般模式');
         }
       } catch { /* 忽略 */ }
@@ -319,10 +333,8 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
   // P0 点击驱动：无玩家的纯 Agent 场景在队列排空后可点击对话框生成下一轮；
   // 有玩家时严格一问一答，只能由输入（liveSay → 世界邮箱/后端 runRound）生成回复。
   // 2D（SimGalChatPanel）保持播完自动推进（组 hook，本文件只改一般模式）。
-  const hasPlayer = !!livePlayerName && String(livePlayerName).trim().length > 0
-    || !!playerName && String(playerName).trim().length > 0;
-
-  const displayName = livePlayerName || playerName || '';
+  const hasPlayer = !!String(livePlayerName || '').trim();
+  const displayName = livePlayerName || '';
   const ambientNames = new Set(ambientRoles.map(role => role.name));
   const roleCards = [
     ...roster.filter(name => name !== displayName).map(name => ({
@@ -350,17 +362,25 @@ export function GalGeneralView({ sessionId, playerName, onBack }: GalGeneralView
   const sendDirectorChat = async () => {
     const text = directorDraft.trim();
     if (!text || !sessionId || directorSending) return;
+    const sessionEpoch = sessionEpochRef.current;
     setDirectorSending(true);
     setDirectorChat(lines => [...lines, { role: 'player', text }]);
     setDirectorDraft('');
     try {
       const result = await api.directorChat(sessionId, text);
+      const current = useGalStore.getState();
+      if (!current.liveMode || current.liveSessionId !== sessionId || current.liveSessionEpoch !== sessionEpoch) return;
       if (result.story) setStoryScript(result.story);
       setDirectorChat(lines => [...lines, { role: 'director', text: result.reply }]);
     } catch (e: any) {
+      const current = useGalStore.getState();
+      if (!current.liveMode || current.liveSessionId !== sessionId || current.liveSessionEpoch !== sessionEpoch) return;
       setDirectorChat(lines => [...lines, { role: 'director', text: `暂时无法回复：${e?.message || '未知错误'}` }]);
     } finally {
-      setDirectorSending(false);
+      const current = useGalStore.getState();
+      if (current.liveMode && current.liveSessionId === sessionId && current.liveSessionEpoch === sessionEpoch) {
+        setDirectorSending(false);
+      }
     }
   };
 

@@ -22,6 +22,7 @@ export function isPlayerTurnGate(opts: PlayerTurnGateOptions): boolean {
 
 export interface AutonomousAdvanceGateOptions {
   hasSession: boolean;
+  identityResolved: boolean;
   hasPlayer: boolean;
   hasOverride: boolean;
   gameType: string;
@@ -32,6 +33,7 @@ export interface AutonomousAdvanceGateOptions {
 /** 只有无真人玩家的纯 Agent 一般模式，才允许点击空对话框生成下一轮。 */
 export function isAutonomousAdvanceGate(opts: AutonomousAdvanceGateOptions): boolean {
   return opts.hasSession
+    && opts.identityResolved
     && !opts.hasPlayer
     && !opts.hasOverride
     && (opts.gameType === 'general' || opts.gameType === 'unknown')

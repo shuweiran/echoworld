@@ -32,6 +32,7 @@ test('SSE 成功与失败终态都已接线', () => {
 test('有玩家时点击空对话框不得生成无输入的新一轮', () => {
   const autonomous = {
     hasSession: true,
+    identityResolved: true,
     hasPlayer: false,
     hasOverride: false,
     gameType: 'general',
@@ -40,7 +41,13 @@ test('有玩家时点击空对话框不得生成无输入的新一轮', () => {
   };
   assert.equal(isAutonomousAdvanceGate(autonomous), true);
   assert.equal(isAutonomousAdvanceGate({ ...autonomous, hasPlayer: true }), false);
+  assert.equal(isAutonomousAdvanceGate({ ...autonomous, identityResolved: false }), false);
 
   const store = readFileSync(new URL('../src/gal/GalStore.ts', import.meta.url), 'utf8');
-  assert.match(store, /requestNextRound:[\s\S]{0,360}livePlayerName[\s\S]{0,80}return/);
+  assert.match(store, /requestNextRound:[\s\S]{0,360}liveIdentityResolved[\s\S]{0,80}return/);
+  assert.match(store, /liveSessionEpoch/);
+
+  const dialog = readFileSync(new URL('../src/gal/GalDialogBox.tsx', import.meta.url), 'utf8');
+  assert.match(dialog, /liveQueue\.length === 1/);
+  assert.match(dialog, /advance\(\);[\s\S]{0,80}requestNextRound\(\)/);
 });

@@ -36,12 +36,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 /**
- * P-0810-01（本地 ComfyUI + Pony V6 XL 角色表情集预生成）：角色注册表 + 生成任务编排。
+ * 本地 ComfyUI + NoobAI-XL 二次元半身像：角色注册表 + 生成任务编排。
  *
  * <ul>
  *   <li><b>角色注册表</b>：内存 Map（id → CharacterProfile），yml {@code roleplay.ai-image.characters}
  *       初始角色启动即注册；POST /api/ai-image/character 运行时注册/更新。</li>
- *   <li><b>生成任务</b>：triggerGenerate 提交线程池异步执行——头像 1 张（portrait 构图，文生图）
+ *   <li><b>生成任务</b>：triggerGenerate 提交线程池异步执行——半身像 1 张（halfbody 构图，文生图）
  *       + 表情 6 张（happy/angry/sad/surprised/embarrassed/neutral，bust 构图，P-0810-05 起改 img2img：
  *       以 avatar.png 原图非透明版为底图，denoise 可配 roleplay.ai-image.img2img-denoise 默认 0.5，
  *       解决同角色 7 张图脸型漂移）+ 全身立绘 1 张（P-0818-E：fullbody.png，FULLBODY 构图 832×1216，
@@ -56,8 +56,8 @@ import java.util.stream.Stream;
  *       产出透明版 {@code {frame}_t.png}（原图保留 + 透明版并存，供 Gal 立绘叠加）；
  *       模型缺失/失败仅 log.warn 降级保留原图，不影响主流程；imagesOf 的 frame→URL 映射
  *       同时含 {@code {frame}_t} 条目（如 avatar_t），前端立绘可优先用 _t 版。</li>
- *   <li><b>非 NSFW</b>：正向提示词固定前缀 {@code score_9, score_8_up, score_7_up, rating_safe}，
- *       负向提示词含 nsfw/nude/暴力/劣质等拦截词（Pony V6 的 score/rating tag 体系）。</li>
+ *   <li><b>非 NSFW</b>：正向提示词固定前缀 {@code masterpiece, best quality, amazing quality, rating_safe}，
+ *       负向提示词含 nsfw/nude/暴力/劣质等拦截词（NoobAI-XL 的 Danbooru 质量 tag + rating 体系）。</li>
  * </ul>
  */
 @Service
@@ -69,15 +69,15 @@ public class ImageGenService {
     public static final List<String> EXPRESSIONS = List.of(
             "happy", "angry", "sad", "surprised", "embarrassed", "neutral");
 
-    /** Pony V6 非 NSFW 固定前缀（用户要求 rating_safe，严禁裸漏/成人内容）。 */
-    public static final String SCORE_TAGS = "score_9, score_8_up, score_7_up, rating_safe";
+    /** NoobAI-XL 非 NSFW 固定前缀（用户要求 rating_safe，严禁裸漏/成人内容）。 */
+    public static final String SCORE_TAGS = "masterpiece, best quality, amazing quality, rating_safe";
 
     private static final String NEGATIVE_PROMPT = String.join(", ",
             "worst quality", "low quality", "blurry", "jpeg artifacts", "watermark", "signature", "text",
             "nsfw", "nude", "naked", "explicit", "sexual content", "sex", "violence", "gore", "blood",
             "extra limbs", "deformed", "bad anatomy", "bad hands", "missing fingers", "mutated", "disfigured");
 
-    /** 表情英文描述（Pony 吃英文 prompt；与中文展示名解耦，前端可用 status 里的中文名）。 */
+    /** 表情英文描述（NoobAI 吃英文 prompt；与中文展示名解耦，前端可用 status 里的中文名）。 */
     private static final Map<String, String> EXPRESSION_PROMPTS = Map.of(
             "happy", "happy expression, bright smile, cheerful",
             "angry", "angry expression, glaring, furrowed brows",
@@ -86,13 +86,13 @@ public class ImageGenService {
             "embarrassed", "embarrassed expression, blushing, looking away shyly",
             "neutral", "neutral calm expression, gentle look");
 
-    /** 构图三档（任务书：头像 1:1 / 聊天框半身 / 全身 832×1216）。 */
+    /** 构图三档（任务书：半身像 832×1216 / 聊天框半身 / 全身 832×1216）。 */
     public enum Composition {
-        PORTRAIT("head and shoulders portrait, centered composition, looking at viewer, simple clean background", 1024, 1024),
+        PORTRAIT("half body portrait, upper body, waist-up, facing viewer, detailed face, clean background", 832, 1216),
         BUST("bust shot, upper body, waist-up portrait, chat window avatar style, clean background", 1024, 1024),
         FULLBODY("full body shot, standing, full outfit visible, portrait orientation", 832, 1216),
         /** P-0810-14：场景背景图（横构图，prompt 含 background/no characters——背景无角色）。 */
-        BACKGROUND("pixel art background, scenery, environment, no characters, no people, no animals, empty scene, detailed, wide shot", 1216, 832);
+        BACKGROUND("anime background, scenery, environment, no characters, no people, no animals, empty scene, detailed, wide shot", 1216, 832);
 
         public final String description;
         public final int width;
@@ -256,7 +256,7 @@ public class ImageGenService {
                             // P-0818-F：尝试读 _meta.json 获取真实角色名
                             String name = id;
                             String appearance = "";
-                            String style = "retro game character art style, 16-bit pixel art, clean outlines, flat colors";
+                            String style = "modern anime illustration style, clean lineart, soft cel shading, vibrant colors";
                             java.nio.file.Path meta = d.resolve("_meta.json");
                             if (java.nio.file.Files.isRegularFile(meta)) {
                                 try {
@@ -360,7 +360,7 @@ public class ImageGenService {
     private void runGeneration(GenTask task, CharacterProfile profile) {
         long baseSeed = stableSeed(profile.id());
         try {
-            // 1) 头像（portrait 构图，文生图）——后续表情 img2img 的底图
+            // 1) 半身像（PORTRAIT 半身构图，文生图）——后续表情 img2img 的底图
             task.progress = "avatar";
             genOne(task, profile, "avatar.png",
                     EXPRESSION_PROMPTS.get("neutral") + ", " + Composition.PORTRAIT.description,
@@ -650,7 +650,7 @@ public class ImageGenService {
     /**
      * 场景背景图生成（同步返回 URL）。
      * <ul>
-     *   <li><b>入参</b>：scene（场景名/描述）→ 二次元视觉小说风非 NSFW 背景（Pony 文生图：
+     *   <li><b>入参</b>：scene（场景名/描述）→ 二次元视觉小说风非 NSFW 背景（NoobAI 文生图：
      *       {@link #SCORE_TAGS} + anime visual novel background + 场景描述 + {@link Composition#BACKGROUND} 构图词
      *       （background/no characters）+ 复用 {@link #NEGATIVE_PROMPT} 负面词）；</li>
      *   <li><b>落盘</b>：{@code outputRoot/backgrounds/{hash}.png}，URL {@code /ai-images/backgrounds/{hash}.png}

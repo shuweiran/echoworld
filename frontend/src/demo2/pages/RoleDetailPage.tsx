@@ -221,7 +221,7 @@ export function RoleDetailPage() {
     try {
       // 1. 注册到 AI 形象系统（幂等：后端按 id 覆盖档案）——appearance 从角色描述提取，无则默认
       const appearance = extractAppearance(role) || `${role.name}，动漫风格角色，精致五官，全身立绘`;
-      const style = 'retro game character art style, 16-bit pixel art, clean outlines, flat colors';
+      const style = 'modern anime illustration style, clean lineart, soft cel shading, vibrant colors';
       await api.aiImageRegisterCharacter({ id: backendId, name: role.name, appearance, style });
       // P-0818-F：前端本地注册角色名 → ID 映射（防重启后后端 name 丢失）
       registerBackendMapping(role.name, backendId);

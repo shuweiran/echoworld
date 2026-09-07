@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * P-0810-01（本地 ComfyUI + Pony V6 XL 角色表情集预生成）：AI 生图 REST 端点。
+ * 本地 ComfyUI + NoobAI-XL 二次元半身像：AI 生图 REST 端点。
  *
  * <ul>
  *   <li>POST /api/ai-image/character —— 注册/更新角色（id/name/appearance 外貌描述/style 风格描述）</li>
@@ -100,7 +100,7 @@ public class ImageGenController {
 
     /**
      * P-0810-14：场景背景图生成（一般模式 AI 自动出对应背景）。
-     * <p>body: {scene: 场景名/描述} → 像素风非 NSFW 场景背景图（Pony 文生图，复用 SCORE_TAGS+负面词）→
+     * <p>body: {scene: 场景名/描述} → 二次元非 NSFW 场景背景图（NoobAI 文生图，复用 SCORE_TAGS+负面词）→
      * 存 static/ai-images/backgrounds/{hash}.png → 返回 {url, scene}。
      * 同 scene 键缓存（内存+磁盘双重）：相同键不重复生成，直接返回已有 url。
      * 同步语义：首调阻塞等待生成（单任务约 50s，上限 yml roleplay.ai-image.timeout-seconds），

@@ -193,13 +193,13 @@ roleplay:
     trace-enabled: false
     trace-size: 1000
   ai-image:
-    # P-0810-01（本地 ComfyUI + Pony V6 XL）：与主 yml 同步键；测试直构服务不经 Spring，@Value/@ConfigurationProperties 默认值生效
+    # 本地 ComfyUI + NoobAI-XL：与主 yml 同步键；测试直构服务不经 Spring，@Value/@ConfigurationProperties 默认值生效
     comfyui-base-url: "http://127.0.0.1:1"
     output-dir: "src/main/resources/static/ai-images"
     pool-size: 1
     timeout-seconds: 10
     poll-interval-ms: 50
-    lora-name: "pixel_art_sakuemonq_pony.safetensors"
+    lora-name: ""
     rmbg-model: ""
     rmbg-enabled: true
     img2img-denoise: 0.5

@@ -232,6 +232,27 @@ class HistorySessionTest {
                 eq("protagonist"), eq("小铃"), anyString());
     }
 
+    @Test
+    @DisplayName("③b POST /api/init 主角不在角色表 → 400，不创建幽灵主角")
+    void sessionInit_unknownProtagonist_returns400() {
+        SessionRegistry sessions = mock(SessionRegistry.class);
+        SessionController ctrl = new SessionController(mock(RouterService.class),
+                mock(ScriptService.class), mock(PrivateChatService.class),
+                mock(CharacterController.class), mock(SceneController.class),
+                mock(InterruptManager.class), sessions);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("characters", List.of(Map.of("name", "小铃", "persona", "温柔的女仆")));
+        body.put("mode", "protagonist");
+        body.put("protagonist", "不存在的角色");
+
+        ResponseEntity<Map<String, Object>> resp = ctrl.initialize(body);
+
+        assertEquals(400, resp.getStatusCode().value());
+        assertEquals("protagonist must belong to session roles", resp.getBody().get("error"));
+        verify(sessions, org.mockito.Mockito.never()).getOrCreate(anyString());
+    }
+
     // ── ④ init 非主角模式 ─────────────────────────────────────
 
     @Test

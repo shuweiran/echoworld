@@ -86,10 +86,16 @@ public class SessionController {
         String sessionId = UUID.randomUUID().toString().substring(0, 12);
         String sceneDesc = (String) body.getOrDefault("scene", "默认场景");
         String mode = (String) body.getOrDefault("mode", "free");
+        String requestedProtagonist = String.valueOf(body.getOrDefault("protagonist", "")).trim();
+        if (("protagonist".equals(mode) && requestedProtagonist.isEmpty())
+                || (!requestedProtagonist.isEmpty()
+                && personas.stream().noneMatch(p -> requestedProtagonist.equals(p.getName())))) {
+            return ResponseEntity.badRequest().body(Map.of("error", "protagonist must belong to session roles"));
+        }
         // D11: 按 session_id 创建/获取独立 router 实例（多会话隔离）
         RouterService sessionRouter = sessions.getOrCreate(sessionId);
         sessionRouter.initSession(sessionId, personas, sceneDesc, mode,
-            (String) body.getOrDefault("protagonist", ""),
+            requestedProtagonist,
             (String) body.getOrDefault("director_character", ""));
         // P0 会话隔离：不再向默认单例 router 镜像初始化 —— 旧实现此处把新会话状态
         // 同步写入全局默认 router，导致未传 session_id 的旧客户端读到“最近一次起局”的
@@ -276,9 +282,13 @@ public class SessionController {
         String sessionId = String.valueOf(body.getOrDefault("session_id", "")).trim();
         RouterService r = sessions.require(sessionId);
         r.setMode(body.getOrDefault("mode", "free"));
-        String protagonist = body.getOrDefault("protagonist",
-            body.getOrDefault("protagonist", ""));
-        if (!protagonist.isEmpty()) r.setProtagonist(protagonist);
+        String protagonist = body.getOrDefault("protagonist", "");
+        if (!protagonist.isEmpty()) {
+            if (!r.hasAgent(protagonist)) {
+                return ResponseEntity.badRequest().body(Map.of("error", "protagonist must belong to session roles"));
+            }
+            r.setProtagonist(protagonist);
+        }
         String director = body.getOrDefault("director_character",
             body.getOrDefault("director", ""));
         if (!director.isEmpty()) r.setDirectorCharacter(director);

@@ -166,6 +166,10 @@ interface GalState {
   liveStreamSeq: Record<string, number>;
   /** 当前玩家名（发言用） */
   livePlayerName: string;
+  /** 每次进入/退出会话递增，异步响应据此拒绝旧会话写入。 */
+  liveSessionEpoch: number;
+  /** 后端是否已确认当前会话有无在场玩家角色。未确认时不得自主续轮。 */
+  liveIdentityResolved: boolean;
   /** 剧本杀 roleKey（可选，身份校验） */
   livePlayerKey: string;
   /** 非 2D 场景中当前选择的轻量路人；下一次有效发言会携带其 roleId。 */
@@ -248,7 +252,7 @@ interface GalState {
   liveEnqueue: (msg: Omit<GalLiveMessage, 'id' | 'ts'> & { id?: string }) => void;
   /** 玩家本地回显（user_input 去重） */
   enqueuePlayerEcho: (text: string) => void;
-  setLiveIdentity: (playerName?: string, playerKey?: string) => void;
+  setLiveIdentity: (playerName?: string, playerKey?: string, resolved?: boolean) => void;
   setLiveFocusedRole: (roleId: string) => void;
   setLiveConversation: (memberNames: string[], roleIds?: string[]) => void;
   setSending: (v: boolean) => void;
@@ -451,6 +455,8 @@ export function createGalStore() {
   liveStreams: {},
   liveStreamSeq: {},
   livePlayerName: '',
+  liveSessionEpoch: 0,
+  liveIdentityResolved: false,
   livePlayerKey: '',
   liveFocusedRoleId: '',
   liveFocusedRoleIds: [],
@@ -594,6 +600,8 @@ export function createGalStore() {
       liveStreams: {},
       liveStreamSeq: {},
       livePlayerName: opts?.playerName || '',
+      liveSessionEpoch: get().liveSessionEpoch + 1,
+      liveIdentityResolved: false,
       livePlayerKey: opts?.playerKey || '',
       liveFocusedRoleId: '',
       liveFocusedRoleIds: [],
@@ -624,6 +632,7 @@ export function createGalStore() {
     set({
       liveMode: false,
       liveSessionId: '',
+      liveSessionEpoch: get().liveSessionEpoch + 1,
       liveStatus: 'idle',
       liveEventCount: 0,
       liveGameType: 'unknown',
@@ -1176,10 +1185,11 @@ export function createGalStore() {
     });
   },
 
-  setLiveIdentity: (playerName, playerKey) =>
+  setLiveIdentity: (playerName, playerKey, resolved) =>
     set(s => ({
       livePlayerName: playerName !== undefined ? playerName : s.livePlayerName,
       livePlayerKey: playerKey !== undefined ? playerKey : s.livePlayerKey,
+      liveIdentityResolved: resolved !== undefined ? resolved : s.liveIdentityResolved,
     })),
 
   setLiveFocusedRole: (roleId) => set({ liveFocusedRoleId: String(roleId || '') }),
@@ -1214,6 +1224,7 @@ export function createGalStore() {
   requestNextRound: async () => {
     const s = get();
     if (!s.liveMode || !s.liveSessionId) return;
+    if (!s.liveIdentityResolved) return;
     // 有真人玩家的一般模式严格一问一答：点击只能推进现有消息，不能凭空生成下一轮。
     if (String(s.livePlayerName || '').trim()) return;
     if (s.liveSayOverride) return;
@@ -1223,16 +1234,24 @@ export function createGalStore() {
     if (s.liveQueue.length > 0) return;
     if (s.typing && !s.typing.done) return;
     if (s.current && (s.current as GalLiveMessage).streamed) return;
+    const sessionEpoch = s.liveSessionEpoch;
+    const isCurrentSession = () => {
+      const current = get();
+      return current.liveMode && current.liveSessionId === s.liveSessionId
+        && current.liveSessionEpoch === sessionEpoch;
+    };
     set({ liveAdvancing: true, liveSendError: '' });
     try {
       const res: any = await api.simPlaybackDone({ session_id: s.liveSessionId }, 180000);
+      if (!isCurrentSession()) return;
       if (!res?.advanced) {
         set({ liveSendError: '暂无可推进的内容（生成中或已结束），稍后再试' });
       }
     } catch (e: any) {
+      if (!isCurrentSession()) return;
       set({ liveSendError: `推进下一轮失败：${e?.message || '未知错误'}` });
     } finally {
-      set({ liveAdvancing: false });
+      if (isCurrentSession()) set({ liveAdvancing: false });
     }
   },
 
@@ -1241,12 +1260,18 @@ export function createGalStore() {
     if (!s.liveMode || !s.liveSessionId || s.liveResyncing) return;
     if (s.liveSayOverride) return;
     if (s.liveGameType === 'script' || s.liveGameType === 'werewolf') return;
+    const sessionEpoch = s.liveSessionEpoch;
+    const isCurrentSession = () => {
+      const current = get();
+      return current.liveMode && current.liveSessionId === s.liveSessionId
+        && current.liveSessionEpoch === sessionEpoch;
+    };
     set({ liveResyncing: true });
     try {
       const res: any = await api.getPersistedHistory(s.liveSessionId, 200);
       const list: any[] = Array.isArray(res?.messages) ? res.messages : [];
       const st = get();
-      if (!st.liveMode || st.liveSessionId !== s.liveSessionId) return;
+      if (!isCurrentSession()) return;
       const playerName = st.livePlayerName || '';
       const knownIds = new Set<string>([
         ...st.liveQueue.map(m => m.id),
@@ -1297,7 +1322,7 @@ export function createGalStore() {
       // 本地残留流式句：DB 无记录且超过 30s → 判 FAILED（防永久“生成中”；
       // 30s 内或 DB 仍 STREAMING 的不动，服务端 SSE 仍可续流）
       const after = get();
-      if (!after.liveMode || after.liveSessionId !== s.liveSessionId) return;
+      if (!isCurrentSession()) return;
       const now = Date.now();
       const dbIds = new Set(list.map(m => String(m?.message_id || '')).filter(Boolean));
       for (const q of [...after.liveQueue]) {
@@ -1309,7 +1334,7 @@ export function createGalStore() {
     } catch {
       // 失败静默（下次重连/round_complete 补拉继续覆盖）
     } finally {
-      set({ liveResyncing: false });
+      if (isCurrentSession()) set({ liveResyncing: false });
     }
   },
 

@@ -23,7 +23,7 @@ import java.util.Map;
 import java.util.UUID;
 
 /**
- * P-0810-01（本地 ComfyUI + Pony V6 XL）：ComfyUI API 客户端。
+ * 本地 ComfyUI + NoobAI-XL 二次元半身像：ComfyUI API 客户端。
  *
  * <p>对接本地 ComfyUI 三个端点：
  * <ol>
@@ -32,20 +32,20 @@ import java.util.UUID;
  *   <li>GET /view?filename=..&subfolder=..&type=output —— 下载生成图片字节</li>
  * </ol>
  *
- * <p>工作流模板 {@code /ai-image/pony-v6-workflow.json} 内置 Pony V6 XL 出图链路
- * （UNETLoader + CLIPLoader(sdxl, clip_l+clip_g) + VAELoader + 可选 LoraLoader +
- * CLIPTextEncode×2 + EmptyLatentImage + KSampler(30,7,dpmpp_2m,karras) + VAEDecode + SaveImage），
+ * <p>工作流模板 {@code /ai-image/noobai-xl-workflow.json} 内置 NoobAI-XL 出图链路
+ * （CheckpointLoaderSimple + 可选 LoraLoader + CLIPSetLastLayer(-2) +
+ * CLIPTextEncode×2 + EmptyLatentImage + KSampler(28,5.5,euler_ancestral,normal) + VAEDecode + SaveImage），
  * 占位符由 {@link #buildWorkflow(WorkflowSpec)} 替换：
  * {@code __POSITIVE__ / __NEGATIVE__ / __SEED__ / __WIDTH__ / __HEIGHT__ / __LORA_NAME__ / __PREFIX__}；
- * lora 名为空时自动改接（LoraLoader 的 model/clip 引用改回 UNETLoader/CLIPLoader 并移除该节点），
- * 保证不装 LoRA 也能出图。
+ * lora 名为空时自动改接（LoraLoader 的 model/clip 引用改回 CheckpointLoaderSimple 并移除该节点），
+ * 保证不装 LoRA 也能出正常二次元图。
  *
- * <p>P-0810-05 表情 img2img：新增模板 {@code /ai-image/pony-v6-img2img-workflow.json}
+ * <p>表情 img2img：新增模板 {@code /ai-image/noobai-xl-img2img-workflow.json}
  * （CheckpointLoaderSimple(1) + LoraLoader(5) + CLIPSetLastLayer(13) + CLIPTextEncode(7/8) +
  * LoadImage(D) + VAEEncode(F) + KSampler(10, latent_image=[F,0], denoise=__DENOISE__) +
  * VAEDecode(11) + SaveImage(12)），构建入口 {@link #buildImg2ImgWorkflow(WorkflowSpec, String, double)}；
  * 参考图先经 {@link #uploadImage(Path)} 传 ComfyUI /upload/image（multipart）取回 input 目录文件名
- * 再替换 __REF_IMAGE__；节点注释见 resources/ai-image/pony-v6-img2img-README.md。
+ * 再替换 __REF_IMAGE__；节点注释见 resources/ai-image/noobai-xl-img2img-README.md。
  *
  * <p>非 Spring 强依赖类：Spring 走 {@link #ComfyUIClient(ObjectMapper, AiImageProperties)}，
  * 测试/直构走 {@link #ComfyUIClient(ObjectMapper, String, int, int)}；无第三方 HTTP 依赖
@@ -54,8 +54,8 @@ import java.util.UUID;
 @org.springframework.stereotype.Component
 public class ComfyUIClient {
 
-    private static final String TEMPLATE_RESOURCE = "/ai-image/pony-v6-workflow.json";
-    private static final String IMG2IMG_TEMPLATE_RESOURCE = "/ai-image/pony-v6-img2img-workflow.json";
+    private static final String TEMPLATE_RESOURCE = "/ai-image/noobai-xl-workflow.json";
+    private static final String IMG2IMG_TEMPLATE_RESOURCE = "/ai-image/noobai-xl-img2img-workflow.json";
     private static final String CLIENT_ID_PREFIX = "roleplay-java-";
 
     private final ObjectMapper mapper;

@@ -25,7 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * P-0810-14：场景背景图生成端点验收（mock ComfyUI 客户端）。
  *
  * <p>① 生成成功：url 契约 /ai-images/backgrounds/{hash}.png + 文件落盘 backgrounds/ + prompt 契约
- * （SCORE_TAGS 含 rating_safe + pixel art + background/no characters + 负向 nsfw 拦截）+ 横构图 1216×832；
+ * （质量 tag 含 rating_safe + anime background/no characters + 负向 nsfw 拦截）+ 横构图 1216×832；
  * ② 同 scene 键缓存（内存）：二次调用不触发生成，直接返回相同 url；
  * ③ 不同 scene → 不同 hash 文件；
  * ④ 磁盘缓存：文件已存在（跨重启）不重复生成直接返回；
@@ -38,7 +38,7 @@ class SceneBackgroundTest {
     private ImageGenService newService(ImageGenServiceTest.FakeComfyClient client, Path outputDir) {
         AiImageProperties props = new AiImageProperties();
         props.setOutputDir(outputDir.toString());
-        props.setLoraName("pixel_art_sakuemonq_pony.safetensors");
+        props.setLoraName("");
         props.setRmbgEnabled(false);
         props.setTimeoutSeconds(30);
         return new ImageGenService(client, props);
@@ -47,7 +47,7 @@ class SceneBackgroundTest {
     // ── ① 生成成功：url 契约 + 落盘 + prompt 契约 ──
 
     @Test
-    @DisplayName("B-1 生成成功：url=/ai-images/backgrounds/{hash}.png + 落盘 backgrounds/ + prompt 契约（pixel art/background/no characters/rating_safe + 负向 nsfw）")
+    @DisplayName("B-1 生成成功：url=/ai-images/backgrounds/{hash}.png + 落盘 backgrounds/ + prompt 契约（anime background/no characters/rating_safe + 负向 nsfw）")
     void generate_success() throws Exception {
         Path dir = Files.createTempDirectory("aibg-gen");
         ImageGenServiceTest.FakeComfyClient client = new ImageGenServiceTest.FakeComfyClient();
@@ -66,8 +66,8 @@ class SceneBackgroundTest {
         assertEquals(1, client.callKinds.size());
         assertEquals("txt2img", client.callKinds.get(0), "背景走文生图（非 img2img）");
         WorkflowSpec spec = client.specs.get(0);
-        assertTrue(spec.positivePrompt().contains("rating_safe"), "正向含 Pony score/rating tag: " + spec.positivePrompt());
-        assertTrue(spec.positivePrompt().contains("pixel art"), "正向含 pixel art");
+        assertTrue(spec.positivePrompt().contains("rating_safe"), "正向含质量/rating tag: " + spec.positivePrompt());
+        assertTrue(spec.positivePrompt().contains("anime background"), "正向含 anime background");
         assertTrue(spec.positivePrompt().contains("background"), "正向含 background");
         assertTrue(spec.positivePrompt().contains("no characters"), "正向含 no characters");
         assertTrue(spec.positivePrompt().contains(scene), "正向含场景描述");

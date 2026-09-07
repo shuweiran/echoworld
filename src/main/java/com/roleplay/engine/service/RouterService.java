@@ -304,6 +304,11 @@ public class RouterService {
         return roster;
     }
 
+    /** 主控可确认的在场玩家角色；无主角或主角已离场时为空。 */
+    public synchronized String getDirectorPlayerName() {
+        return protagonist != null && agents.containsKey(protagonist) ? protagonist : "";
+    }
+
     public boolean isRunning() { return running; }
 
     /** 会话专属记忆存储（每个 SessionRegistry 会话独立实例；测试/运维按会话断言用）。 */

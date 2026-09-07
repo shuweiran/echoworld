@@ -199,12 +199,12 @@ export const SPEAKER_BACKEND_PROFILES: Record<string, { name: string; appearance
   heroine: {
     name: '小铃',
     appearance: 'silver long hair, purple eyes, 16-year-old japanese girl, white kimono with red ribbons',
-    style: 'retro game character art style, 16-bit pixel art, clean outlines, flat colors',
+    style: 'modern anime illustration style, clean lineart, soft cel shading, vibrant colors',
   },
   knight: {
     name: '凯尔',
     appearance: 'golden short hair, blue eyes, handsome young knight, silver and blue armor',
-    style: 'retro game character art style, 16-bit pixel art, clean outlines, flat colors',
+    style: 'modern anime illustration style, clean lineart, soft cel shading, vibrant colors',
   },
 };
 

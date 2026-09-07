@@ -263,10 +263,14 @@ class RouterServiceDirectorNarrationTest {
         RouterService router = newRouterWithLlm(llm, "free", "", List.of("A", "B"), List.of("A", "B"));
         router.setDirectorRoleGuidance(Map.of("A", "你知道一封信藏在钟楼地下室。", "陌生人", "不应进入"));
 
-        router.runRound(null, null);
+        // 直接对话轨道每轮只调度一个可回复角色；分别定向两轮，验证私密信息不串角色。
+        router.runRoundTargeted(null, null, null, null, List.of("A"));
+        router.runRoundTargeted(null, null, null, null, List.of("B"));
 
-        assertTrue(captured.stream().anyMatch(ctx -> ctx.contains("你是 A") && ctx.contains("钟楼地下室")));
-        assertTrue(captured.stream().anyMatch(ctx -> ctx.contains("你是 B") && !ctx.contains("钟楼地下室")));
+        assertTrue(captured.stream().anyMatch(ctx -> ctx.contains("你是 A") && ctx.contains("钟楼地下室")),
+                "A 的私密信息未进入上下文: " + captured);
+        assertTrue(captured.stream().anyMatch(ctx -> ctx.contains("你是 B") && !ctx.contains("钟楼地下室")),
+                "B 的上下文错误泄露或未生成: " + captured);
     }
 
     @Test

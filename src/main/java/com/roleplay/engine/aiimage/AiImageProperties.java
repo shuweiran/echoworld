@@ -7,7 +7,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * P-0810-01（本地 ComfyUI + Pony V6 XL 角色表情集预生成）：roleplay.ai-image.* 配置绑定。
+ * P-0810-01（本地 ComfyUI + NoobAI-XL 二次元半身像）：roleplay.ai-image.* 配置绑定。
  *
  * <ul>
  *   <li>comfyui-base-url：本地 ComfyUI API 地址（POST /prompt + GET /history/{id} + GET /view）</li>
@@ -16,7 +16,7 @@ import java.util.List;
  *   <li>pool-size：生成线程池大小（同一时刻并发提交给 ComfyUI 的任务数）</li>
  *   <li>timeout-seconds：单图生成总超时（提交 + 轮询等待，超时任务标记失败）</li>
  *   <li>poll-interval-ms：/history 轮询间隔</li>
- *   <li>lora-name：Pony 像素风 LoRA 文件名（空=不使用 LoRA，工作流自动改接 UNETLoader/CLIPLoader）</li>
+ *   <li>lora-name：风格 LoRA 文件名（默认空=不使用 LoRA，正常二次元直出；工作流自动改接）</li>
  *   <li>rmbg-model：RMBG-1.4 抠背景 ONNX 模型路径（P-0810-04；缺省/不存在=跳过抠图降级保留原图）</li>
  *   <li>rmbg-enabled：抠背景总开关（P-0810-04；默认 true，false=只存原图不产透明版）</li>
  *   <li>img2img-denoise：表情 img2img 强度（P-0810-05；默认 0.5，0.45 实测脸型/发型/服装 100% 保持）</li>
@@ -56,7 +56,7 @@ public class AiImageProperties {
     private int poolSize = 2;
     private int timeoutSeconds = 300;
     private int pollIntervalMs = 1000;
-    private String loraName = "pixel_art_sakuemonq_pony.safetensors";
+    private String loraName = "";
     /** P-0810-04：RMBG-1.4 抠背景模型路径（默认指向本机 models/rmbg/，不存在则降级跳过）。 */
     private String rmbgModel = "D:\\roleplay-java\\models\\rmbg\\rmbg-1.4.onnx";
     /** P-0810-04：抠背景总开关（默认 true；false=只存原图）。 */

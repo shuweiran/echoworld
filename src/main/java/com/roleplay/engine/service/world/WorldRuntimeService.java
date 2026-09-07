@@ -156,10 +156,31 @@ public class WorldRuntimeService implements AutoCloseable {
         RouterService router = bindLiveRouter(input.sessionId());
         synchronized (worldLifecycleLock) {
             requireBoundRouter(input.sessionId(), router);
+            validatePlayerInput(router, input);
             sessionTokens.computeIfAbsent(input.sessionId(), ignored -> new Object());
             InputMailbox.OfferResult result = mailbox.offer(input);
             if (result.accepted()) mailboxSessions.add(input.sessionId());
             return result;
+        }
+    }
+
+    /** 一般模式输入的发言人和本轮回复对象必须由当前会话的玩家角色约束。 */
+    private static void validatePlayerInput(RouterService router, InputMailbox.MailboxInput input) {
+        String mode = router.getMode();
+        if (!("free".equals(mode) || "protagonist".equals(mode)
+                || "multi_track".equals(mode) || "director".equals(mode))) return;
+        String speaker = stringAttribute(input.attributes(), "speaker");
+        String protagonist = router.getDirectorPlayerName();
+        if (protagonist == null || protagonist.isBlank()) {
+            throw new IllegalArgumentException("this session has no player character");
+        }
+        if (!protagonist.equals(speaker)) {
+            throw new IllegalArgumentException("speaker must be the current player character");
+        }
+        for (String member : stringListAttribute(input.attributes(), "conversation_members", 12)) {
+            if (!router.hasAgent(member) || router.isProtagonist(member)) {
+                throw new IllegalArgumentException("conversation member is not an available agent");
+            }
         }
     }
 
@@ -192,7 +213,9 @@ public class WorldRuntimeService implements AutoCloseable {
                 applyStoryUpdateLocked(sessionId, scene, message, reply.storyPatch());
                 story = stories.snapshot(sessionId, scene);
             }
-            router.setDirectorRoleGuidance(filterRoleGuidance(router, reply.roleGuidance()));
+            if (reply.hasRoleGuidance()) {
+                router.setDirectorRoleGuidance(filterRoleGuidance(router, reply.roleGuidance()));
+            }
         }
         return Map.of("reply", reply.reply(), "story", story.publicMap());
     }
@@ -609,6 +632,8 @@ public class WorldRuntimeService implements AutoCloseable {
         if (roster.isEmpty()) out.append("（无）");
         roster.forEach((name, persona) -> out.append("\n- ").append(name).append("：")
                 .append(boundedText(persona, 180)));
+        String player = router.getDirectorPlayerName();
+        out.append("\n场景玩家角色：").append(player == null || player.isBlank() ? "（无）" : player);
         out.append("\n动态剧本：").append(story.directorContext());
         return out.toString();
     }

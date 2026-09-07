@@ -8,7 +8,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 
 /**
- * P-0810-01（本地 ComfyUI + Pony V6 XL）：/ai-images/** 静态资源映射。
+ * 本地 ComfyUI + NoobAI-XL：/ai-images/** 静态资源映射。
  *
  * <p>生成图片默认落盘 {@code src/main/resources/static/ai-images/}（classpath 静态目录，
  * URL 直接 /ai-images/...）；但运行时写入的文件在 jar 打包后不在 classpath 内

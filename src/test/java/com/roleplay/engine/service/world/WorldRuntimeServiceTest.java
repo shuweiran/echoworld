@@ -511,6 +511,8 @@ class WorldRuntimeServiceTest {
         SessionRegistry sessions = mock(SessionRegistry.class);
         RouterService router = mock(RouterService.class);
         when(sessions.get("dynamic-chat")).thenReturn(router);
+        when(router.getDirectorRoster()).thenReturn(Map.of("守夜人", "钟楼值夜者"));
+        when(router.getDirectorPlayerName()).thenReturn("");
         when(planner.chat(eq("dynamic-chat"), eq("给我一条线索"), anyString()))
                 .thenReturn(new WorldCommandPlanner.DirectorReply("钟楼守夜人或许知道答案。",
                         new StoryPatch("追查钟声", "询问守夜人", "钟楼门缝透出微光。",
@@ -522,7 +524,49 @@ class WorldRuntimeServiceTest {
         assertEquals("钟楼守夜人或许知道答案。", result.get("reply"));
         Map<?, ?> story = (Map<?, ?>) result.get("story");
         assertEquals("守夜人递出旧钥匙", story.get("next_beat"));
-        verify(planner).chat(eq("dynamic-chat"), eq("给我一条线索"), contains("总目标"));
+        verify(planner).chat(eq("dynamic-chat"), eq("给我一条线索"),
+                argThat(context -> context.contains("守夜人") && context.contains("场景玩家角色：（无）")
+                        && context.contains("总目标")));
+    }
+
+    @Test
+    void directorChatWithoutRoleGuidanceKeepsExistingPrivateGuidance() {
+        WorldCommandPlanner planner = mock(WorldCommandPlanner.class);
+        SessionRegistry sessions = mock(SessionRegistry.class);
+        RouterService router = mock(RouterService.class);
+        when(sessions.get("director-guidance")).thenReturn(router);
+        when(router.hasAgent("A")).thenReturn(true);
+        when(planner.chat(eq("director-guidance"), anyString(), anyString())).thenReturn(
+                new WorldCommandPlanner.DirectorReply("给 A 一条私密提示", null, Map.of("A", "保密")),
+                new WorldCommandPlanner.DirectorReply("仅回答公开剧情", null));
+        runtime = runtime(mock(SimulationService.class), sessions, planner);
+
+        runtime.chatWithDirector("director-guidance", "安排提示");
+        runtime.chatWithDirector("director-guidance", "公开剧情？");
+
+        verify(router, times(1)).setDirectorRoleGuidance(Map.of("A", "保密"));
+    }
+
+    @Test
+    void generalInputRejectsImpersonationAndPlayerAsReplyTarget() {
+        SessionRegistry sessions = mock(SessionRegistry.class);
+        RouterService router = mock(RouterService.class);
+        when(sessions.get("secured-input")).thenReturn(router);
+        when(router.getMode()).thenReturn("protagonist");
+        when(router.getDirectorPlayerName()).thenReturn("Alice");
+        when(router.hasAgent("Bob")).thenReturn(true);
+        when(router.isProtagonist("Bob")).thenReturn(false);
+        runtime = runtime(mock(SimulationService.class), sessions);
+
+        assertThrows(IllegalArgumentException.class, () -> runtime.enqueueInput(new InputMailbox.MailboxInput(
+                "secured-input", "spoof", "冒充", InputMailbox.Priority.CRITICAL, Instant.now(),
+                Map.of("speaker", "Bob"))));
+        assertThrows(IllegalArgumentException.class, () -> runtime.enqueueInput(new InputMailbox.MailboxInput(
+                "secured-input", "self-target", "自答", InputMailbox.Priority.CRITICAL, Instant.now(),
+                Map.of("speaker", "Alice", "conversation_members", List.of("Alice")))));
+        assertDoesNotThrow(() -> runtime.enqueueInput(new InputMailbox.MailboxInput(
+                "secured-input", "valid", "问候", InputMailbox.Priority.CRITICAL, Instant.now(),
+                Map.of("speaker", "Alice", "conversation_members", List.of("Bob")))));
     }
 
     @Test

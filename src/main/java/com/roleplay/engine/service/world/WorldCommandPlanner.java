@@ -59,7 +59,8 @@ public class WorldCommandPlanner {
         if (!enabled) return DirectorReply.unavailable();
         try {
             Map<String, Object> result = llm.callJson("""
-                你是一般模式动态剧本的主控，正在直接与玩家交谈。下方“权威主控上下文”是唯一
+                你是一般模式动态剧本的主控，正在与界面操作者交谈；操作者不等于场景玩家角色。
+                只有“场景玩家角色”明确列出姓名时，才可认定玩家在场。下方“权威主控上下文”是唯一
                 可确认的场景与人物事实；其中没有的地点、人物、线索一律回答“当前未登记/尚未出现”，
                 绝不可自行补写。你能：解释当前公开剧情、提出线索/选择/合理阻碍，并只为尚未发生的
                 后续阶段提出剧本补丁；可对已登记角色安排私有知识或下一轮表演重点。
@@ -75,7 +76,8 @@ public class WorldCommandPlanner {
                 """.formatted(compact(storyContext), compact(playerMessage)), 700);
             String reply = boundedLong(result == null ? null : result.get("reply"), 240);
             if (reply.isBlank()) reply = "我可以解释公开剧情、安排后续线索与选择；但不会改写已发生的事，也不能替你做决定。";
-            return new DirectorReply(reply, parseStoryPatch(result), parseRoleGuidance(result));
+            return new DirectorReply(reply, parseStoryPatch(result), parseRoleGuidance(result),
+                    result != null && result.containsKey("role_guidance"));
         } catch (RuntimeException ignored) {
             return DirectorReply.unavailable();
         }
@@ -307,8 +309,12 @@ public class WorldCommandPlanner {
         }
     }
 
-    public record DirectorReply(String reply, StoryPatch storyPatch, Map<String, String> roleGuidance) {
-        public DirectorReply(String reply, StoryPatch storyPatch) { this(reply, storyPatch, Map.of()); }
+    public record DirectorReply(String reply, StoryPatch storyPatch, Map<String, String> roleGuidance,
+                                boolean hasRoleGuidance) {
+        public DirectorReply(String reply, StoryPatch storyPatch) { this(reply, storyPatch, Map.of(), false); }
+        public DirectorReply(String reply, StoryPatch storyPatch, Map<String, String> roleGuidance) {
+            this(reply, storyPatch, roleGuidance, true);
+        }
         public DirectorReply { roleGuidance = roleGuidance == null ? Map.of() : Map.copyOf(roleGuidance); }
         static DirectorReply unavailable() {
             return new DirectorReply("主控当前未连接语言模型；我仍会保留你的选择，不改写已发生的剧情。", null, Map.of());

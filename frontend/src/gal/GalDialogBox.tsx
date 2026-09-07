@@ -43,6 +43,7 @@ export function GalDialogBox({ onLiveWaitClick, liveWaitClickable = false, liveW
   const liveMode = useGalStore(s => s.liveMode);
   const liveSessionId = useGalStore(s => s.liveSessionId);
   const livePlayerName = useGalStore(s => s.livePlayerName);
+  const liveIdentityResolved = useGalStore(s => s.liveIdentityResolved);
   const hidePlayerBubbles = useGalStore(s => s.hidePlayerBubbles);
   const liveGameType = useGalStore(s => s.liveGameType);
   const livePhase = useGalStore(s => s.livePhase);
@@ -75,33 +76,9 @@ export function GalDialogBox({ onLiveWaitClick, liveWaitClickable = false, liveW
     const waitLabel = liveGameType === 'script'
       ? (String(livePhase).toLowerCase() === 'discussion' ? '💬 讨论进行中…' : '⏳ 对局准备中…（消息将在这里播放）')
       : (liveSessionId ? '◉ 已连接 · 等待对局消息…' : '○ 未连接对局');
-    // P0 点击驱动：仅无真人玩家的纯 Agent 场景可在整轮播完后点击生成下一轮。
-    // 有玩家时严格一问一答，必须等待输入；2D/剧本杀/狼人杀也不参与。
-    const drained = liveQueue.length === 0 && !typing;
+    // 这里不再提供独立“继续”入口：最后一句读完的点击已直接触发下一轮。
     const busy = liveSending || !!livePendingInputId || liveAdvancing;
-    const canAdvance = isAutonomousAdvanceGate({
-      hasSession: !!liveSessionId,
-      hasPlayer: !!String(livePlayerName || '').trim(),
-      hasOverride: !!liveSayOverride,
-      gameType: liveGameType,
-      drained,
-      busy,
-    });
     const externalWaitClick = liveWaitClickable && !!onLiveWaitClick;
-    // 双 Agent 一般 Gal：点击仍是下一轮唯一入口，但不再显示“已连接/等待消息”的空对话卡。
-    if (canAdvance && !externalWaitClick) {
-      return (
-        <div
-          className="gal-autonomous-continue"
-          onClick={() => void requestNextRound()}
-          role="button"
-          title="点击继续下一句"
-        >
-          ▼ 点击继续
-          {!!liveSendError && <div className="gal-live-error">{liveSendError}</div>}
-        </div>
-      );
-    }
     const waitHint = liveGameType === 'script'
       ? (String(livePhase).toLowerCase() === 'discussion' ? 'AI 发言 / 阶段变化将在这里播放' : '完整剧本生成中，搜证 / 讨论消息将在这里播放')
       : liveWaitBusy
@@ -180,8 +157,10 @@ export function GalDialogBox({ onLiveWaitClick, liveWaitClickable = false, liveW
   const typingInProgress = !!typing && !typing.done;
   // 纯 Agent 的最后一句：同一次点击既收起本句也请求下一轮，避免出现额外“点击继续”。
   const clickStartsNextRound = liveMode && !!current && !isChoice && !typingInProgress
-    && liveQueue.length === 0 && isAutonomousAdvanceGate({
+    // current 仍占据队首；本次点击会先出队，再请求下一轮。
+    && liveQueue.length === 1 && isAutonomousAdvanceGate({
       hasSession: !!liveSessionId,
+      identityResolved: liveIdentityResolved,
       hasPlayer: !!String(livePlayerName || '').trim(),
       hasOverride: !!liveSayOverride,
       gameType: liveGameType,
@@ -189,8 +168,8 @@ export function GalDialogBox({ onLiveWaitClick, liveWaitClickable = false, liveW
       busy: liveSending || !!livePendingInputId || liveAdvancing,
     });
   const onDialogClick = () => {
-    if (clickStartsNextRound) void requestNextRound();
     advance();
+    if (clickStartsNextRound) void requestNextRound();
   };
 
   return (
