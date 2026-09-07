@@ -50,7 +50,7 @@ export async function resolveSessionId(
   }
   if (playerName && playerKey) {
     try {
-      const r: any = await api.werewolfResume({ room_code: t, player: playerName, roleKey: playerKey });
+      const r: any = await api.werewolfResume({ room_code: t, player: playerName, player_key: playerKey });
       if (r?.session_id) return String(r.session_id);
     } catch { }
   }
