@@ -9,7 +9,7 @@
  *  - 去掉：对局状态 chips（阶段/事件计数/session_id）、连接面板、快速起局区块、类型切换；
  *  - 保留：立绘切换 + 打字机 + 底部发言框 + mode 中文标签；
  *  - 立绘：≤2 分列、>2 居中切换（GalGeneralStage）；
- *  - 主控（玩家）发言不渲染气泡（hidePlayerBubbles：输入框保留，发送后清空即可）。
+ *  - 玩家发言实时显示，并插入当前正在播放的对话之后，而不是等待整轮结束。
  *
  * 数据接线：
  *  - SSE：useSSE(sessionId) → GalStore.applySseEvent（agent_output/agent_token/
@@ -72,19 +72,12 @@ function GalGeneralSseBridge() {
     }
     applySseEvent(evt, data);
     if (evt === 'round_complete' && useGalStore.getState().liveGameType === 'general') {
-      // P-0811-G 修复：自动第一轮可能在 SSE 连接建立前就广播完（起局后立即触发），
-      // 前端会错过 agent_output → 「已连接·等待对局消息」卡住。round_complete 后补拉历史追回。
       void pullGeneralHistory(useGalStore.getState().liveSessionId);
-      // P-0810-21-D：AI 回合完成 → 刷新玩家发言候选（仅一般模式）
       void refreshSuggestions(useGalStore.getState().liveSessionId);
-      // P0 点击驱动：本轮播完即停，不再自动推进 —— 用户在等待态点击对话框
-      // （GalStore.requestNextRound → POST /api/simulation/playback_done）或输入才生成下一轮。
     }
   }, [applySseEvent, bumpLiveEvent]);
   const onStatus = useCallback((st: any) => {
     setLiveStatus(st);
-    // P0 断线最小恢复：进入 open（初连/重连）→ 按 message_id 对账 DB 落库
-    //（FINAL 补结算、缺失补入队、陈旧 STREAMING 判失败；完整 Last-Event-ID 另起 PR）
     const open = st === 'open';
     if (open && !prevOpenRef.current) {
       void useGalStore.getState().resyncFromPersisted();
@@ -97,13 +90,9 @@ function GalGeneralSseBridge() {
 }
 
 interface GalGeneralViewProps {
-  /** 当前一般模式会话 session_id（GameBridge 起局后传入） */
   sessionId: string;
-  /** 玩家名（发言用；缺省 localStorage playerId） */
   playerName?: string;
-  /** D53：玩家显示名（前端可改；仅用于「你扮演」展示，后端身份仍以 playerName/livePlayerName 为准） */
   displayName?: string;
-  /** 返回（回会话列表 / 上一页） */
   onBack?: () => void;
 }
 
@@ -120,8 +109,6 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
   const tick = useGalStore(s => s.tick);
   const liveGeneralMode = useGalStore(s => s.liveGeneralMode);
   const livePlayerName = useGalStore(s => s.livePlayerName);
-  // P0 点击驱动：本视图不再使用 livePlaybackArmed 自动推进（等待态点击/输入驱动下一轮）
-  // P-0810-16：场景卡目标（起局响应 / /api/state scene_goals / scene_target_update SSE 合并）
   const liveGoals = useGalStore(s => s.liveGoals);
   const setLiveGoals = useGalStore(s => s.setLiveGoals);
   const focusedRoleId = useGalStore(s => s.liveFocusedRoleId);
@@ -129,7 +116,6 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
   const setLiveConversation = useGalStore(s => s.setLiveConversation);
   const sessionEpochRef = useRef(0);
 
-  // ── 元信息（场景名 / agents / mode 中文标签） ──
   const [scene, setScene] = useState<string>('');
   const [roster, setRoster] = useState<string[]>([]);
   const [modeLabel, setModeLabel] = useState('');
@@ -144,7 +130,6 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
     role: 'director',
     text: '我是动态剧本主控。我能解释公开剧情、安排后续线索与选择；不能改写已发生的事、替你决定或直接执行世界动作。',
   }]);
-  // P1 角色卡片：查看/编辑/导出（GET/PUT /api/characters/{name}/card）
   const [cardName, setCardName] = useState('');
   const [cardJson, setCardJson] = useState('');
   const [cardMeta, setCardMeta] = useState<any>(null);
@@ -152,47 +137,37 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
   const [cardSaving, setCardSaving] = useState(false);
   const [cardError, setCardError] = useState('');
 
-  // ── 抽屉/卡片开关 ──
   const [historyOpen, setHistoryOpen] = useState(false);
   const [sceneCardOpen, setSceneCardOpen] = useState(false);
   const [roleDrawerOpen, setRoleDrawerOpen] = useState(false);
   const [groupDraft, setGroupDraft] = useState<string[]>([]);
-  // P-0817-K：角色声音面板开关 + 静音状态刷新（mimoTts emit 时重渲染）
   const [voicePanelOpen, setVoicePanelOpen] = useState(false);
   const [, setVoiceTick] = useState(0);
   useEffect(() => subscribeTtsStatus(() => setVoiceTick(t => t + 1)), []);
 
-  // 进入即连接 live（hidePlayerBubbles=true：玩家发言不渲染气泡）
   useEffect(() => {
     if (!sessionId) return;
     setDirectorDraft('');
     setDirectorChat([{
       role: 'director',
-      text: '我是动态剧本主控。我能解释公开剧情、安排后续线索与选择；不能改写已发生的事、替你决定或直接执行世界动作。',
+      text: '我是权威主控。我负责玩家身份、角色登记与进退场、关系和场景状态；只有服务器真正执行成功后，我才会确认状态已改变。',
     }]);
-    // P-0811-G：玩家名只取显式传入的 playerName —— 不再回退 localStorage.playerId
-    // （用户反馈：未选定玩家角色时仍判定自己在说话；导演模式应无玩家身份）
-    // 先不把网页操作者当作场景角色；拿到后端 protagonist 后再确认身份。
     enterLiveMode(sessionId, { playerName: '' });
     sessionEpochRef.current = useGalStore.getState().liveSessionEpoch;
-    // P-0818-F：进入对局后立即拉取 AI 形象状态（注册后端角色名 → ID 映射，保证局内立绘可查）
     void useGalStore.getState().refreshImageStatus();
-    setHidePlayerBubbles(true);
+    setHidePlayerBubbles(false);
     return () => {
       exitLiveMode();
       setHidePlayerBubbles(false);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // 打字机定时器（与 GalDemoPage 同款：每 25ms 推进 2 字符）
   useEffect(() => {
     if (!started || finished) return;
     const t = setInterval(() => tick(2), 25);
     return () => clearInterval(t);
   }, [started, finished, tick]);
 
-  // 元信息拉取（挂载 + 5s 轮询：scene / roster / mode 变化可见）
   const seededRosterRef = useRef('');
   useEffect(() => {
     if (!sessionId) return;
@@ -208,21 +183,16 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
         if (!isCurrent()) return;
         const sc = st?.scene || st?.scene_description || '';
         if (sc) setScene(String(sc));
-        // P-0810-16：场景卡目标随 /api/state 下发（scene_goals 键）——进入/刷新/重连兜底拉取
         if (st?.scene_goals && typeof st.scene_goals === 'object') {
           setLiveGoals(st.scene_goals);
         }
-        // P0 点击驱动：轮询仅刷新元信息，不再据 awaiting_playback 自动武装推进 ——
-        // 下一轮只由等待态点击（GalStore.requestNextRound）或玩家输入驱动。
         if (Array.isArray(st?.agents)) {
           const names = st.agents.map(String).filter(Boolean);
           setRoster(names);
-          // 只有后端当前角色表里确有该名字，才把网页操作者视为场景中的玩家角色。
           const declaredPlayer = String(playerName || '').trim();
           const protagonist = String(st?.protagonist || '').trim();
           setLiveIdentity(declaredPlayer && declaredPlayer === protagonist && names.includes(protagonist)
             ? protagonist : '', undefined, true);
-          // P-0810-08：舞台角色表 = 会话 roster（替换 demo 角色）——保持玩家位，NPC 用占位立绘
           const key = names.join(',');
           if (names.length > 0 && key !== seededRosterRef.current) {
             seededRosterRef.current = key;
@@ -232,7 +202,7 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
           }
         }
         setMetaReady(true);
-      } catch { /* 后端不可达：保持现状 */ }
+      } catch { }
       try {
         const world: any = await api.worldState(sessionId);
         if (isCurrent()) {
@@ -263,7 +233,7 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
             return next;
           });
         }
-      } catch { /* 世界运行时尚未就绪时保持空列表 */ }
+      } catch { }
       try {
         const gm: any = await api.getMode(sessionId);
         if (!isCurrent()) return;
@@ -277,24 +247,17 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
         } else if (!modeLabel) {
           setModeLabel('一般模式');
         }
-      } catch { /* 忽略 */ }
+      } catch { }
     };
     void refreshMeta();
-    // P-0818-F：定期刷新 AI 形象状态（每 5s 一次，与 refreshMeta 同周期）
     void useGalStore.getState().refreshImageStatus();
     const t = setInterval(() => { void refreshMeta(); void useGalStore.getState().refreshImageStatus(); }, 5000);
     return () => { alive = false; clearInterval(t); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
-  // 对局同步（类型探测 + 讨论增量；对一般会话主要为 liveGameType/liveGeneralMode 补位）
   useEffect(() => {
     if (!sessionId) return;
     const stop = startLiveSync(sessionId);
-    // P-0810-21：连接后补拉一次历史（session_id 定向，SSE 重叠窗口按 speaker+text 去重）——
-    // 起局自动首轮/已往消息回放入队（历史抽屉与主队列同源，玩家消息受 hidePlayerBubbles 守卫）
-    // P-0811-G 修复：自动第一轮在 SSE 连接建立前可能已广播完（round_complete 也错过），
-    // 单次/round_complete 触发补拉都不够 → 连接后定时重试补拉直到拉到消息（最多 ~24s）。
     const pull = () => {
       const s = useGalStore.getState();
       const idle = s.liveQueue.length === 0 && !s.current && !s.typing;
@@ -311,7 +274,6 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
         clearInterval(stopPullTimer);
       }
     }, 3000);
-    // P-0810-21-D：进入即拉一次玩家发言候选（round_complete 后再刷新）
     void refreshSuggestions(sessionId);
     return () => {
       stop();
@@ -320,24 +282,17 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
     };
   }, [sessionId]);
 
-  // 调试钩子（CDP 走查用）
   useEffect(() => {
     (window as any).__galGeneralStore = useGalStore;
     return () => { delete (window as any).__galGeneralStore; };
   }, []);
 
-  // 场景卡数据：scene 名有则显示，无则隐藏（GalSceneCard 内部 null 守卫）
-  // name 截取前20字作为短名，description 用完整文本
   const sceneInfo: GalSceneInfo | undefined = scene
     ? { name: scene.length > 20 ? scene.slice(0, 20) + '…' : scene, description: scene }
     : undefined;
 
-  // P0 点击驱动：无玩家的纯 Agent 场景在队列排空后可点击对话框生成下一轮；
-  // 有玩家时严格一问一答，只能由输入（liveSay → 世界邮箱/后端 runRound）生成回复。
-  // 2D（SimGalChatPanel）保持播完自动推进（组 hook，本文件只改一般模式）。
   const hasPlayer = !!String(livePlayerName || '').trim();
   const displayName = livePlayerName || '';
-  // D53：身份行展示名 = 自定义显示名（仅当后端身份已确认）；化身名（displayName）仍用于 roster/群聊/历史归属
   const shownName = (hasPlayer && customDisplayName && customDisplayName.trim()) ? customDisplayName.trim() : displayName;
   const ambientNames = new Set(ambientRoles.map(role => role.name));
   const roleCards = [
@@ -388,7 +343,6 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
     }
   };
 
-  // P1 角色卡片：打开查看（完整卡 JSON + 来源/版本元信息）
   const openCard = async (name: string) => {
     if (!name || cardLoading) return;
     setCardName(name);
@@ -407,7 +361,6 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
     }
   };
 
-  // P1 角色卡片：保存编辑（PUT 合并；非法 JSON 拒绝落盘）
   const saveCard = async () => {
     if (!cardName || cardSaving) return;
     let parsed: Record<string, unknown>;
@@ -436,7 +389,6 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
 
   return (
     <div className="galg-page">
-      {/* ── 顶部栏：返回 + 标题 + mode 标签 + 成员小头像 + 右按钮 ── */}
       <div className="galg-topbar">
         <button className="galg-top-btn" onClick={onBack} title="返回会话列表">← 返回</button>
         <div className="galg-top-title-wrap">
@@ -454,9 +406,7 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
               👥 角色 {roleCards.length}
             </button>
           )}
-          {/* P-0817-I：全局语音开关（静音/恢复）—— Gal 视图顶栏入口，与对局顶栏同一 mimoTts 单例 */}
           <TtsMuteButton className="galg-top-btn" />
-          {/* P-0817-K：单角色静音控制 —— 弹出面板列出当前会话角色，可单独静音某个角色的语音 */}
           <button className="galg-top-btn" onClick={() => setVoicePanelOpen(v => !v)} title="角色声音（单独静音某个角色）">
             🔊 角色声音
           </button>
@@ -469,11 +419,9 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
           <button className="galg-top-btn" onClick={() => setHistoryOpen(true)} title="历史记录（消息列表 / 回滚）">
             📜 历史记录
           </button>
-          {/* P0 Gal 收敛：经典视图回退已移除，一般模式只保留 Gal */}
         </div>
       </div>
 
-      {/* ── 舞台：左立绘（说话角色才出现）+ 右对话框 + 底部发言框 + 背景槽位 ── */}
       <div className="galg-body">
         <GalGeneralStage scene={scene} />
       </div>
@@ -488,13 +436,11 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
       )}
 
       {displayName && (
-        <div className="galg-identity">🎭 你扮演：{shownName}{shownName && shownName !== displayName && <span style={{ opacity: 0.75 }}>（化身：{displayName}）</span>}（发言不显示气泡，输入后直接发送）</div>
+        <div className="galg-identity">🎭 你扮演：{shownName}{shownName && shownName !== displayName && <span style={{ opacity: 0.75 }}>（化身：{displayName}）</span>}（发言会立即插入当前对话）</div>
       )}
 
-      {/* ── 历史记录抽屉（右上） ── */}
       <GalHistoryDrawer open={historyOpen} onClose={() => setHistoryOpen(false)} sessionId={sessionId} />
 
-      {/* ── 场景卡（右上；无 scene 名自动隐藏；目标：起局响应 goals + /api/state scene_goals + SSE 增量） ── */}
       {sceneCardOpen && (
         <div className="galg-scene-mask" onClick={() => setSceneCardOpen(false)}>
           <div onClick={e => e.stopPropagation()}>
@@ -511,10 +457,9 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
             <section><small>当前阶段 · 张力 {Number(storyScript?.stage?.tension || 0)}%</small><p><strong>{storyScript?.stage?.title || '开场'}</strong>：{storyScript?.stage?.goal || '等待阶段目标'}</p></section>
             <section><small>主控手里的下一页</small><p>{storyScript.script || '剧情会随每一步更新。'}</p><p className="galg-story-next">下一拍：{storyScript.next_beat || '等待下一次互动。'}</p></section>
             {Array.isArray(storyScript.recent_changes) && storyScript.recent_changes.length > 0 && <section><small>已发生</small><ul>{storyScript.recent_changes.map((change: string, index: number) => <li key={`${index}:${change}`}>{change}</li>)}</ul></section>}
-            {/* 主控公开对话：只影响未发生的后续编排，能力边界在首句明确说明。 */}
             <section>
               <small>与主控对话</small>
-              <p className="galg-story-next">主控会回应你的提问；它只能编排后续，不能替你行动或修改已发生事实。</p>
+              <p className="galg-story-next">主控可执行角色进退场、创建 NPC、关系与场景状态操作；只有服务器执行成功后才会确认。</p>
               <div style={{ display: 'grid', gap: 6, maxHeight: 180, overflowY: 'auto', marginBottom: 8 }} aria-live="polite">
                 {directorChat.map((line, index) => <p key={`${index}:${line.text}`} style={{ margin: 0, padding: '6px 8px', borderRadius: 6,
                   background: line.role === 'player' ? 'rgba(77,225,255,.12)' : 'rgba(255,209,102,.1)' }}>
@@ -526,7 +471,7 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
                   value={directorDraft}
                   onChange={e => setDirectorDraft(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter') void sendDirectorChat(); }}
-                  placeholder="问主控：我现在能做什么？"
+                  placeholder="例如：添加一个叫林夏的新 NPC，性格有点怕生"
                   disabled={directorSending}
                   style={{ flex: 1, minWidth: 0 }}
                 />
@@ -567,7 +512,6 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
                       <button className={selected ? 'active' : ''} onClick={() => toggleGroupRole(role.name)}>
                         {selected ? '已加入群聊' : '加入群聊'}
                       </button>
-                      {/* P1 角色卡片：查看/编辑完整卡 */}
                       <button onClick={() => void openCard(role.name)} title="查看完整角色卡（来源/版本/五层）">🪪 卡片</button>
                     </div>
                   </article>
@@ -582,7 +526,6 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
         </div>
       )}
 
-      {/* P1 角色卡片：查看/编辑/导出完整卡（含来源/版本/五层） */}
       {cardName && (
         <div className="galg-role-mask" onClick={() => setCardName('')}>
           <aside className="galg-role-drawer galg-card-drawer" onClick={event => event.stopPropagation()}>
@@ -620,7 +563,6 @@ export function GalGeneralView({ sessionId, playerName, displayName: customDispl
         </div>
       )}
 
-      {/* P-0817-K：角色声音面板（单角色静音；点外部关闭） */}
       {voicePanelOpen && (
         <div style={{ position: 'fixed', inset: 0, zIndex: 98 }} onClick={() => setVoicePanelOpen(false)} />
       )}
