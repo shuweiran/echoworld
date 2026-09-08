@@ -111,4 +111,43 @@ class DirectorStoryPlanTest {
         assertEquals("你其实看见过钥匙被拿走", plan.characterSecrets().get("兔子"));
         assertEquals(List.of("窗户从内部上锁"), plan.worldFacts());
     }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void sceneAndCharacterPromptsBecomeDirectorOnlyAuthoringSource() {
+        DirectorStoryPlan plan = DirectorStoryPlan.fromRequest(Map.of(
+                "scene_description", "雨夜便利店。凌晨两点，暴雨导致街区停电，卷帘门暂时无法打开。",
+                "characters", List.of(
+                        Map.of(
+                                "name", "未然",
+                                "persona", "谨慎、善于观察，不轻易相信陌生人",
+                                "background", "刚结束夜班，偶然被困在店内",
+                                "talk_style", "短句、先观察后回应"),
+                        Map.of(
+                                "name", "兔子",
+                                "personality", "外向机灵，但遇到真正危险会掩饰紧张",
+                                "background", "自称只是来躲雨",
+                                "intro", "总在留意门口和监控",
+                                "talkStyle", "轻快，偶尔用玩笑转移话题"))));
+
+        assertTrue(plan.scenePrompt().contains("暴雨导致街区停电"));
+        assertTrue(plan.characterPrompts().get("未然").contains("谨慎、善于观察"));
+        assertTrue(plan.characterPrompts().get("未然").contains("刚结束夜班"));
+        assertTrue(plan.characterPrompts().get("兔子").contains("总在留意门口和监控"));
+        assertTrue(plan.characterPrompts().get("兔子").contains("轻快，偶尔用玩笑"));
+
+        Map<String, Object> authoring = plan.toMap();
+        Map<String, Object> source = (Map<String, Object>) authoring.get("source_material");
+        assertTrue(String.valueOf(source.get("authoring_rule")).contains("优先依据场景 Prompt 与人物 Prompt"));
+        assertTrue(String.valueOf(source.get("character_prompts")).contains("兔子"));
+
+        DirectorStoryPlan restored = DirectorStoryPlan.fromMap(authoring);
+        assertEquals(plan.scenePrompt(), restored.scenePrompt());
+        assertEquals(plan.characterPrompts(), restored.characterPrompts());
+
+        Map<String, Object> runtime = plan.runtimeView("未然");
+        assertFalse(runtime.containsKey("source_material"));
+        assertFalse(runtime.toString().contains("总在留意门口和监控"));
+        assertFalse(runtime.toString().contains("刚结束夜班"));
+    }
 }
