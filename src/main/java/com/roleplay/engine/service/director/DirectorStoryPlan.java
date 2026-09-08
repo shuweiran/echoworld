@@ -19,6 +19,8 @@ public final class DirectorStoryPlan {
     private String tone = "";
     private String openingSituation = "";
     private String stakes = "";
+    private String scenePrompt = "";
+    private final LinkedHashMap<String, String> characterPrompts = new LinkedHashMap<>();
     private final LinkedHashMap<String, String> sceneIdentities = new LinkedHashMap<>();
     private final LinkedHashMap<String, String> characterGoals = new LinkedHashMap<>();
     private final LinkedHashMap<String, String> characterSecrets = new LinkedHashMap<>();
@@ -34,6 +36,8 @@ public final class DirectorStoryPlan {
         plan.setTone(text(body.get("story_tone"), text(body.get("tone"), "")));
         plan.setOpeningSituation(text(body.get("opening_situation"), ""));
         plan.setStakes(text(body.get("stakes"), ""));
+        plan.scenePrompt = clean(text(body.get("scene_prompt"), text(body.get("scene_description"), "")), 8000);
+        captureCharacterPrompts(body.get("characters"), plan.characterPrompts);
         copyStringMap(body.get("scene_identities"), plan.sceneIdentities, 80, 500);
         copyStringMap(body.get("character_goals"), plan.characterGoals, 80, 800);
         copyStringMap(body.get("character_secrets"), plan.characterSecrets, 80, 1200);
@@ -170,10 +174,11 @@ public final class DirectorStoryPlan {
         out.put("character_secrets", new LinkedHashMap<>(characterSecrets));
         out.put("story_beats", List.copyOf(storyBeats));
         out.put("opening_events", List.copyOf(openingEvents));
+        out.put("source_material", sourceMaterial());
         return out;
     }
 
-    /** Runtime player view: future beats and NPC private data stay hidden. */
+    /** Runtime player view: future beats, NPC private data, and raw source prompts stay hidden. */
     public synchronized Map<String, Object> runtimeView(String playerCharacter) {
         Map<String, Object> out = baseMap();
         String viewer = clean(playerCharacter, 80);
@@ -187,7 +192,8 @@ public final class DirectorStoryPlan {
         out.put("opening_events", List.of());
         out.put("hidden_plan", !storyBeats.isEmpty() || !openingEvents.isEmpty()
                 || characterGoals.keySet().stream().anyMatch(n -> !n.equals(viewer))
-                || characterSecrets.keySet().stream().anyMatch(n -> !n.equals(viewer)));
+                || characterSecrets.keySet().stream().anyMatch(n -> !n.equals(viewer))
+                || !scenePrompt.isBlank() || !characterPrompts.isEmpty());
         return out;
     }
 
@@ -203,6 +209,14 @@ public final class DirectorStoryPlan {
         return out;
     }
 
+    private synchronized Map<String, Object> sourceMaterial() {
+        Map<String, Object> source = new LinkedHashMap<>();
+        source.put("scene_prompt", scenePrompt);
+        source.put("character_prompts", new LinkedHashMap<>(characterPrompts));
+        source.put("authoring_rule", "开局编排必须优先依据场景 Prompt 与人物 Prompt 推导；不得为了制造冲突而改写人物核心人格、既有背景或场景硬设定。允许补全 Prompt 未规定的关系、场景身份、目标、秘密和事件，但补全部分必须与原 Prompt 相容。");
+        return source;
+    }
+
     public static DirectorStoryPlan fromMap(Map<String, Object> raw) {
         DirectorStoryPlan plan = new DirectorStoryPlan();
         if (raw == null) return plan;
@@ -216,6 +230,13 @@ public final class DirectorStoryPlan {
         copyStrings(raw.get("story_beats"), plan.storyBeats, 40, 1000);
         copyStrings(raw.get("opening_events"), plan.openingEvents, 30, 1000);
         copyStrings(raw.get("world_facts"), plan.worldFacts, 80, 1000);
+        if (raw.get("source_material") instanceof Map<?, ?> source) {
+            plan.scenePrompt = clean(source.get("scene_prompt"), 8000);
+            copyStringMap(source.get("character_prompts"), plan.characterPrompts, 80, 6000);
+        } else {
+            plan.scenePrompt = clean(raw.get("scene_prompt"), 8000);
+            copyStringMap(raw.get("character_prompts"), plan.characterPrompts, 80, 6000);
+        }
         if (raw.get("structured_relationships") instanceof Collection<?> items) {
             for (Object item : items) {
                 if (!(item instanceof Map<?, ?> m)) continue;
@@ -237,6 +258,8 @@ public final class DirectorStoryPlan {
     public synchronized List<String> storyBeats() { return List.copyOf(storyBeats); }
     public synchronized List<String> openingEvents() { return List.copyOf(openingEvents); }
     public synchronized List<String> worldFacts() { return List.copyOf(worldFacts); }
+    public synchronized String scenePrompt() { return scenePrompt; }
+    public synchronized Map<String, String> characterPrompts() { return new LinkedHashMap<>(characterPrompts); }
     public synchronized String goalFor(String character) { return characterGoals.getOrDefault(clean(character, 80), ""); }
 
     public synchronized String summary() {
@@ -249,6 +272,36 @@ public final class DirectorStoryPlan {
         if (!characterSecrets.isEmpty()) parts.add("角色秘密已设=" + characterSecrets.keySet());
         if (!storyBeats.isEmpty()) parts.add("剧情拍点=" + storyBeats.size() + "个");
         return parts.isEmpty() ? "剧本编排尚未补充" : String.join("；", parts);
+    }
+
+    private static void captureCharacterPrompts(Object raw, Map<String, String> target) {
+        if (!(raw instanceof Collection<?> items)) return;
+        for (Object item : items) {
+            if (!(item instanceof Map<?, ?> character)) continue;
+            String name = clean(character.get("name"), 80);
+            if (name.isBlank()) continue;
+            List<String> parts = new ArrayList<>();
+            addPromptPart(parts, "人格", firstText(character, "persona", "personality"));
+            addPromptPart(parts, "背景", firstText(character, "background"));
+            addPromptPart(parts, "角色简介", firstText(character, "intro"));
+            addPromptPart(parts, "说话风格", firstText(character, "talk_style", "talkStyle", "voice"));
+            String prompt = clean(String.join("\n", parts), 6000);
+            if (!prompt.isBlank()) target.put(name, prompt);
+        }
+    }
+
+    private static String firstText(Map<?, ?> map, String... keys) {
+        for (String key : keys) {
+            String value = clean(map.get(key), 4000);
+            if (!value.isBlank()) return value;
+        }
+        return "";
+    }
+
+    private static void addPromptPart(List<String> target, String label, String value) {
+        if (value == null || value.isBlank()) return;
+        String line = label + "：" + value;
+        if (!target.contains(line)) target.add(line);
     }
 
     private static void append(StringBuilder out, String label, String value) {
