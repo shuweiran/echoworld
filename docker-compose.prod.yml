@@ -1,0 +1,48 @@
+services:
+  roleplay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      # The application intentionally binds to localhost by default. In production
+      # it listens on the private Docker network and remains unreachable directly
+      # from the public Internet; Caddy is the only published entry point.
+      SERVER_ADDRESS: 0.0.0.0
+      SERVER_PORT: 8000
+      ROLEPLAY_LLM_API_KEY: ${ROLEPLAY_LLM_API_KEY:?Set ROLEPLAY_LLM_API_KEY in .env}
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=65 -XX:InitialRAMPercentage=20 -XX:+UseSerialGC"
+    expose:
+      - "8000"
+    volumes:
+      - roleplay-data:/app/data
+    mem_limit: 1500m
+    restart: unless-stopped
+    networks:
+      - internal
+
+  caddy:
+    image: caddy:2-alpine
+    depends_on:
+      - roleplay
+    environment:
+      SITE_DOMAIN: ${SITE_DOMAIN:?Set SITE_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+    networks:
+      - internal
+
+networks:
+  internal:
+    driver: bridge
+
+volumes:
+  roleplay-data:
+  caddy-data:
+  caddy-config:
