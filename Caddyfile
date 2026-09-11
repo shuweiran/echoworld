@@ -1,0 +1,9 @@
+{$SITE_DOMAIN} {
+    encode zstd gzip
+
+    reverse_proxy roleplay:8000 {
+        # EchoWorld uses SSE; disable proxy response buffering so events are
+        # forwarded immediately instead of being batched.
+        flush_interval -1
+    }
+}
